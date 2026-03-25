@@ -8,7 +8,7 @@
 
 ## Description
 
-ioBroker adapter for **Hoymiles HMS-xxxW-xT WiFi microinverters** with integrated DTU (DTUBI).
+ioBroker adapter for **Hoymiles HMS-xxxW-xT** microinverters with integrated WiFi DTU (DTUBI).
 
 Communicates directly with the inverter's built-in WiFi DTU via TCP/Protobuf on port 10081 — **no cloud, no gateway, no additional hardware required**.
 

@@ -1,4 +1,4 @@
-# ioBroker.hoymiles — Hoymiles HMS-xxxW-xT WiFi Microinverter
+# ioBroker.hoymiles — Hoymiles HMS-xxxW-xT
 
 ## Supported Inverters
 

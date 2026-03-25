@@ -1,4 +1,4 @@
-# ioBroker.hoymiles — Hoymiles HMS-xxxW-xT WiFi Mikrowechselrichter
+# ioBroker.hoymiles — Hoymiles HMS-xxxW-xT
 
 ## Unterstützte Wechselrichter
 

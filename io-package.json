@@ -2,19 +2,19 @@
     "common": {
         "name": "hoymiles",
         "version": "0.0.1",
-        "title": "Hoymiles HMS WiFi",
+        "title": "Hoymiles HMS-xxxW-xT",
         "titleLang": {
-            "en": "Hoymiles HMS-xxxW-xT WiFi Microinverter",
-            "de": "Hoymiles HMS-xxxW-xT WiFi Mikrowechselrichter",
-            "ru": "Hoymiles HMS-xxxW-xT WiFi микроинвертор",
-            "pt": "Hoymiles HMS-xxxW-xT WiFi microinversor",
-            "nl": "Hoymiles HMS-xxxW-xT WiFi micro-omvormer",
-            "fr": "Hoymiles HMS-xxxW-xT WiFi micro-onduleur",
-            "it": "Hoymiles HMS-xxxW-xT WiFi microinverter",
-            "es": "Hoymiles HMS-xxxW-xT WiFi microinversor",
-            "pl": "Hoymiles HMS-xxxW-xT WiFi mikrofalownik",
-            "uk": "Hoymiles HMS-xxxW-xT WiFi мікроінвертор",
-            "zh-cn": "Hoymiles HMS-xxxW-xT WiFi 微型逆变器"
+            "en": "Hoymiles HMS-xxxW-xT",
+            "de": "Hoymiles HMS-xxxW-xT",
+            "ru": "Hoymiles HMS-xxxW-xT",
+            "pt": "Hoymiles HMS-xxxW-xT",
+            "nl": "Hoymiles HMS-xxxW-xT",
+            "fr": "Hoymiles HMS-xxxW-xT",
+            "it": "Hoymiles HMS-xxxW-xT",
+            "es": "Hoymiles HMS-xxxW-xT",
+            "pl": "Hoymiles HMS-xxxW-xT",
+            "uk": "Hoymiles HMS-xxxW-xT",
+            "zh-cn": "Hoymiles HMS-xxxW-xT"
         },
         "desc": {
             "en": "Reads data from Hoymiles HMS inverters with integrated WiFi DTU via local TCP/Protobuf",
