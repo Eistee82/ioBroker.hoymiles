@@ -79,6 +79,8 @@
         "cloudPassword": "",
         "cloudPollInterval": 300
     },
+    "encryptedNative": ["cloudPassword"],
+    "protectedNative": ["cloudPassword"],
     "instanceObjects": [
         {
             "_id": "info",
