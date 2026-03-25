@@ -1,0 +1,14 @@
+{
+    "connection": "Połączenie",
+    "cloud": "Ustawienia chmury",
+    "dtuHost": "Adres IP / nazwa hosta DTU",
+    "dtuHostHelp": "Adres IP lub nazwa hosta zintegrowanego DTU falownika",
+    "hostRequired": "Wymagany jest adres IP lub nazwa hosta",
+    "pollInterval": "Interwał odpytywania (sekundy)",
+    "pollIntervalHelp": "Czas między zapytaniami o dane w sekundach (domyślnie: 30)",
+    "cloudPause": "Włącz pauzę chmury",
+    "cloudPauseHelp": "Okresowo rozłącza się, aby DTU mógł przesyłać dane do chmury Hoymiles",
+    "cloudPauseDuration": "Czas trwania pauzy (sekundy)",
+    "cloudPauseDurationHelp": "Czas trwania pauzy połączenia dla przesyłania do chmury (domyślnie: 40s)",
+    "cloudInfo": "Połączenie TCP z DTU blokuje przesyłanie do chmury. Jeśli chcesz nadal korzystać z chmury Hoymiles, włącz pauzę chmury."
+}

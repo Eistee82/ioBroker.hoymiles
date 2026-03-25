@@ -1,0 +1,14 @@
+{
+    "connection": "Conexión",
+    "cloud": "Configuración de la nube",
+    "dtuHost": "Dirección IP / nombre de host DTU",
+    "dtuHostHelp": "Dirección IP o nombre de host del DTU integrado del inversor",
+    "hostRequired": "Se requiere la dirección IP o el nombre de host",
+    "pollInterval": "Intervalo de consulta (segundos)",
+    "pollIntervalHelp": "Tiempo entre consultas de datos en segundos (predeterminado: 30)",
+    "cloudPause": "Activar pausa en la nube",
+    "cloudPauseHelp": "Se desconecta periódicamente para que el DTU pueda subir datos a la nube de Hoymiles",
+    "cloudPauseDuration": "Duración de la pausa (segundos)",
+    "cloudPauseDurationHelp": "Duración de la pausa de conexión para la subida a la nube (predeterminado: 40s)",
+    "cloudInfo": "La conexión TCP al DTU bloquea las subidas a la nube. Si desea seguir usando la nube de Hoymiles, active la pausa en la nube."
+}

@@ -1,0 +1,49 @@
+syntax = "proto3";
+
+message CommandResDTO {
+    int32 time = 1;
+    int32 action = 2;
+    int32 dev_kind = 3;
+    int32 package_nub = 4;
+    int32 package_now = 5;
+    int64 tid = 6;
+    string data = 7;
+    repeated string es_to_sn = 8;
+    repeated int64 mi_to_sn = 9;
+    int32 system_total_a = 10;
+    int32 system_total_b = 11;
+    int32 system_total_c = 12;
+    repeated int64 mi_sn_item_a = 13;
+    repeated int64 mi_sn_item_b = 14;
+    repeated int64 mi_sn_item_c = 15;
+}
+
+message CommandReqDTO {
+    string dtu_sn = 1;
+    int32 time = 2;
+    int32 action = 3;
+    int32 package_now = 4;
+    int32 err_code = 5;
+    int64 tid = 6;
+}
+
+message CommandStatusResDTO {
+    int32 time = 1;
+    int32 action = 2;
+    int32 package_now = 3;
+    int64 tid = 4;
+    int32 err_code = 5;
+}
+
+message CommandStatusReqDTO {
+    string dtu_sn = 1;
+    int32 time = 2;
+    int32 action = 3;
+    int32 package_nub = 4;
+    int32 package_now = 5;
+    int64 tid = 6;
+    repeated string es_sns_sucs = 7;
+    repeated int64 mi_sns_sucs = 8;
+    repeated string es_sns_failds = 9;
+    repeated int64 mi_sns_failds = 10;
+}

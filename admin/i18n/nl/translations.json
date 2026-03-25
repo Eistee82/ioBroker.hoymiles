@@ -1,0 +1,14 @@
+{
+    "connection": "Verbinding",
+    "cloud": "Cloud-instellingen",
+    "dtuHost": "DTU IP-adres / hostnaam",
+    "dtuHostHelp": "IP-adres of hostnaam van de geïntegreerde DTU van de omvormer",
+    "hostRequired": "IP-adres of hostnaam is vereist",
+    "pollInterval": "Poll-interval (seconden)",
+    "pollIntervalHelp": "Tijd tussen gegevensopvragen in seconden (standaard: 30)",
+    "cloudPause": "Cloud-pauze inschakelen",
+    "cloudPauseHelp": "Verbreekt periodiek de verbinding zodat de DTU gegevens naar de Hoymiles-cloud kan uploaden",
+    "cloudPauseDuration": "Pauzeduur (seconden)",
+    "cloudPauseDurationHelp": "Duur van de verbindingspauze voor cloud-upload (standaard: 40s)",
+    "cloudInfo": "De TCP-verbinding met de DTU blokkeert cloud-uploads. Als u de Hoymiles-cloud wilt blijven gebruiken, schakel dan de cloud-pauze in."
+}

@@ -1,0 +1,14 @@
+node_modules/
+.idea/
+.vscode/
+*.log
+npm-debug.log*
+
+# Analysis files (not part of adapter)
+temp_apk/
+firmware/
+*.xapk
+
+# OS files
+.DS_Store
+Thumbs.db

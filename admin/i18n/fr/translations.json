@@ -1,0 +1,14 @@
+{
+    "connection": "Connexion",
+    "cloud": "Paramètres cloud",
+    "dtuHost": "Adresse IP / nom d'hôte DTU",
+    "dtuHostHelp": "Adresse IP ou nom d'hôte du DTU intégré de l'onduleur",
+    "hostRequired": "L'adresse IP ou le nom d'hôte est requis",
+    "pollInterval": "Intervalle d'interrogation (secondes)",
+    "pollIntervalHelp": "Temps entre les requêtes de données en secondes (par défaut : 30)",
+    "cloudPause": "Activer la pause cloud",
+    "cloudPauseHelp": "Se déconnecte périodiquement pour que le DTU puisse télécharger les données vers le cloud Hoymiles",
+    "cloudPauseDuration": "Durée de la pause (secondes)",
+    "cloudPauseDurationHelp": "Durée de la pause de connexion pour le téléchargement cloud (par défaut : 40s)",
+    "cloudInfo": "La connexion TCP au DTU bloque les téléchargements cloud. Si vous souhaitez continuer à utiliser le cloud Hoymiles, activez la pause cloud."
+}

@@ -1,0 +1,55 @@
+{
+    "type": "panel",
+    "i18n": true,
+    "items": {
+        "host": {
+            "type": "text",
+            "label": "dtuHost",
+            "placeholder": "192.168.1.100",
+            "sm": 12,
+            "validator": "data.host !== ''",
+            "validatorErrorText": "hostRequired",
+            "help": "dtuHostHelp"
+        },
+        "pollInterval": {
+            "type": "number",
+            "label": "pollInterval",
+            "default": 30,
+            "min": 10,
+            "max": 300,
+            "sm": 6,
+            "help": "pollIntervalHelp"
+        },
+        "_divider": {
+            "type": "divider",
+            "sm": 12
+        },
+        "cloudPause": {
+            "type": "checkbox",
+            "label": "cloudPause",
+            "default": true,
+            "help": "cloudPauseHelp",
+            "sm": 12
+        },
+        "cloudPauseDuration": {
+            "type": "number",
+            "label": "cloudPauseDuration",
+            "default": 40,
+            "min": 20,
+            "max": 120,
+            "sm": 6,
+            "hidden": "!data.cloudPause",
+            "help": "cloudPauseDurationHelp"
+        },
+        "_cloudInfo": {
+            "type": "staticText",
+            "text": "cloudInfo",
+            "sm": 12,
+            "hidden": "!data.cloudPause",
+            "style": {
+                "fontSize": 12,
+                "opacity": 0.7
+            }
+        }
+    }
+}

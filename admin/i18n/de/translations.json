@@ -1,0 +1,14 @@
+{
+    "connection": "Verbindung",
+    "cloud": "Cloud-Einstellungen",
+    "dtuHost": "DTU IP-Adresse / Hostname",
+    "dtuHostHelp": "IP-Adresse oder Hostname der integrierten DTU des Wechselrichters",
+    "hostRequired": "IP-Adresse oder Hostname ist erforderlich",
+    "pollInterval": "Abfrageintervall (Sekunden)",
+    "pollIntervalHelp": "Zeitabstand zwischen Datenabfragen in Sekunden (Standard: 30)",
+    "cloudPause": "Cloud-Pause aktivieren",
+    "cloudPauseHelp": "Trennt die Verbindung periodisch, damit der DTU Daten in die Hoymiles-Cloud hochladen kann",
+    "cloudPauseDuration": "Pause-Dauer (Sekunden)",
+    "cloudPauseDurationHelp": "Dauer der Verbindungsunterbrechung für den Cloud-Upload (Standard: 40s)",
+    "cloudInfo": "Die TCP-Verbindung zum DTU blockiert den Cloud-Upload. Wenn Sie die Hoymiles-Cloud weiterhin nutzen möchten, aktivieren Sie die Cloud-Pause."
+}

@@ -1,0 +1,14 @@
+{
+    "connection": "Connection",
+    "cloud": "Cloud Settings",
+    "dtuHost": "DTU IP address / hostname",
+    "dtuHostHelp": "IP address or hostname of the inverter's integrated DTU",
+    "hostRequired": "IP address or hostname is required",
+    "pollInterval": "Poll interval (seconds)",
+    "pollIntervalHelp": "Time between data queries in seconds (default: 30)",
+    "cloudPause": "Enable cloud pause",
+    "cloudPauseHelp": "Periodically disconnects so the DTU can upload data to the Hoymiles cloud",
+    "cloudPauseDuration": "Pause duration (seconds)",
+    "cloudPauseDurationHelp": "Duration of connection pause for cloud upload (default: 40s)",
+    "cloudInfo": "The TCP connection to the DTU blocks cloud uploads. If you want to continue using the Hoymiles cloud, enable the cloud pause."
+}

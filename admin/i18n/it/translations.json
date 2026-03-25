@@ -1,0 +1,14 @@
+{
+    "connection": "Connessione",
+    "cloud": "Impostazioni cloud",
+    "dtuHost": "Indirizzo IP / hostname DTU",
+    "dtuHostHelp": "Indirizzo IP o hostname del DTU integrato dell'inverter",
+    "hostRequired": "L'indirizzo IP o l'hostname è obbligatorio",
+    "pollInterval": "Intervallo di polling (secondi)",
+    "pollIntervalHelp": "Tempo tra le richieste dati in secondi (predefinito: 30)",
+    "cloudPause": "Attiva pausa cloud",
+    "cloudPauseHelp": "Si disconnette periodicamente per consentire al DTU di caricare i dati nel cloud Hoymiles",
+    "cloudPauseDuration": "Durata della pausa (secondi)",
+    "cloudPauseDurationHelp": "Durata della pausa di connessione per il caricamento cloud (predefinito: 40s)",
+    "cloudInfo": "La connessione TCP al DTU blocca i caricamenti cloud. Se si desidera continuare a utilizzare il cloud Hoymiles, attivare la pausa cloud."
+}
