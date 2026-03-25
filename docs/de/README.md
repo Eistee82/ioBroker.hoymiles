@@ -41,8 +41,8 @@ Wenn du die Hoymiles-Cloud nicht brauchst, kannst du die Cloud-Pause deaktiviere
 | `grid.frequency` | number | Hz | Netzfrequenz |
 | `grid.reactivePower` | number | var | Blindleistung |
 | `grid.powerFactor` | number | — | Leistungsfaktor |
-| `grid.dailyEnergy` | number | Wh | Tagesenergie |
-| `grid.totalEnergy` | number | Wh | Gesamtenergie |
+| `grid.dailyEnergy` | number | kWh | Tagesenergie |
+| `grid.totalEnergy` | number | kWh | Gesamtenergie |
 
 ### `hoymiles.0.pv0.*` / `hoymiles.0.pv1.*` — PV-Eingänge
 
@@ -51,8 +51,8 @@ Wenn du die Hoymiles-Cloud nicht brauchst, kannst du die Cloud-Pause deaktiviere
 | `pvX.power` | number | W | Panel-Leistung |
 | `pvX.voltage` | number | V | Panel-Spannung |
 | `pvX.current` | number | A | Panel-Strom |
-| `pvX.dailyEnergy` | number | Wh | Tagesenergie |
-| `pvX.totalEnergy` | number | Wh | Gesamtenergie |
+| `pvX.dailyEnergy` | number | kWh | Tagesenergie |
+| `pvX.totalEnergy` | number | kWh | Gesamtenergie |
 
 ### `hoymiles.0.inverter.*` — Wechselrichter-Status & Steuerung
 
@@ -69,7 +69,7 @@ Wenn du die Hoymiles-Cloud nicht brauchst, kannst du die Cloud-Pause deaktiviere
 | `inverter.serialNumber` | string | — | nein | Seriennummer |
 | `inverter.firmwareVersion` | number | — | nein | Firmware-Version |
 | `inverter.dtuPower` | number | W | nein | DTU gemeldete Gesamtleistung |
-| `inverter.dtuDailyEnergy` | number | Wh | nein | DTU Tagesenergie |
+| `inverter.dtuDailyEnergy` | number | kWh | nein | DTU Tagesenergie |
 
 ### `hoymiles.0.info.*` — Geräteinformationen
 

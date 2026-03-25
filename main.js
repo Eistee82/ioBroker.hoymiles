@@ -330,14 +330,14 @@ class Hoymiles extends utils.Adapter {
                 await this.setStateAsync(`${prefix}.power`, pv.power, true);
                 await this.setStateAsync(`${prefix}.voltage`, pv.voltage, true);
                 await this.setStateAsync(`${prefix}.current`, pv.current, true);
-                await this.setStateAsync(`${prefix}.dailyEnergy`, pv.energyDaily, true);
-                await this.setStateAsync(`${prefix}.totalEnergy`, pv.energyTotal, true);
+                await this.setStateAsync(`${prefix}.dailyEnergy`, Math.round(pv.energyDaily / 10) / 100, true);
+                await this.setStateAsync(`${prefix}.totalEnergy`, Math.round(pv.energyTotal / 10) / 100, true);
             }
 
             // DTU aggregated values
             await this.setStateAsync("inverter.dtuPower", data.dtuPower, true);
-            await this.setStateAsync("inverter.dtuDailyEnergy", data.dtuDailyEnergy, true);
-            await this.setStateAsync("grid.dailyEnergy", data.dtuDailyEnergy, true);
+            await this.setStateAsync("inverter.dtuDailyEnergy", Math.round(data.dtuDailyEnergy / 10) / 100, true);
+            await this.setStateAsync("grid.dailyEnergy", Math.round(data.dtuDailyEnergy / 10) / 100, true);
 
             // Chain: request config after real data
             setTimeout(() => this.requestConfig(), 2000);
@@ -505,10 +505,10 @@ class Hoymiles extends utils.Adapter {
             const data = await this.cloud.getStationRealtime(this.cloudStationId);
 
             // Cloud-exclusive states: always update
-            await this.setStateAsync("cloud.todayEnergy", parseFloat(data.today_eq) || 0, true);
-            await this.setStateAsync("cloud.monthEnergy", parseFloat(data.month_eq) || 0, true);
-            await this.setStateAsync("cloud.yearEnergy", parseFloat(data.year_eq) || 0, true);
-            await this.setStateAsync("cloud.totalEnergy", parseFloat(data.total_eq) || 0, true);
+            await this.setStateAsync("cloud.todayEnergy", Math.round((parseFloat(data.today_eq) || 0) / 10) / 100, true);
+            await this.setStateAsync("cloud.monthEnergy", Math.round((parseFloat(data.month_eq) || 0) / 10) / 100, true);
+            await this.setStateAsync("cloud.yearEnergy", Math.round((parseFloat(data.year_eq) || 0) / 10) / 100, true);
+            await this.setStateAsync("cloud.totalEnergy", Math.round((parseFloat(data.total_eq) || 0) / 10) / 100, true);
             await this.setStateAsync("cloud.currentPower", parseFloat(data.real_power) || 0, true);
             await this.setStateAsync("cloud.co2Saved", parseFloat(data.co2_emission_reduction) || 0, true);
             await this.setStateAsync("cloud.lastUpdate", data.data_time || "", true);
@@ -520,7 +520,7 @@ class Hoymiles extends utils.Adapter {
                 const power = parseFloat(data.real_power) || 0;
                 await this.setStateAsync("grid.power", power, true);
                 await this.setStateAsync("inverter.dtuPower", power, true);
-                await this.setStateAsync("grid.dailyEnergy", parseFloat(data.today_eq) || 0, true);
+                await this.setStateAsync("grid.dailyEnergy", Math.round((parseFloat(data.today_eq) || 0) / 10) / 100, true);
             }
 
             this.log.debug(`Cloud data: ${data.real_power}W, today=${data.today_eq}Wh, month=${data.month_eq}Wh`);

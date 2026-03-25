@@ -41,8 +41,8 @@ If you don't need the Hoymiles cloud, you can disable the cloud pause for uninte
 | `grid.frequency` | number | Hz | Grid frequency |
 | `grid.reactivePower` | number | var | Reactive power |
 | `grid.powerFactor` | number | — | Power factor |
-| `grid.dailyEnergy` | number | Wh | Daily energy yield |
-| `grid.totalEnergy` | number | Wh | Total lifetime energy |
+| `grid.dailyEnergy` | number | kWh | Daily energy yield |
+| `grid.totalEnergy` | number | kWh | Total lifetime energy |
 
 ### `hoymiles.0.pv0.*` / `hoymiles.0.pv1.*` — PV Panel Inputs
 
@@ -51,8 +51,8 @@ If you don't need the Hoymiles cloud, you can disable the cloud pause for uninte
 | `pvX.power` | number | W | Panel power |
 | `pvX.voltage` | number | V | Panel voltage |
 | `pvX.current` | number | A | Panel current |
-| `pvX.dailyEnergy` | number | Wh | Daily energy |
-| `pvX.totalEnergy` | number | Wh | Total energy |
+| `pvX.dailyEnergy` | number | kWh | Daily energy |
+| `pvX.totalEnergy` | number | kWh | Total energy |
 
 ### `hoymiles.0.inverter.*` — Inverter Status & Control
 
@@ -69,7 +69,7 @@ If you don't need the Hoymiles cloud, you can disable the cloud pause for uninte
 | `inverter.serialNumber` | string | — | no | Serial number |
 | `inverter.firmwareVersion` | number | — | no | Firmware version |
 | `inverter.dtuPower` | number | W | no | DTU reported total power |
-| `inverter.dtuDailyEnergy` | number | Wh | no | DTU reported daily energy |
+| `inverter.dtuDailyEnergy` | number | kWh | no | DTU reported daily energy |
 
 ### `hoymiles.0.info.*` — Device Information
 
