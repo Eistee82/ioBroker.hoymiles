@@ -1,0 +1,17 @@
+syntax = "proto3";
+
+message WInfoMO {
+    int64 pv_sn = 1;
+    int32 WCode = 2;
+    int32 WNum = 3;
+    int32 WTime1 = 4;
+    int32 WTime2 = 5;
+    int32 WData1 = 6;
+    int32 WData2 = 7;
+}
+
+message WInfoReqDTO {
+    string dtu_sn = 1;
+    int32 time = 2;
+    repeated WInfoMO mWInfo = 3;
+}

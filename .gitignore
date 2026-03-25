@@ -1,0 +1,30 @@
+# Compiled output (build/ is committed for direct GitHub installation)
+# build/
+
+# Dependencies
+node_modules/
+
+# IDE & developer-local
+.idea/
+.claude/
+*.code-workspace
+
+# Logs
+*.log
+npm-debug.log*
+
+# Coverage
+coverage/
+
+# Package artifacts
+iobroker.*.tgz
+
+# OS files
+.DS_Store
+Thumbs.db
+.commitinfo
+
+# Analysis files (not part of adapter)
+temp_apk/
+firmware/
+*.xapk

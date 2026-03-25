@@ -1,0 +1,58 @@
+{
+	"name": "iobroker.hoymiles",
+	"version": "0.1.0",
+	"description": "ioBroker adapter for Hoymiles HMS inverters with integrated WiFi DTU",
+	"main": "build/main.js",
+	"files": ["build/", "admin/", "io-package.json", "LICENSE"],
+	"repository": {
+		"type": "git",
+		"url": "git+https://github.com/Eistee82/ioBroker.hoymiles.git"
+	},
+	"bugs": {
+		"url": "https://github.com/Eistee82/ioBroker.hoymiles/issues"
+	},
+	"homepage": "https://github.com/Eistee82/ioBroker.hoymiles#readme",
+	"scripts": {
+		"build": "tsc -p tsconfig.build.json && copyfiles -u 1 \"src/lib/proto/*.proto\" build/",
+		"watch": "tsc -p tsconfig.build.json --watch",
+		"lint": "eslint src/",
+		"check": "tsc --noEmit",
+		"test:package": "mocha test/package --exit",
+		"test:unit": "mocha test/unit.js --exit",
+		"test:integration": "mocha test/integration --exit",
+		"test": "npm run test:package && npm run test:unit",
+		"release": "release-script in npm this --hierarchical",
+		"translate": "translate-adapter"
+	},
+	"keywords": [
+		"ioBroker",
+		"hoymiles",
+		"solar",
+		"inverter",
+		"photovoltaic",
+		"HMS",
+		"dtu"
+	],
+	"author": "Eistee",
+	"license": "MIT",
+	"dependencies": {
+		"@iobroker/adapter-core": "^3.3.2",
+		"protobufjs": "^7.2.0"
+	},
+	"devDependencies": {
+		"@alcalzone/release-script": "^5.1.1",
+		"@alcalzone/release-script-plugin-iobroker": "^5.1.2",
+		"@alcalzone/release-script-plugin-license": "^5.1.1",
+		"@alcalzone/release-script-plugin-manual-review": "^5.1.1",
+		"@iobroker/adapter-dev": "^1.5.0",
+		"@iobroker/eslint-config": "^2.2.0",
+		"@iobroker/testing": "^5.2.2",
+		"@tsconfig/node20": "^20.1.0",
+		"@types/node": "^20.11.0",
+		"copyfiles": "^2.4.1",
+		"typescript": "~5.7.0"
+	},
+	"engines": {
+		"node": ">=20.0.0"
+	}
+}

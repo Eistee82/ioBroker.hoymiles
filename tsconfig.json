@@ -1,0 +1,14 @@
+{
+	"extends": "@tsconfig/node20/tsconfig.json",
+	"compilerOptions": {
+		"outDir": "./build/",
+		"removeComments": false,
+		"sourceMap": true,
+		"resolveJsonModule": true,
+		"esModuleInterop": true,
+		"strict": true,
+		"noEmit": true
+	},
+	"include": ["src/**/*.ts"],
+	"exclude": ["build/", "node_modules/"]
+}

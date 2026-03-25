@@ -1,0 +1,13 @@
+syntax = "proto3";
+message HBReqDTO {
+    int32 offset = 1;
+    int32 time = 2;
+    int32 csq = 3;
+    string dtu_serial_number = 4;
+    string device_serial_number = 5;
+}
+message HBResDTO {
+    int32 offset = 1;
+    int32 time = 2;
+    bytes time_ymd_hms = 3;
+}

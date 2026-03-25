@@ -1,0 +1,123 @@
+syntax = "proto3";
+
+message RealDataNewReqDTO {
+    string device_serial_number = 1;
+    int32 timestamp = 2;
+    int32 ap = 3;
+    int32 cp = 4;
+    int32 firmware_version = 5;
+    repeated MeterMO meter_data = 6;
+    repeated RpMO rp_data = 7;
+    repeated RSDMO rsd_data = 8;
+    repeated SGSMO sgs_data = 9;
+    repeated TGSMO tgs_data = 10;
+    repeated PvMO pv_data = 11;
+    uint64 dtu_power = 12;
+    uint64 dtu_daily_energy = 13;
+}
+
+message RealDataNewResDTO {
+    bytes time_ymd_hms = 1;
+    int32 cp = 2;
+    int32 error_code = 3;
+    int32 offset = 4;
+    int32 time = 5;
+}
+
+message MeterMO {
+    int32 device_type = 1;
+    int64 serial_number = 2;
+    int32 phase_total_power = 3;
+    int32 phase_A_power = 4;
+    int32 phase_B_power = 5;
+    int32 phase_C_power = 6;
+    int32 power_factor_total = 7;
+    int32 energy_total_power = 8;
+    int32 energy_phase_A = 9;
+    int32 energy_phase_B = 10;
+    int32 energy_phase_C = 11;
+    int32 energy_total_consumed = 12;
+    int32 energy_phase_A_consumed = 13;
+    int32 energy_phase_B_consumed = 14;
+    int32 energy_phase_C_consumed = 15;
+    int32 fault_code = 16;
+    int32 voltage_phase_A = 17;
+    int32 voltage_phase_B = 18;
+    int32 voltage_phase_C = 19;
+    int32 current_phase_A = 20;
+    int32 current_phase_B = 21;
+    int32 current_phase_C = 22;
+    int32 power_factor_phase_A = 23;
+    int32 power_factor_phase_B = 24;
+    int32 power_factor_phase_C = 25;
+}
+
+message PvMO {
+    int64 serial_number = 1;
+    int32 port_number = 2;
+    int32 voltage = 3;
+    int32 current = 4;
+    int32 power = 5;
+    int32 energy_total = 6;
+    int32 energy_daily = 7;
+    int32 error_code = 8;
+}
+
+message RpMO {
+    int64 serial_number = 1;
+    int32 signature = 2;
+    int32 channel = 3;
+    int32 pv_number = 4;
+    int32 link_status = 5;
+}
+
+message RSDMO {
+    int64 serial_number = 1;
+    int32 firmware_version = 2;
+    int32 voltage = 3;
+    int32 power = 4;
+    int32 temperature = 5;
+    int32 warning_number = 6;
+    int32 crc_checksum = 7;
+    int32 link_status = 8;
+}
+
+message SGSMO {
+    int64 serial_number = 1;
+    int32 firmware_version = 2;
+    int32 voltage = 3;
+    int32 frequency = 4;
+    int32 active_power = 5;
+    int32 reactive_power = 6;
+    int32 current = 7;
+    int32 power_factor = 8;
+    int32 temperature = 9;
+    int32 warning_number = 10;
+    int32 crc_checksum = 11;
+    int32 link_status = 12;
+    int32 power_limit = 13;
+    int32 modulation_index_signal = 20;
+}
+
+message TGSMO {
+    int64 serial_number = 1;
+    int32 firmware_version = 2;
+    int32 voltage_phase_A = 3;
+    int32 voltage_phase_B = 4;
+    int32 voltage_phase_C = 5;
+    int32 voltage_line_AB = 6;
+    int32 voltage_line_BC = 7;
+    int32 voltage_line_CA = 8;
+    int32 frequency = 9;
+    int32 active_power = 10;
+    int32 reactive_power = 11;
+    int32 current_phase_A = 12;
+    int32 current_phase_B = 13;
+    int32 current_phase_C = 14;
+    int32 power_factor = 15;
+    int32 temperature = 16;
+    int32 warning_number = 17;
+    int32 crc_checksum = 18;
+    int32 link_status = 19;
+    int32 modulation_index_signal = 20;
+}

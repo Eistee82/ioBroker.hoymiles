@@ -1,0 +1,17 @@
+syntax = "proto3";
+
+message AutoSearchReqDTO {
+    string dtu_serial_number = 1;
+    int32 time = 2;
+    int32 package_number = 3;
+    int32 current_package = 4;
+    repeated int64 mi_serial_numbers = 5;
+}
+
+message AutoSearchResDTO {
+    string ymd_hms = 1;
+    int32 offset = 2;
+    int32 current_package = 3;
+    int32 error_code = 4;
+    int32 time = 5;
+}

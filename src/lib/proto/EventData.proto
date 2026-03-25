@@ -1,0 +1,18 @@
+syntax = "proto3";
+message MIEvent {
+    int32 event_code = 1;
+    int32 event_status = 2;
+    int32 event_count = 3;
+    int32 pv_voltage = 4;
+    int32 grid_voltage = 5;
+    int32 grid_frequency = 6;
+    int32 grid_power = 7;
+    int32 temperature = 8;
+    int64 mi_id = 9;
+    int32 start_timestamp = 10;
+}
+message EventDataReqDTO {
+    int32 offset = 1;
+    int32 time = 2;
+    repeated MIEvent mi_events = 3;
+}

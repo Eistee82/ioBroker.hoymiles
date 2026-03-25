@@ -1,0 +1,21 @@
+daysUntilStale: 90
+daysUntilClose: 7
+exemptLabels:
+  - enhancement
+  - security
+  - bug
+  - "maintainer approved"
+exemptProjects: true
+exemptMilestones: true
+exemptAssignees: true
+staleLabel: wontfix
+markComment: >
+  This issue has been automatically marked as stale because it has not had
+  recent activity. It will be closed in 7 days if no further activity occurs.
+
+
+  Dieses Issue wurde automatisch als veraltet markiert, da es in letzter Zeit
+  keine Aktivität gab. Es wird in 7 Tagen geschlossen, wenn keine weitere
+  Aktivität stattfindet.
+closeComment: false
+limitPerRun: 30
