@@ -1,7 +1,7 @@
 {
     "common": {
         "name": "hoymiles",
-        "version": "0.1.0",
+        "version": "0.2.0",
         "titleLang": {
             "en": "Hoymiles HMS-xxxW-xT",
             "de": "Hoymiles HMS-xxxW-xT",
@@ -53,18 +53,18 @@
         ],
         "enabled": true,
         "news": {
-            "0.1.0": {
-                "en": "First tested release — HMS-800W-2T verified with local TCP and S-Miles Cloud",
-                "de": "Erste getestete Version — HMS-800W-2T mit lokalem TCP und S-Miles Cloud verifiziert",
-                "ru": "Первый протестированный выпуск — HMS-800W-2T проверен с локальным TCP и S-Miles Cloud",
-                "pt": "Primeira versão testada — HMS-800W-2T verificado com TCP local e S-Miles Cloud",
-                "nl": "Eerste geteste versie — HMS-800W-2T geverifieerd met lokaal TCP en S-Miles Cloud",
-                "fr": "Première version testée — HMS-800W-2T vérifié avec TCP local et S-Miles Cloud",
-                "it": "Prima versione testata — HMS-800W-2T verificato con TCP locale e S-Miles Cloud",
-                "es": "Primera versión probada — HMS-800W-2T verificado con TCP local y S-Miles Cloud",
-                "pl": "Pierwsza przetestowana wersja — HMS-800W-2T zweryfikowany z lokalnym TCP i S-Miles Cloud",
-                "uk": "Перший протестований випуск — HMS-800W-2T перевірено з локальним TCP та S-Miles Cloud",
-                "zh-cn": "首个测试版本 — HMS-800W-2T 已通过本地TCP和S-Miles云验证"
+            "0.2.0": {
+                "en": "Protocol rewrite with Cloud Relay — fast local data + cloud upload simultaneously",
+                "de": "Protokoll-Rewrite mit Cloud-Relay — schnelle lokale Daten + Cloud-Upload gleichzeitig",
+                "ru": "Protocol rewrite with Cloud Relay — fast local data + cloud upload simultaneously",
+                "pt": "Protocol rewrite with Cloud Relay — fast local data + cloud upload simultaneously",
+                "nl": "Protocol rewrite with Cloud Relay — fast local data + cloud upload simultaneously",
+                "fr": "Protocol rewrite with Cloud Relay — fast local data + cloud upload simultaneously",
+                "it": "Protocol rewrite with Cloud Relay — fast local data + cloud upload simultaneously",
+                "es": "Protocol rewrite with Cloud Relay — fast local data + cloud upload simultaneously",
+                "pl": "Protocol rewrite with Cloud Relay — fast local data + cloud upload simultaneously",
+                "uk": "Protocol rewrite with Cloud Relay — fast local data + cloud upload simultaneously",
+                "zh-cn": "Protocol rewrite with Cloud Relay — fast local data + cloud upload simultaneously"
             }
         },
         "extIcon": "https://raw.githubusercontent.com/Eistee82/ioBroker.hoymiles/main/admin/hoymiles.png",
@@ -77,12 +77,12 @@
     "native": {
         "enableLocal": true,
         "host": "",
-        "pollInterval": 30,
+        "dataInterval": 5,
         "slowPollFactor": 6,
+        "enableCloudRelay": true,
         "enableCloud": false,
         "cloudUser": "",
-        "cloudPassword": "",
-        "cloudPollInterval": 300
+        "cloudPassword": ""
     },
     "encryptedNative": ["cloudPassword"],
     "protectedNative": ["cloudPassword"],

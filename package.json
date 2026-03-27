@@ -1,6 +1,6 @@
 {
 	"name": "iobroker.hoymiles",
-	"version": "0.1.0",
+	"version": "0.2.0",
 	"description": "ioBroker adapter for Hoymiles HMS inverters with integrated WiFi DTU",
 	"main": "build/main.js",
 	"files": ["build/", "admin/", "io-package.json", "LICENSE"],

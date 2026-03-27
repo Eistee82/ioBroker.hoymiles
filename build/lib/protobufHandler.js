@@ -99,23 +99,43 @@ const ACTION = {
     MI_START: 6,
     MI_SHUTDOWN: 7,
     LIMIT_POWER: 8,
+    CLEAN_GROUNDING_FAULT: 10,
+    LOCK: 12,
+    UNLOCK: 13,
     PERFORMANCE_DATA_MODE: 33,
     CLEAN_WARN: 42,
     READ_MI_HU_WARN: 46,
+    POWER_FACTOR_LIMIT: 47,
+    REACTIVE_POWER_LIMIT: 48,
     ALARM_LIST: 50,
 };
 exports.ACTION = ACTION;
 const MAGIC = [0x48, 0x4d]; // "HM"
-const FLAGS = [0x00, 0x01];
 const HEADER_SIZE = 10;
 exports.HEADER_SIZE = HEADER_SIZE;
 const DTU_TIME_OFFSET = 28800;
+const SEQ_MAX = 60000;
 /** Handler for encoding and decoding Hoymiles protobuf messages. */
 class ProtobufHandler {
     protos;
+    seq;
     /** Create a new ProtobufHandler instance. */
     constructor() {
         this.protos = {};
+        this.seq = 0;
+    }
+    /** Get next sequence number (0-60000, wraps around like the app). */
+    nextSeq() {
+        const current = this.seq;
+        this.seq = current >= SEQ_MAX ? 0 : current + 1;
+        return current;
+    }
+    /** Format timestamp as "YYYY-MM-DD HH:mm:ss" UTF-8 bytes for heartbeat/ack. */
+    formatTimeYmdHms() {
+        const now = new Date();
+        const str = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}-${String(now.getDate()).padStart(2, "0")} ` +
+            `${String(now.getHours()).padStart(2, "0")}:${String(now.getMinutes()).padStart(2, "0")}:${String(now.getSeconds()).padStart(2, "0")}`;
+        return Buffer.from(str, "utf-8");
     }
     /** Load all protobuf definition files from the proto directory. */
     async loadProtos() {
@@ -172,13 +192,14 @@ class ProtobufHandler {
     buildMessage(cmdHigh, cmdLow, protobufPayload) {
         const crc = this.crc16(protobufPayload);
         const totalLen = HEADER_SIZE + protobufPayload.length;
+        const seq = this.nextSeq();
         const header = Buffer.alloc(HEADER_SIZE);
         header[0] = MAGIC[0];
         header[1] = MAGIC[1];
         header[2] = cmdHigh;
         header[3] = cmdLow;
-        header[4] = FLAGS[0];
-        header[5] = FLAGS[1];
+        header[4] = (seq >> 8) & 0xff;
+        header[5] = seq & 0xff;
         header[6] = (crc >> 8) & 0xff;
         header[7] = crc & 0xff;
         header[8] = (totalLen >> 8) & 0xff;
@@ -219,8 +240,11 @@ class ProtobufHandler {
     encodeRealDataNewRequest(timestamp) {
         const ResDTO = this.protos.RealDataNew.lookupType("RealDataNewResDTO");
         const msg = ResDTO.create({
+            timeYmdHms: this.formatTimeYmdHms(),
             offset: DTU_TIME_OFFSET,
             time: timestamp,
+            cp: 0,
+            errCode: 0,
         });
         const payload = ResDTO.encode(msg).finish();
         return this.buildMessage(CMD.REAL_DATA_NEW[0], CMD.REAL_DATA_NEW[1], payload);
@@ -267,6 +291,23 @@ class ProtobufHandler {
             time: timestamp,
             action: ACTION.ALARM_LIST,
             devKind: 0,
+            packageNub: 1,
+            tid: timestamp,
+        });
+        const payload = ResDTO.encode(msg).finish();
+        return this.buildMessage(CMD.COMMAND[0], CMD.COMMAND[1], payload);
+    }
+    /**
+     * Encode a micro-inverter warning history request (Action 46).
+     *
+     * @param timestamp - Unix timestamp in seconds
+     */
+    encodeMiWarnRequest(timestamp) {
+        const ResDTO = this.protos.CommandPB.lookupType("CommandResDTO");
+        const msg = ResDTO.create({
+            time: timestamp,
+            action: ACTION.READ_MI_HU_WARN,
+            devKind: 1,
             packageNub: 1,
             tid: timestamp,
         });
@@ -389,6 +430,7 @@ class ProtobufHandler {
         const msg = ResDTO.create({
             offset: DTU_TIME_OFFSET,
             time: timestamp,
+            timeYmdHms: this.formatTimeYmdHms(),
         });
         const payload = ResDTO.encode(msg).finish();
         return this.buildMessage(CMD.HEARTBEAT[0], CMD.HEARTBEAT[1], payload);
@@ -433,6 +475,114 @@ class ProtobufHandler {
         const msg = ResDTO.create({
             time: timestamp,
             action: ACTION.PERFORMANCE_DATA_MODE,
+            packageNub: 1,
+            tid: timestamp,
+        });
+        const payload = ResDTO.encode(msg).finish();
+        return this.buildMessage(CMD.COMMAND[0], CMD.COMMAND[1], payload);
+    }
+    /**
+     * Encode a power factor limit command.
+     *
+     * @param value - Power factor (-1.0 to -0.8 or 0.8 to 1.0)
+     * @param timestamp - Unix timestamp in seconds
+     */
+    encodePowerFactorLimit(value, timestamp) {
+        const limitValue = Math.round(value * 1000);
+        const ResDTO = this.protos.CommandPB.lookupType("CommandResDTO");
+        const msg = ResDTO.create({
+            time: timestamp,
+            action: ACTION.POWER_FACTOR_LIMIT,
+            devKind: 1,
+            packageNub: 1,
+            tid: timestamp,
+            data: `A:${limitValue},B:0,C:0\r`,
+        });
+        const payload = ResDTO.encode(msg).finish();
+        return this.buildMessage(CMD.COMMAND[0], CMD.COMMAND[1], payload);
+    }
+    /**
+     * Encode a reactive power limit command.
+     *
+     * @param degrees - Reactive power angle (-50 to +50 degrees)
+     * @param timestamp - Unix timestamp in seconds
+     */
+    encodeReactivePowerLimit(degrees, timestamp) {
+        const limitValue = Math.round(degrees * 10);
+        const ResDTO = this.protos.CommandPB.lookupType("CommandResDTO");
+        const msg = ResDTO.create({
+            time: timestamp,
+            action: ACTION.REACTIVE_POWER_LIMIT,
+            devKind: 1,
+            packageNub: 1,
+            tid: timestamp,
+            data: `A:${limitValue},B:0,C:0\r`,
+        });
+        const payload = ResDTO.encode(msg).finish();
+        return this.buildMessage(CMD.COMMAND[0], CMD.COMMAND[1], payload);
+    }
+    /**
+     * Encode a clean warnings command.
+     *
+     * @param timestamp - Unix timestamp in seconds
+     */
+    encodeCleanWarnings(timestamp) {
+        const ResDTO = this.protos.CommandPB.lookupType("CommandResDTO");
+        const msg = ResDTO.create({
+            time: timestamp,
+            action: ACTION.CLEAN_WARN,
+            devKind: 1,
+            packageNub: 1,
+            tid: timestamp,
+        });
+        const payload = ResDTO.encode(msg).finish();
+        return this.buildMessage(CMD.COMMAND[0], CMD.COMMAND[1], payload);
+    }
+    /**
+     * Encode a clean grounding fault command.
+     *
+     * @param timestamp - Unix timestamp in seconds
+     */
+    encodeCleanGroundingFault(timestamp) {
+        const ResDTO = this.protos.CommandPB.lookupType("CommandResDTO");
+        const msg = ResDTO.create({
+            time: timestamp,
+            action: ACTION.CLEAN_GROUNDING_FAULT,
+            devKind: 1,
+            packageNub: 1,
+            tid: timestamp,
+        });
+        const payload = ResDTO.encode(msg).finish();
+        return this.buildMessage(CMD.COMMAND[0], CMD.COMMAND[1], payload);
+    }
+    /**
+     * Encode an inverter lock command.
+     *
+     * @param timestamp - Unix timestamp in seconds
+     */
+    encodeLockInverter(timestamp) {
+        const ResDTO = this.protos.CommandPB.lookupType("CommandResDTO");
+        const msg = ResDTO.create({
+            time: timestamp,
+            action: ACTION.LOCK,
+            devKind: 1,
+            packageNub: 1,
+            tid: timestamp,
+        });
+        const payload = ResDTO.encode(msg).finish();
+        return this.buildMessage(CMD.COMMAND[0], CMD.COMMAND[1], payload);
+    }
+    /**
+     * Encode an inverter unlock command.
+     *
+     * @param timestamp - Unix timestamp in seconds
+     */
+    encodeUnlockInverter(timestamp) {
+        const ResDTO = this.protos.CommandPB.lookupType("CommandResDTO");
+        const msg = ResDTO.create({
+            time: timestamp,
+            action: ACTION.UNLOCK,
+            devKind: 1,
             packageNub: 1,
             tid: timestamp,
         });

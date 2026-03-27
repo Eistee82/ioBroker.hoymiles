@@ -38,6 +38,7 @@ var __importDefault = (this && this.__importDefault) || function (mod) {
 Object.defineProperty(exports, "__esModule", { value: true });
 const utils = __importStar(require("@iobroker/adapter-core"));
 const dtuConnection_1 = __importDefault(require("./lib/dtuConnection"));
+const cloudRelay_1 = __importDefault(require("./lib/cloudRelay"));
 const protobufHandler_1 = require("./lib/protobufHandler");
 const encryption_1 = __importDefault(require("./lib/encryption"));
 const cloudConnection_1 = __importDefault(require("./lib/cloudConnection"));
@@ -45,6 +46,7 @@ const stateDefinitions_1 = require("./lib/stateDefinitions");
 const alarmCodes_1 = require("./lib/alarmCodes");
 class Hoymiles extends utils.Adapter {
     connection;
+    cloudRelay;
     protobuf;
     encryption;
     encryptionRequired;
@@ -52,18 +54,21 @@ class Hoymiles extends utils.Adapter {
     cloudPollTimer;
     cloudStationId;
     pollTimer;
-    pollActive;
-    infoPollCount;
     lastSgsData;
+    pvStatesCreated;
     meterStatesCreated;
     pollCount;
     slowPollEvery;
+    infoPollCount;
+    cloudServerDomain;
+    cloudSendTimeMin;
     constructor(options = {}) {
         super({ ...options, name: "hoymiles" });
         this.on("ready", this.onReady.bind(this));
         this.on("stateChange", this.onStateChange.bind(this));
         this.on("unload", this.onUnload.bind(this));
         this.connection = null;
+        this.cloudRelay = null;
         this.protobuf = null;
         this.encryption = null;
         this.encryptionRequired = false;
@@ -71,12 +76,14 @@ class Hoymiles extends utils.Adapter {
         this.cloudPollTimer = undefined;
         this.cloudStationId = null;
         this.pollTimer = undefined;
-        this.pollActive = false;
-        this.infoPollCount = 0;
         this.lastSgsData = null;
+        this.pvStatesCreated = false;
         this.meterStatesCreated = false;
         this.pollCount = 0;
-        this.slowPollEvery = 1;
+        this.slowPollEvery = 6;
+        this.infoPollCount = 0;
+        this.cloudServerDomain = "";
+        this.cloudSendTimeMin = 0;
     }
     async onReady() {
         const enableLocal = this.config.enableLocal !== false;
@@ -103,9 +110,15 @@ class Hoymiles extends utils.Adapter {
         this.subscribeStates("inverter.powerLimit");
         this.subscribeStates("inverter.active");
         this.subscribeStates("inverter.reboot");
+        this.subscribeStates("inverter.powerFactorLimit");
+        this.subscribeStates("inverter.reactivePowerLimit");
+        this.subscribeStates("inverter.cleanWarnings");
+        this.subscribeStates("inverter.cleanGroundingFault");
+        this.subscribeStates("inverter.lock");
         this.subscribeStates("config.zeroExportEnable");
+        this.subscribeStates("config.serverSendTime");
         this.subscribeStates("dtu.reboot");
-        // --- Local TCP connection ---
+        // --- Local TCP connection (persistent + cloud relay) ---
         if (enableLocal) {
             const host = this.config.host;
             if (!host) {
@@ -113,19 +126,24 @@ class Hoymiles extends utils.Adapter {
             }
             else {
                 this.log.info(`Starting local connection to DTU at ${host}:10081`);
-                this.connection = new dtuConnection_1.default(host, 10081);
+                this.connection = new dtuConnection_1.default(host, 10081, () => {
+                    const ts = Math.floor(Date.now() / 1000);
+                    return this.protobuf.encodeHeartbeat(ts);
+                });
                 this.connection.on("connected", () => {
                     this.log.info("Connected to DTU");
                     void this.updateConnectionState();
-                    void this.requestInfo();
-                    // Enable performance data mode for continuous polling
+                    // Request device info immediately
+                    if (this.protobuf) {
+                        const ts = Math.floor(Date.now() / 1000);
+                        void this.connection.send(this.protobuf.encodeInfoRequest(ts));
+                    }
                     if (this.protobuf) {
                         this.setTimeout(() => {
                             if (this.protobuf && this.connection?.connected) {
                                 this.log.info("Enabling performance data mode");
                                 const ts = Math.floor(Date.now() / 1000);
-                                const msg = this.protobuf.encodePerformanceDataMode(ts);
-                                void this.connection.send(msg);
+                                void this.connection.send(this.protobuf.encodePerformanceDataMode(ts));
                             }
                         }, 2000);
                     }
@@ -139,20 +157,11 @@ class Hoymiles extends utils.Adapter {
                 this.connection.on("message", (message) => {
                     this.handleResponse(message);
                 });
-                this.connection.on("reconnectPause", (paused) => {
-                    this.log.debug(`Reconnect pause: ${paused ? "waiting for DTU" : "reconnecting"}`);
-                    void this.setStateAsync("dtu.reconnectPaused", paused, true);
-                    if (paused) {
-                        this.stopPollCycle();
-                    }
+                this.connection.on("error", (err) => {
+                    this.log.warn(`DTU: ${err.message}`);
                 });
-                this.connection.on("error", (err, count) => {
-                    if (count === 1) {
-                        this.log.warn(`DTU not reachable: ${err.message}`);
-                    }
-                    else if (count && count % 10 === 0) {
-                        this.log.info(`DTU still not reachable (attempt ${count}), retrying...`);
-                    }
+                this.connection.on("idle", () => {
+                    this.log.warn("No data from DTU for 5 minutes, reconnecting...");
                 });
                 this.connection.connect();
             }
@@ -230,11 +239,24 @@ class Hoymiles extends utils.Adapter {
         await this.setStateAsync("info.connection", !!(localOk || cloudOk), true);
     }
     scheduleCloudPoll() {
-        const cloudInterval = (this.config.cloudPollInterval || 300) * 1000;
+        // Determine interval based on mode:
+        // 1. Local + relay active: sendTime from DTU config + 30s buffer
+        // 2. Local + no relay: DTU uploads itself at sendTime + 30s buffer
+        // 3. Cloud only (no local): fixed 300s (5 min default)
+        const enableLocal = this.config.enableLocal !== false;
+        let intervalMs;
+        if (enableLocal && this.cloudSendTimeMin > 0) {
+            // We know DTU's sendTime — poll 30s after data should arrive in cloud
+            intervalMs = this.cloudSendTimeMin * 60 * 1000 + 30000;
+        }
+        else {
+            // No local connection or unknown sendTime — default 5 min
+            intervalMs = 300000;
+        }
         this.cloudPollTimer = this.setTimeout(async () => {
             await this.pollCloudData();
             this.scheduleCloudPoll();
-        }, cloudInterval);
+        }, intervalMs);
     }
     async createStateObjects(enableLocal, enableCloud) {
         // Create channels (only for active sources)
@@ -289,6 +311,42 @@ class Hoymiles extends utils.Adapter {
                 if (!current || current.val === null) {
                     await this.setStateAsync(def.id, false, true);
                 }
+            }
+        }
+    }
+    /**
+     * Create PV channel and states dynamically based on pvNumber from DTU info.
+     *
+     * @param pvCount - Number of PV inputs reported by DTU
+     */
+    async createPvStates(pvCount) {
+        for (let i = 0; i < pvCount; i++) {
+            const ch = `pv${i}`;
+            await this.extendObjectAsync(ch, {
+                type: "channel",
+                common: { name: { en: `PV input ${i}`, de: `PV-Eingang ${i}` } },
+                native: {},
+            });
+            const pvFields = [
+                { suffix: "power", en: "power", de: "Leistung", role: "value.power", unit: "W" },
+                { suffix: "voltage", en: "voltage", de: "Spannung", role: "value.voltage", unit: "V" },
+                { suffix: "current", en: "current", de: "Strom", role: "value.current", unit: "A" },
+                { suffix: "dailyEnergy", en: "daily energy", de: "Tagesenergie", role: "value.energy", unit: "kWh" },
+                { suffix: "totalEnergy", en: "total energy", de: "Gesamtenergie", role: "value.energy", unit: "kWh" },
+            ];
+            for (const f of pvFields) {
+                await this.extendObjectAsync(`${ch}.${f.suffix}`, {
+                    type: "state",
+                    common: {
+                        name: { en: `PV${i} ${f.en}`, de: `PV${i} ${f.de}` },
+                        type: "number",
+                        role: f.role,
+                        unit: f.unit,
+                        read: true,
+                        write: false,
+                    },
+                    native: {},
+                });
             }
         }
     }
@@ -388,111 +446,50 @@ class Hoymiles extends utils.Adapter {
             });
         }
     }
+    /**
+     * Start slow poll timer for config/alarms/info.
+     * Persistent connection with active polling.
+     * Cloud relay forwards RealData to the Hoymiles cloud on behalf of the DTU.
+     */
     startPollCycle() {
         this.stopPollCycle();
-        const slowVal = this.config.slowPollFactor;
-        this.slowPollEvery = Number(slowVal) || 6;
+        const raw = this.config.dataInterval;
+        const seconds = raw != null ? Number(raw) : 5;
+        const interval = seconds > 0 ? seconds * 1000 : 1000; // 0 = fastest (1s)
+        this.slowPollEvery = Number(this.config.slowPollFactor) || 6;
         this.pollCount = 0;
-        this.pollActive = true;
-        this.log.info(`Poll cycle started: continuous mode, config/alarms every ${this.slowPollEvery} polls`);
-        // Start the chain
-        void this.pollNext();
+        this.infoPollCount = 0;
+        this.log.info(`Poll cycle: every ${interval / 1000}s, config/alarms every ${this.slowPollEvery} polls`);
+        void this.pollTick();
+        this.pollTimer = this.setInterval(() => {
+            void this.pollTick();
+        }, interval);
     }
     stopPollCycle() {
-        this.pollActive = false;
         if (this.pollTimer) {
-            this.clearTimeout(this.pollTimer);
+            this.clearInterval(this.pollTimer);
             this.pollTimer = undefined;
         }
     }
-    /**
-     * Request queue: after each response, send the next request immediately.
-     * Sequence: RealData → (every N: Config → Alarms) → (every 60: Info) → repeat
-     */
-    async pollNext() {
-        if (!this.pollActive || !this.connection?.connected || this.connection.reconnectPaused) {
+    async pollTick() {
+        if (!this.connection?.connected || !this.protobuf) {
             return;
         }
-        // RealData (every poll)
-        await this.requestRealData();
-        // Config + Alarms (every N polls)
+        const ts = Math.floor(Date.now() / 1000);
+        await this.connection.send(this.protobuf.encodeRealDataNewRequest(ts));
         this.pollCount++;
         if (this.pollCount >= this.slowPollEvery) {
             this.pollCount = 0;
-            await this.requestConfig();
-            await this.requestAlarms();
-            // Info every 6x slow poll (~every 36 slow polls = rare)
-            this.infoPollCount = (this.infoPollCount || 0) + 1;
+            await this.connection.send(this.protobuf.encodeGetConfigRequest(ts));
+            await this.connection.send(this.protobuf.encodeAlarmTrigger(ts));
+            await this.connection.send(this.protobuf.encodeMiWarnRequest(ts));
+            this.infoPollCount++;
             if (this.infoPollCount >= 6) {
                 this.infoPollCount = 0;
-                await this.requestInfo();
+                await this.connection.send(this.protobuf.encodeInfoRequest(ts));
             }
         }
-        // Chain next poll with configurable pause (0 = continuous)
-        if (this.pollActive && this.connection?.connected && !this.connection.reconnectPaused) {
-            const pauseMs = (Number(this.config.pollInterval) ?? 30) * 1000;
-            this.pollTimer = this.setTimeout(() => void this.pollNext(), pauseMs > 0 ? pauseMs : 100);
-        }
-    }
-    waitForResponse() {
-        return new Promise(resolve => {
-            let timer;
-            const done = () => {
-                if (timer) {
-                    this.clearTimeout(timer);
-                    timer = undefined;
-                }
-                this.removeListener("responseHandled", done);
-                resolve();
-            };
-            timer = this.setTimeout(done, 5000);
-            this.once("responseHandled", done);
-        });
-    }
-    async requestRealData() {
-        if (!this.protobuf || !this.connection) {
-            return;
-        }
-        const timestamp = Math.floor(Date.now() / 1000);
-        const msg = this.protobuf.encodeRealDataNewRequest(timestamp);
-        const sent = await this.connection.send(msg);
-        if (!sent) {
-            return;
-        }
-        await this.waitForResponse();
-    }
-    async requestInfo() {
-        if (!this.protobuf || !this.connection) {
-            return;
-        }
-        const timestamp = Math.floor(Date.now() / 1000);
-        const msg = this.protobuf.encodeInfoRequest(timestamp);
-        const sent = await this.connection.send(msg);
-        if (!sent) {
-            this.log.debug("Failed to send Info request");
-        }
-    }
-    async requestConfig() {
-        if (!this.protobuf || !this.connection) {
-            return;
-        }
-        const timestamp = Math.floor(Date.now() / 1000);
-        const msg = this.protobuf.encodeGetConfigRequest(timestamp);
-        const sent = await this.connection.send(msg);
-        if (sent) {
-            await this.waitForResponse();
-        }
-    }
-    async requestAlarms() {
-        if (!this.protobuf || !this.connection) {
-            return;
-        }
-        const timestamp = Math.floor(Date.now() / 1000);
-        const msg = this.protobuf.encodeAlarmTrigger(timestamp);
-        const sent = await this.connection.send(msg);
-        if (sent) {
-            await this.waitForResponse();
-        }
+        await this.setStateAsync("info.lastResponse", Date.now(), true);
     }
     handleResponse(message) {
         if (!this.protobuf) {
@@ -506,13 +503,15 @@ class Hoymiles extends utils.Adapter {
             }
             const { cmdHigh, cmdLow, payload } = parsed;
             this.log.debug(`Response: cmd=0x${cmdHigh.toString(16)} 0x${cmdLow.toString(16)}, payload=${payload.length} bytes`);
-            // Decrypt if needed
+            // Extract msgId and seqNum for encryption
+            const msgId = (message[2] << 8) | message[3];
+            const seqNum = (message[4] << 8) | message[5];
+            // Decrypt if needed (Info response is never encrypted)
             let decryptedPayload = payload;
             if (this.encryptionRequired && this.encryption) {
-                // Info response is never encrypted
                 if (!(cmdHigh === 0xa2 && cmdLow === 0x01)) {
                     try {
-                        decryptedPayload = this.encryption.decrypt(payload);
+                        decryptedPayload = this.encryption.decrypt(payload, msgId, seqNum);
                     }
                     catch (err) {
                         this.log.warn(`Decryption failed: ${err.message}`);
@@ -522,7 +521,10 @@ class Hoymiles extends utils.Adapter {
             }
             // DTU responses use 0xa2 prefix (App->DTU requests use 0xa3)
             if (cmdHigh === 0xa2 && cmdLow === 0x11) {
-                // RealDataNew response
+                // RealDataNew — process locally AND update cloud relay with latest data
+                if (this.cloudRelay) {
+                    this.cloudRelay.updateRealData(message);
+                }
                 void this.handleRealData(decryptedPayload);
             }
             else if (cmdHigh === 0xa2 && cmdLow === 0x01) {
@@ -550,7 +552,7 @@ class Hoymiles extends utils.Adapter {
                 this.handleCommandResponse(decryptedPayload);
             }
             else if (cmdHigh === 0xa2 && cmdLow === 0x02) {
-                // Heartbeat response
+                // Heartbeat response (idle keepalive acknowledged)
                 this.log.debug("Heartbeat response received");
             }
             else if (cmdHigh === 0xa2 && cmdLow === 0x14) {
@@ -580,8 +582,6 @@ class Hoymiles extends utils.Adapter {
         catch (err) {
             this.log.warn(`Error handling response: ${err.message}`);
         }
-        // Signal to waitForResponse that a response was processed
-        this.emit("responseHandled");
     }
     async handleRealData(payload) {
         if (!this.protobuf) {
@@ -605,14 +605,15 @@ class Hoymiles extends utils.Adapter {
                 await this.setStateAsync("grid.powerFactor", sgs.powerFactor, true);
                 await this.setStateAsync("inverter.temperature", sgs.temperature, true);
                 await this.setStateAsync("inverter.warnCount", sgs.warningNumber, true);
+                await this.setStateAsync("inverter.warnMessage", sgs.warningNumber > 0 ? (0, alarmCodes_1.getAlarmDescription)(sgs.warningNumber, "en") : "", true);
                 await this.setStateAsync("inverter.linkStatus", sgs.linkStatus, true);
                 await this.setStateAsync("inverter.serialNumber", sgs.serialNumber, true);
+                await this.setStateAsync("inverter.activePowerLimit", sgs.powerLimit, true);
             }
-            // PV data (DTU uses port 1,2 → map to pv0,pv1)
+            // PV data (DTU uses port 1,2,3,4 → map to pv0,pv1,pv2,pv3)
             for (const pv of data.pv) {
                 const pvIndex = pv.portNumber - 1;
-                // Only handle pv0 and pv1
-                if (pvIndex < 0 || pvIndex > 1) {
+                if (pvIndex < 0 || pvIndex > 3) {
                     continue;
                 }
                 const prefix = `pv${pvIndex}`;
@@ -660,6 +661,11 @@ class Hoymiles extends utils.Adapter {
         try {
             const info = this.protobuf.decodeInfoData(payload);
             this.log.info(`Device info: DTU SN=${info.dtuSn}, devices=${info.deviceNumber}, PVs=${info.pvNumber}`);
+            // Create PV states dynamically based on actual PV count
+            if (!this.pvStatesCreated && info.pvNumber > 0) {
+                await this.createPvStates(info.pvNumber);
+                this.pvStatesCreated = true;
+            }
             await this.setStateAsync("dtu.serialNumber", info.dtuSn, true);
             if (info.dtuInfo) {
                 const di = info.dtuInfo;
@@ -671,7 +677,7 @@ class Hoymiles extends utils.Adapter {
                 await this.setStateAsync("dtu.rfHwVersion", di.dtuRfHwVersion, true);
                 await this.setStateAsync("dtu.rfSwVersion", di.dtuRfSwVersion, true);
                 await this.setStateAsync("dtu.accessModel", di.accessModel, true);
-                await this.setStateAsync("dtu.communicationTime", new Date(di.communicationTime * 1000).toISOString(), true);
+                await this.setStateAsync("dtu.communicationTime", di.communicationTime * 1000, true);
                 await this.setStateAsync("dtu.wifiVersion", di.wifiVersion, true);
                 await this.setStateAsync("dtu.mode485", di.dtu485Mode, true);
                 await this.setStateAsync("dtu.sub1gFrequencyBand", di.sub1gFrequencyBand, true);
@@ -698,6 +704,38 @@ class Hoymiles extends utils.Adapter {
                 await this.setStateAsync("inverter.hwVersion", (0, protobufHandler_1.formatInvVersion)(pv.bootVersion).replace("V", "H"), true);
                 await this.setStateAsync("inverter.swVersion", (0, protobufHandler_1.formatSwVersion)(pv.gridVersion), true);
             }
+            // Start/configure cloud relay once we have DTU SN
+            const relayEnabled = this.config.enableCloudRelay !== false;
+            if (relayEnabled &&
+                this.protobuf &&
+                info.dtuSn &&
+                !this.cloudRelay &&
+                !this.cloudServerDomain.startsWith("_starting")) {
+                // Read server from config state (set by handleConfigData)
+                const serverState = await this.getStateAsync("config.serverDomain");
+                const portState = await this.getStateAsync("config.serverPort");
+                const serverDomain = serverState?.val || "";
+                const serverPort = portState?.val || 10081;
+                if (serverDomain) {
+                    this.cloudServerDomain = "_starting"; // Prevent double init from parallel calls
+                    const relay = new cloudRelay_1.default(serverDomain, serverPort);
+                    relay.configure(this.protobuf, info.dtuSn);
+                    this.cloudRelay = relay;
+                    this.cloudRelay.on("connected", () => {
+                        this.log.info(`Cloud relay connected to ${serverDomain}:${serverPort} as DTU ${info.dtuSn}`);
+                    });
+                    this.cloudRelay.on("disconnected", () => {
+                        this.log.warn("Cloud relay disconnected, will reconnect");
+                    });
+                    this.cloudRelay.on("error", (err) => {
+                        this.log.debug(`Cloud relay: ${err.message}`);
+                    });
+                    this.cloudRelay.connect();
+                }
+            }
+            else if (this.cloudRelay && this.protobuf && info.dtuSn) {
+                this.cloudRelay.configure(this.protobuf, info.dtuSn);
+            }
         }
         catch (err) {
             this.log.warn(`Error decoding InfoData: ${err.message}`);
@@ -709,7 +747,7 @@ class Hoymiles extends utils.Adapter {
         }
         try {
             const config = this.protobuf.decodeGetConfig(payload);
-            this.log.debug(`Config: server=${config.serverDomain}:${config.serverPort}, sendTime=${config.serverSendTime}s`);
+            this.log.debug(`Config: server=${config.serverDomain}:${config.serverPort}, sendTime=${config.serverSendTime}min`);
             // Power limit from config (limitPower 1000 = 100%)
             await this.setStateAsync("inverter.powerLimit", config.limitPower / 10, true);
             await this.setStateAsync("config.serverDomain", config.serverDomain, true);
@@ -721,90 +759,99 @@ class Hoymiles extends utils.Adapter {
             await this.setStateAsync("config.zeroExport433Addr", config.zeroExport433Addr, true);
             await this.setStateAsync("config.meterKind", config.meterKind, true);
             await this.setStateAsync("config.meterInterface", config.meterInterface, true);
-            await this.setStateAsync("config.dhcpSwitch", config.dhcpSwitch, true);
+            await this.setStateAsync("config.netDhcpSwitch", config.dhcpSwitch, true);
             await this.setStateAsync("config.dtuApSsid", config.dtuApSsid, true);
             await this.setStateAsync("config.netmodeSelect", config.netmodeSelect, true);
             await this.setStateAsync("config.channelSelect", config.channelSelect, true);
             await this.setStateAsync("config.sub1gSweepSwitch", config.sub1gSweepSwitch, true);
             await this.setStateAsync("config.sub1gWorkChannel", config.sub1gWorkChannel, true);
             await this.setStateAsync("config.invType", config.invType, true);
-            await this.setStateAsync("config.ipAddress", config.ipAddress, true);
-            await this.setStateAsync("config.subnetMask", config.subnetMask, true);
-            await this.setStateAsync("config.gateway", config.gateway, true);
+            await this.setStateAsync("config.netIpAddress", config.ipAddress, true);
+            await this.setStateAsync("config.netSubnetMask", config.subnetMask, true);
+            await this.setStateAsync("config.netGateway", config.gateway, true);
             await this.setStateAsync("config.wifiIpAddress", config.wifiIpAddress, true);
-            await this.setStateAsync("config.macAddress", config.macAddress, true);
+            await this.setStateAsync("config.netMacAddress", config.macAddress, true);
             await this.setStateAsync("config.wifiMacAddress", config.wifiMacAddress, true);
+            // Remember cloud server + sendTime for relay
+            if (config.serverDomain && config.serverPort) {
+                this.cloudServerDomain = `${config.serverDomain}:${config.serverPort}`;
+            }
+            if (config.serverSendTime > 0) {
+                this.cloudSendTimeMin = config.serverSendTime;
+            }
         }
         catch (err) {
             this.log.warn(`Error decoding Config: ${err.message}`);
         }
     }
+    /**
+     * Process alarm entries from both legacy AlarmData and newer WarnData formats.
+     * Alarms with eTime=0 are active, eTime>0 are resolved.
+     *
+     * @param payload - Protobuf payload from DTU response
+     * Severity is encoded in bits 14-15 of the code field.
+     */
     async handleAlarmData(payload) {
         if (!this.protobuf) {
             return;
         }
+        let alarms = [];
+        // Try legacy AlarmData format first, then WarnData
         try {
-            // Try legacy AlarmData format first
             const data = this.protobuf.decodeAlarmData(payload);
-            this.log.debug(`Alarms received: ${data.alarms.length} entries`);
-            await this.setStateAsync("alarms.count", data.alarms.length, true);
-            // Enrich alarms with descriptions
-            const enrichedAlarms = data.alarms.map(a => ({
-                ...a,
-                description_en: (0, alarmCodes_1.getAlarmDescription)(a.code, "en"),
-                description_de: (0, alarmCodes_1.getAlarmDescription)(a.code, "de"),
+            alarms = data.alarms.map(a => ({
+                sn: a.sn,
+                code: a.code,
+                num: a.num,
+                startTime: a.startTime * 1000,
+                endTime: a.endTime > 0 ? a.endTime * 1000 : 0,
+                data1: a.data1,
+                data2: a.data2,
+                descriptionEn: (0, alarmCodes_1.getAlarmDescription)(a.code, "en"),
+                descriptionDe: (0, alarmCodes_1.getAlarmDescription)(a.code, "de"),
+                active: a.endTime === 0,
             }));
-            await this.setStateAsync("alarms.json", JSON.stringify(enrichedAlarms), true);
-            if (data.alarms.length > 0) {
-                const last = data.alarms[data.alarms.length - 1];
-                await this.setStateAsync("alarms.lastCode", last.code, true);
-                await this.setStateAsync("alarms.lastTime", last.startTime, true);
-                const desc = (0, alarmCodes_1.getAlarmDescription)(last.code, "de");
-                await this.setStateAsync("alarms.lastMessage", `${desc} (Code ${last.code})`, true);
-                // Grid context at alarm time
-                if (this.lastSgsData) {
-                    await this.setStateAsync("alarms.lastGridVoltage", this.lastSgsData.voltage, true);
-                    await this.setStateAsync("alarms.lastGridFrequency", this.lastSgsData.frequency, true);
-                    await this.setStateAsync("alarms.lastTemperature", this.lastSgsData.temperature, true);
-                }
-            }
         }
         catch {
-            // If legacy format fails, try newer WarnData format
             try {
-                this.log.debug("Legacy AlarmData decode failed, trying WarnData format");
-                void this.handleWarnData(payload);
+                const data = this.protobuf.decodeWarnData(payload);
+                alarms = data.warnings.map(w => ({
+                    sn: w.sn,
+                    code: w.code,
+                    num: w.num,
+                    startTime: w.startTime * 1000,
+                    endTime: w.endTime > 0 ? w.endTime * 1000 : 0,
+                    data1: w.data1,
+                    data2: w.data2,
+                    descriptionEn: w.descriptionEn,
+                    descriptionDe: w.descriptionDe,
+                    active: w.endTime === 0,
+                }));
             }
-            catch (err2) {
-                this.log.warn(`Error decoding AlarmData/WarnData: ${err2.message}`);
-            }
-        }
-    }
-    async handleWarnData(payload) {
-        if (!this.protobuf) {
-            return;
-        }
-        try {
-            const data = this.protobuf.decodeWarnData(payload);
-            this.log.debug(`WarnData received: ${data.warnings.length} entries`);
-            await this.setStateAsync("alarms.count", data.warnings.length, true);
-            // Write enriched warnings as JSON
-            await this.setStateAsync("alarms.json", JSON.stringify(data.warnings), true);
-            if (data.warnings.length > 0) {
-                const last = data.warnings[data.warnings.length - 1];
-                await this.setStateAsync("alarms.lastCode", last.code, true);
-                await this.setStateAsync("alarms.lastTime", last.startTime, true);
-                await this.setStateAsync("alarms.lastMessage", `${last.descriptionDe} (Code ${last.code})`, true);
-                // Grid context at alarm time
-                if (this.lastSgsData) {
-                    await this.setStateAsync("alarms.lastGridVoltage", this.lastSgsData.voltage, true);
-                    await this.setStateAsync("alarms.lastGridFrequency", this.lastSgsData.frequency, true);
-                    await this.setStateAsync("alarms.lastTemperature", this.lastSgsData.temperature, true);
-                }
+            catch (err) {
+                this.log.warn(`Error decoding AlarmData/WarnData: ${err.message}`);
+                return;
             }
         }
-        catch (err) {
-            this.log.warn(`Error decoding WarnData: ${err.message}`);
+        if (alarms.length === 0) {
+            this.log.debug("Alarm list query returned no active alarms");
+        }
+        else {
+            this.log.debug(`Alarms received: ${alarms.length} entries`);
+        }
+        const activeAlarms = alarms.filter(a => a.active);
+        await this.setStateAsync("alarms.count", alarms.length, true);
+        await this.setStateAsync("alarms.activeCount", activeAlarms.length, true);
+        await this.setStateAsync("alarms.hasActive", activeAlarms.length > 0, true);
+        await this.setStateAsync("alarms.json", JSON.stringify(alarms), true);
+        if (alarms.length > 0) {
+            const last = alarms[alarms.length - 1];
+            await this.setStateAsync("alarms.lastCode", last.code, true);
+            await this.setStateAsync("alarms.lastStartTime", last.startTime, true);
+            await this.setStateAsync("alarms.lastEndTime", last.endTime, true);
+            await this.setStateAsync("alarms.lastMessage", `${last.descriptionDe} (Code ${last.code})`, true);
+            await this.setStateAsync("alarms.lastData1", last.data1, true);
+            await this.setStateAsync("alarms.lastData2", last.data2, true);
         }
     }
     async handleHistPower(payload) {
@@ -939,11 +986,71 @@ class Hoymiles extends utils.Adapter {
                 this.setTimeout(() => void this.setStateAsync("dtu.reboot", false, true), 1000);
             }
         }
+        else if (stateId === "inverter.powerFactorLimit") {
+            const value = Number(state.val);
+            if ((value < -1 || value > -0.8) && (value < 0.8 || value > 1)) {
+                this.log.warn(`Power factor must be -1.0…-0.8 or 0.8…1.0, got ${value}`);
+                return;
+            }
+            this.log.info(`Setting power factor limit to ${value}`);
+            const msg = this.protobuf.encodePowerFactorLimit(value, timestamp);
+            await this.connection.send(msg);
+        }
+        else if (stateId === "inverter.reactivePowerLimit") {
+            const degrees = Number(state.val);
+            if (degrees < -50 || degrees > 50) {
+                this.log.warn(`Reactive power limit must be -50…+50°, got ${degrees}`);
+                return;
+            }
+            this.log.info(`Setting reactive power limit to ${degrees}°`);
+            const msg = this.protobuf.encodeReactivePowerLimit(degrees, timestamp);
+            await this.connection.send(msg);
+        }
+        else if (stateId === "inverter.cleanWarnings") {
+            if (state.val) {
+                this.log.info("Cleaning warnings");
+                const msg = this.protobuf.encodeCleanWarnings(timestamp);
+                await this.connection.send(msg);
+                this.setTimeout(() => void this.setStateAsync("inverter.cleanWarnings", false, true), 1000);
+            }
+        }
+        else if (stateId === "inverter.cleanGroundingFault") {
+            if (state.val) {
+                this.log.info("Cleaning grounding fault");
+                const msg = this.protobuf.encodeCleanGroundingFault(timestamp);
+                await this.connection.send(msg);
+                this.setTimeout(() => void this.setStateAsync("inverter.cleanGroundingFault", false, true), 1000);
+            }
+        }
+        else if (stateId === "inverter.lock") {
+            if (state.val) {
+                this.log.info("Locking inverter");
+                const msg = this.protobuf.encodeLockInverter(timestamp);
+                await this.connection.send(msg);
+            }
+            else {
+                this.log.info("Unlocking inverter");
+                const msg = this.protobuf.encodeUnlockInverter(timestamp);
+                await this.connection.send(msg);
+            }
+        }
         else if (stateId === "config.zeroExportEnable") {
             const enable = !!state.val;
             this.log.info(`Setting zero export: ${enable ? "enabled" : "disabled"}`);
             const msg = this.protobuf.encodeSetConfig(timestamp, {
                 zeroExportEnable: enable ? 1 : 0,
+            });
+            await this.connection.send(msg);
+        }
+        else if (stateId === "config.serverSendTime") {
+            const seconds = Number(state.val);
+            if (!seconds || seconds < 1) {
+                this.log.warn(`Server send time must be a positive number, got ${state.val}`);
+                return;
+            }
+            this.log.info(`Setting cloud send interval to ${seconds}s`);
+            const msg = this.protobuf.encodeSetConfig(timestamp, {
+                serverSendTime: seconds,
             });
             await this.connection.send(msg);
         }
@@ -962,7 +1069,11 @@ class Hoymiles extends utils.Adapter {
             await this.setStateAsync("grid.yearEnergy", toKwh(data.year_eq), true);
             await this.setStateAsync("grid.co2Saved", Math.round((parseFloat(data.co2_emission_reduction) || 0) / 10) / 100, true);
             await this.setStateAsync("grid.treesPlanted", parseFloat(data.plant_tree) || 0, true);
-            await this.setStateAsync("info.lastCloudUpdate", data.data_time || "", true);
+            await this.setStateAsync("grid.isBalance", !!data.is_balance, true);
+            await this.setStateAsync("grid.isReflux", !!data.is_reflux, true);
+            await this.setStateAsync("info.lastCloudUpdate", new Date(data.data_time || 0).getTime(), true);
+            const lastDataStr = data.last_data_time || "";
+            await this.setStateAsync("info.lastDataTime", lastDataStr ? new Date(lastDataStr).getTime() : 0, true);
             await this.setStateAsync("info.cloudConnected", true, true);
             // Total energy always from cloud (AC output, not available locally)
             await this.setStateAsync("grid.totalEnergy", toKwh(data.total_eq), true);
@@ -980,7 +1091,7 @@ class Hoymiles extends utils.Adapter {
                 await this.setStateAsync("info.latitude", parseFloat(details.latitude) || 0, true);
                 await this.setStateAsync("info.longitude", parseFloat(details.longitude) || 0, true);
                 await this.setStateAsync("info.stationStatus", details.status || 0, true);
-                await this.setStateAsync("info.installedAt", details.create_at || "", true);
+                await this.setStateAsync("info.installedAt", new Date(details.create_at || 0).getTime(), true);
                 await this.setStateAsync("info.timezone", details.timezone?.tz_name || "", true);
                 await this.setStateAsync("grid.electricityPrice", details.electricity_price || 0, true);
                 // Currency from cloud (dynamic, not hardcoded EUR)
@@ -1037,20 +1148,23 @@ class Hoymiles extends utils.Adapter {
     onUnload(callback) {
         try {
             this.stopPollCycle();
-            if (this.cloudPollTimer) {
-                this.clearTimeout(this.cloudPollTimer);
-                this.cloudPollTimer = undefined;
-            }
             if (this.connection) {
                 this.connection.disconnect();
                 this.connection = null;
+            }
+            if (this.cloudRelay) {
+                this.cloudRelay.disconnect();
+                this.cloudRelay = null;
+            }
+            if (this.cloudPollTimer) {
+                this.clearTimeout(this.cloudPollTimer);
+                this.cloudPollTimer = undefined;
             }
             if (this.cloud) {
                 this.cloud.disconnect();
                 this.cloud = null;
             }
             void this.setStateAsync("info.connection", false, true);
-            void this.setStateAsync("dtu.reconnectPaused", false, true);
             void this.setStateAsync("info.cloudConnected", false, true);
         }
         catch {

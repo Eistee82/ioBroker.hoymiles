@@ -4,7 +4,7 @@
 ![Number of Installations](https://iobroker.live/badges/hoymiles-installed.svg)
 [![NPM version](https://img.shields.io/npm/v/iobroker.hoymiles.svg)](https://www.npmjs.com/package/iobroker.hoymiles)
 
-![Test and Release](https://github.com/Eistee82/ioBroker.hoymiles/workflows/Test%20and%20Release/badge.svg)
+[![Test and Release](https://github.com/Eistee82/ioBroker.hoymiles/actions/workflows/test-and-release.yml/badge.svg)](https://github.com/Eistee82/ioBroker.hoymiles/actions/workflows/test-and-release.yml)
 [![Downloads](https://img.shields.io/npm/dm/iobroker.hoymiles.svg)](https://www.npmjs.com/package/iobroker.hoymiles)
 [![License](https://img.shields.io/github/license/Eistee82/ioBroker.hoymiles)](https://github.com/Eistee82/ioBroker.hoymiles/blob/main/LICENSE)
 [![Donate](https://img.shields.io/badge/Donate-PayPal-blue.svg)](https://paypal.me/eistee)
@@ -37,18 +37,20 @@ Two connection modes (independently configurable):
 ## Features
 
 - Dual mode: local TCP/Protobuf and/or S-Miles Cloud API
-- Continuous polling with request queue for reliable data retrieval
-- Performance data mode for real-time monitoring
-- Configurable poll pause between cycles (0 = fastest possible)
-- Configurable slow poll factor for config/alarm queries (reduces DTU traffic)
+- Persistent TCP connection with protobuf heartbeat (auto idle keepalive every 20s)
+- Configurable data interval (0 = fastest possible, ~1s per cycle)
+- Cloud Relay: forwards inverter data to the Hoymiles Cloud on behalf of the DTU, so the local connection no longer blocks cloud uploads
+- Automatic cloud poll timing derived from DTU's sendTime configuration
+- Sequence numbers in protocol framing (0-60000 wrap-around, matching original app)
+- AES-128-CBC encryption support for newer DTU firmware (SHA-256 key derivation from encRand)
 - Real-time data: power, voltage, current, frequency, energy, temperature
 - Per-panel monitoring (PV0/PV1)
 - Energy aggregates: daily, monthly, yearly, total (kWh)
 - Income calculation based on electricity price (cloud)
 - CO2 savings tracking (cloud)
-- Power limit control (2-100%), inverter on/off/reboot, DTU reboot
+- Commands: power limit (2-100%), inverter on/off/reboot, DTU reboot, power factor limit, reactive power limit, clean warnings, clean grounding fault, lock/unlock inverter
 - Alarm and warning monitoring (109 codes DE/EN)
-- AES encryption support for newer DTU firmware
+- 5-minute idle timeout with automatic reconnect
 - Network discovery module for ioBroker.discovery
 - TypeScript, ESLint, Prettier, GitHub CI/CD
 - Full i18n: en, de, ru, pt, nl, fr, it, es, pl, uk, zh-cn
@@ -63,10 +65,9 @@ Open the adapter configuration in the ioBroker admin interface.
 |---------|---------|-------------|
 | **Enable local** | on | Enable direct TCP/Protobuf connection |
 | **DTU Host** | (empty) | IP address or hostname of the inverter. Leave empty for auto-discovery on adapter start. |
-| **Pause between polls** | 30 | Pause between poll cycles in seconds. 0 = no pause (fastest possible, ~2-4s per cycle). |
-| **Config/alarm poll factor** | 6 | Config and alarms are only queried every Nth poll. Reduces DTU traffic during fast polling. |
-
-> **Note:** Very short poll intervals (below ~15s) keep the TCP connection to the DTU busy and can prevent the inverter from uploading data to the Hoymiles Cloud. If you use cloud monitoring in parallel, keep the pause at 30s or higher.
+| **Data query interval** | 5s | Seconds between data requests (0-300). Set 0 for fastest possible (no delay between requests). |
+| **Config/alarm poll factor** | 6 | Config and alarms are queried every Nth data cycle. |
+| **Cloud Relay** | on | Forward real-time data to Hoymiles Cloud on behalf of the DTU. Prevents the local connection from blocking cloud uploads. |
 
 ### Cloud Connection (S-Miles)
 
@@ -76,7 +77,6 @@ Open the adapter configuration in the ioBroker admin interface.
 | **S-Miles Email** | — | Your S-Miles account email |
 | **S-Miles Password** | — | Your S-Miles account password (stored encrypted) |
 | **DTU Serial** | (empty) | For multiple inverters in your account: enter DTU serial to match the correct one. Leave empty for single inverter setups. |
-| **Cloud Poll Interval** | 300s | Cloud query interval (60-3600 seconds) |
 
 Both connections can be enabled simultaneously. Local data has priority — cloud data fills in when the DTU is offline (e.g. at night).
 
@@ -130,14 +130,22 @@ Each instance has its own configuration and runs independently.
 
 ## Changelog
 
+### 0.2.0 (2026-03-27)
+- (@Eistee82) Protocol rewrite based on original Hoymiles app decompilation and PCAP analysis
+- (@Eistee82) Persistent TCP connection with protobuf heartbeat (20s idle keepalive)
+- (@Eistee82) Cloud Relay: forwards inverter data to Hoymiles Cloud on behalf of DTU (heartbeat every 60s, RealData every 5 min)
+- (@Eistee82) Automatic cloud poll timing derived from DTU sendTime config
+- (@Eistee82) Sequence numbers in message framing (0-60000 wrap-around)
+- (@Eistee82) AES-128-CBC encryption with SHA-256 key derivation for newer DTU firmware
+- (@Eistee82) New commands: power factor limit, reactive power limit, clean warnings, clean grounding fault, lock/unlock inverter
+- (@Eistee82) Configurable data interval (0 = fastest, ~1s per cycle)
+- (@Eistee82) Writable cloud send interval (config.serverSendTime)
+- (@Eistee82) 5-minute idle timeout with automatic reconnect
+
 ### 0.1.0 (2026-03-26)
 - (@Eistee82) First tested release — HMS-800W-2T verified with local TCP and S-Miles Cloud
 - (@Eistee82) Direct TCP/Protobuf communication with Hoymiles HMS inverters (integrated WiFi DTU)
 - (@Eistee82) Hoymiles S-Miles Cloud API integration (dual mode: local and/or cloud)
-- (@Eistee82) Continuous polling with request queue for reliable data retrieval
-- (@Eistee82) Performance data mode for real-time monitoring
-- (@Eistee82) Configurable poll pause between cycles (0 = no pause, fastest possible)
-- (@Eistee82) Configurable slow poll factor for config/alarm queries
 - (@Eistee82) Real-time data: grid power, voltage, current, frequency, energy
 - (@Eistee82) Per-panel data (PV0/PV1): voltage, current, power, energy
 - (@Eistee82) Energy aggregates: daily, monthly, yearly, total (kWh)

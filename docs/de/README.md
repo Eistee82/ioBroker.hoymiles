@@ -18,12 +18,11 @@ Dieser Adapter ist für **Hoymiles HMS Mikrowechselrichter mit integriertem WiFi
 
 | Einstellung | Standard | Beschreibung |
 |-------------|----------|--------------|
-| **Lokal aktivieren** | an | Direkte TCP/Protobuf-Verbindung aktivieren |
+| **Lokal aktivieren** | an | Direkte TCP/Protobuf-Verbindung aktivieren. Der Adapter hält eine persistente TCP-Verbindung mit Protobuf-Heartbeat. |
 | **DTU Host** | (leer) | IP-Adresse oder Hostname des Wechselrichters. Leer lassen für automatische Suche beim Adapterstart. Die DTU-IP findest du auch in deiner Router-DHCP-Liste (Gerätename: DTUBI-*). |
-| **Pause zwischen Abfragen** | 30 | Pause zwischen Abfragezyklen in Sekunden. 0 = keine Pause (schnellstmöglich, ~2-4s pro Zyklus). |
-| **Config/Alarm Abfragefaktor** | 6 | Config und Alarme werden nur bei jedem X-ten Poll abgefragt. Reduziert den DTU-Traffic bei schnellem Polling. |
-
-> **Hinweis:** Sehr kurze Abfrageintervalle (unter ~15s) halten die TCP-Verbindung zur DTU dauerhaft beschäftigt und können verhindern, dass der Wechselrichter Daten in die Hoymiles Cloud hochlädt. Wenn du Cloud-Monitoring parallel nutzt, lasse die Pause bei 30s oder höher.
+| **Datenabfrage-Intervall** | 5s | Sekunden zwischen Datenanfragen (0-300). 0 = schnellstmöglich (~1s pro Zyklus). |
+| **Config/Alarm Abfragefaktor** | 6 | Config und Alarme werden nur bei jedem X-ten Datenzyklus abgefragt. |
+| **Cloud-Relay** | an | Echtzeitdaten im Namen der DTU an die Hoymiles Cloud weiterleiten. Ohne diese Option blockiert die lokale TCP-Verbindung den Cloud-Upload der DTU. |
 
 ### Cloud-Verbindung (S-Miles)
 
@@ -33,7 +32,6 @@ Dieser Adapter ist für **Hoymiles HMS Mikrowechselrichter mit integriertem WiFi
 | **S-Miles E-Mail** | — | E-Mail-Adresse des S-Miles Kontos |
 | **S-Miles Passwort** | — | Passwort des S-Miles Kontos (verschlüsselt gespeichert) |
 | **DTU Seriennummer** | (leer) | Bei mehreren Wechselrichtern im Account: DTU-Seriennummer eingeben um den richtigen zuzuordnen. Bei nur einem Wechselrichter leer lassen. |
-| **Cloud-Abfrageintervall** | 300s | Cloud-Abfrageintervall (60-3600 Sekunden) |
 
 Beide Verbindungen können gleichzeitig aktiv sein. Lokale Daten haben Vorrang — Cloud-Daten werden eingetragen wenn der DTU offline ist (z.B. nachts).
 ## Datenpunkte
@@ -184,9 +182,11 @@ Beide Verbindungen können gleichzeitig aktiv sein. Lokale Daten haben Vorrang �
 
 - **Transport:** TCP Port 10081
 - **Kodierung:** Protocol Buffers (Protobuf)
-- **Frame:** 10-Byte Header (`HM` Magic + Command-ID + CRC16 + Länge) + Protobuf-Payload
+- **Frame:** 10-Byte Header (`HM` Magic + Command-ID + CRC16 + Länge) + Protobuf-Payload, mit Sequenznummern (0-60000)
 - **Authentifizierung:** Keine (nur lokales Netzwerk)
-- **Verschlüsselung:** Optionales AES-128-CBC (automatisch erkannt)
+- **Verschlüsselung:** Optionales AES-128-CBC mit SHA-256 Schlüsselableitung (automatisch erkannt)
+- **Heartbeat:** Protobuf-Heartbeat alle 20s für die persistente Verbindung
+- **Reconnect:** 5 Minuten Idle-Timeout, automatische Wiederverbindung mit exponentiellem Backoff (1s-60s)
 
 ### Cloud (S-Miles API)
 

@@ -100,11 +100,9 @@ describe("stateDefinitions", function () {
 		}
 	});
 
-	it("contains expected channels", function () {
+	it("contains expected static channels", function () {
 		const channelIds = channels.map((c) => c.id);
 		assert.ok(channelIds.includes("grid"), "Missing grid channel");
-		assert.ok(channelIds.includes("pv0"), "Missing pv0 channel");
-		assert.ok(channelIds.includes("pv1"), "Missing pv1 channel");
 		assert.ok(channelIds.includes("inverter"), "Missing inverter channel");
 		assert.ok(channelIds.includes("dtu"), "Missing dtu channel");
 		assert.ok(channelIds.includes("info"), "Missing info channel");
@@ -112,8 +110,8 @@ describe("stateDefinitions", function () {
 		assert.ok(channelIds.includes("config"), "Missing config channel");
 	});
 
-	it("has exactly 8 channels", function () {
-		assert.strictEqual(channels.length, 8, `Expected 8 channels but got ${channels.length}`);
+	it("has 6 static channels (PV and meter are dynamic)", function () {
+		assert.strictEqual(channels.length, 6, `Expected 6 channels but got ${channels.length}`);
 	});
 
 	it("contains DTU states", function () {
@@ -131,17 +129,16 @@ describe("stateDefinitions", function () {
 		assert.ok(stateIds.includes("dtu.mode485"), "Missing dtu.mode485 state");
 		assert.ok(stateIds.includes("dtu.sub1gFrequencyBand"), "Missing dtu.sub1gFrequencyBand state");
 		assert.ok(stateIds.includes("dtu.reboot"), "Missing dtu.reboot state");
-		assert.ok(stateIds.includes("dtu.reconnectPaused"), "Missing dtu.reconnectPaused state");
 		assert.ok(stateIds.includes("dtu.connState"), "Missing dtu.connState state");
 	});
 
 	it("contains network config states", function () {
 		const stateIds = states.map((s) => s.id);
-		assert.ok(stateIds.includes("config.ipAddress"), "Missing config.ipAddress state");
-		assert.ok(stateIds.includes("config.subnetMask"), "Missing config.subnetMask state");
-		assert.ok(stateIds.includes("config.gateway"), "Missing config.gateway state");
+		assert.ok(stateIds.includes("config.netIpAddress"), "Missing config.netIpAddress state");
+		assert.ok(stateIds.includes("config.netSubnetMask"), "Missing config.netSubnetMask state");
+		assert.ok(stateIds.includes("config.netGateway"), "Missing config.netGateway state");
 		assert.ok(stateIds.includes("config.wifiIpAddress"), "Missing config.wifiIpAddress state");
-		assert.ok(stateIds.includes("config.macAddress"), "Missing config.macAddress state");
+		assert.ok(stateIds.includes("config.netMacAddress"), "Missing config.netMacAddress state");
 		assert.ok(stateIds.includes("config.wifiMacAddress"), "Missing config.wifiMacAddress state");
 	});
 
@@ -180,19 +177,23 @@ describe("encryption", function () {
 	it("encrypt and decrypt round-trip produces original data", function () {
 		const enc = new Encryption("0123456789abcdef");
 		const original = Buffer.from("Hello, Hoymiles!");
-		const encrypted = enc.encrypt(original);
-		const decrypted = enc.decrypt(encrypted);
+		const encrypted = enc.encrypt(original, 0xa311, 42);
+		const decrypted = enc.decrypt(encrypted, 0xa311, 42);
 		assert.ok(Buffer.compare(original, decrypted) === 0);
 	});
 
-	it("throws when encrypting without valid key", function () {
-		const enc = new Encryption("short");
-		assert.throws(() => enc.encrypt(Buffer.from("test")), /not initialized/);
+	it("different msgId/seqNum produces different ciphertext", function () {
+		const enc = new Encryption("0123456789abcdef");
+		const original = Buffer.from("Hello, Hoymiles!");
+		const encrypted1 = enc.encrypt(original, 0xa311, 1);
+		const encrypted2 = enc.encrypt(original, 0xa311, 2);
+		assert.ok(Buffer.compare(encrypted1, encrypted2) !== 0);
 	});
 
-	it("throws when decrypting without valid key", function () {
-		const enc = new Encryption("");
-		assert.throws(() => enc.decrypt(Buffer.from("test")), /not initialized/);
+	it("encrypt produces data for any encRand length", function () {
+		const enc = new Encryption("short");
+		const encrypted = enc.encrypt(Buffer.from("test data here!!"), 0xa311, 1);
+		assert.ok(encrypted.length > 0);
 	});
 });
 
@@ -379,6 +380,85 @@ describe("protobufHandler", function () {
 		it("has LIMIT_POWER = 8", function () {
 			assert.strictEqual(ACTION.LIMIT_POWER, 8);
 		});
+
+		it("has new command actions", function () {
+			assert.strictEqual(ACTION.CLEAN_GROUNDING_FAULT, 10);
+			assert.strictEqual(ACTION.LOCK, 12);
+			assert.strictEqual(ACTION.UNLOCK, 13);
+			assert.strictEqual(ACTION.CLEAN_WARN, 42);
+			assert.strictEqual(ACTION.POWER_FACTOR_LIMIT, 47);
+			assert.strictEqual(ACTION.REACTIVE_POWER_LIMIT, 48);
+			assert.strictEqual(ACTION.ALARM_LIST, 50);
+		});
+	});
+
+	describe("sequence numbers", function () {
+		it("increments sequence number on each buildMessage call", function () {
+			const h2 = new ProtobufHandler();
+			const msg1 = h2.buildMessage(0xa3, 0x11, Buffer.from([0x01]));
+			const msg2 = h2.buildMessage(0xa3, 0x11, Buffer.from([0x01]));
+			const seq1 = (msg1[4] << 8) | msg1[5];
+			const seq2 = (msg2[4] << 8) | msg2[5];
+			assert.strictEqual(seq2, seq1 + 1);
+		});
+	});
+
+	describe("new command encoders", function () {
+		it("encodePowerFactorLimit creates valid message with action 47", function () {
+			const msg = handler.encodePowerFactorLimit(0.95, 1700000000);
+			const parsed = handler.parseResponse(msg);
+			const ResDTO = handler.protos.CommandPB.lookupType("CommandResDTO");
+			const decoded = ResDTO.decode(parsed.payload);
+			const obj = ResDTO.toObject(decoded, { longs: Number, defaults: true });
+			assert.strictEqual(obj.action, ACTION.POWER_FACTOR_LIMIT);
+			assert.strictEqual(obj.data, "A:950,B:0,C:0\r");
+		});
+
+		it("encodeReactivePowerLimit creates valid message with action 48", function () {
+			const msg = handler.encodeReactivePowerLimit(25, 1700000000);
+			const parsed = handler.parseResponse(msg);
+			const ResDTO = handler.protos.CommandPB.lookupType("CommandResDTO");
+			const decoded = ResDTO.decode(parsed.payload);
+			const obj = ResDTO.toObject(decoded, { longs: Number, defaults: true });
+			assert.strictEqual(obj.action, ACTION.REACTIVE_POWER_LIMIT);
+			assert.strictEqual(obj.data, "A:250,B:0,C:0\r");
+		});
+
+		it("encodeCleanWarnings creates valid message with action 42", function () {
+			const msg = handler.encodeCleanWarnings(1700000000);
+			const parsed = handler.parseResponse(msg);
+			const ResDTO = handler.protos.CommandPB.lookupType("CommandResDTO");
+			const decoded = ResDTO.decode(parsed.payload);
+			const obj = ResDTO.toObject(decoded, { longs: Number, defaults: true });
+			assert.strictEqual(obj.action, ACTION.CLEAN_WARN);
+		});
+
+		it("encodeLockInverter creates valid message with action 12", function () {
+			const msg = handler.encodeLockInverter(1700000000);
+			const parsed = handler.parseResponse(msg);
+			const ResDTO = handler.protos.CommandPB.lookupType("CommandResDTO");
+			const decoded = ResDTO.decode(parsed.payload);
+			const obj = ResDTO.toObject(decoded, { longs: Number, defaults: true });
+			assert.strictEqual(obj.action, ACTION.LOCK);
+		});
+
+		it("encodeUnlockInverter creates valid message with action 13", function () {
+			const msg = handler.encodeUnlockInverter(1700000000);
+			const parsed = handler.parseResponse(msg);
+			const ResDTO = handler.protos.CommandPB.lookupType("CommandResDTO");
+			const decoded = ResDTO.decode(parsed.payload);
+			const obj = ResDTO.toObject(decoded, { longs: Number, defaults: true });
+			assert.strictEqual(obj.action, ACTION.UNLOCK);
+		});
+
+		it("encodeCleanGroundingFault creates valid message with action 10", function () {
+			const msg = handler.encodeCleanGroundingFault(1700000000);
+			const parsed = handler.parseResponse(msg);
+			const ResDTO = handler.protos.CommandPB.lookupType("CommandResDTO");
+			const decoded = ResDTO.decode(parsed.payload);
+			const obj = ResDTO.toObject(decoded, { longs: Number, defaults: true });
+			assert.strictEqual(obj.action, ACTION.CLEAN_GROUNDING_FAULT);
+		});
 	});
 
 	describe("encodeAutoSearch", function () {
@@ -507,7 +587,6 @@ describe("dtuConnection", function () {
 		it("sets default values correctly", function () {
 			const conn = new DtuConnection("192.168.1.100", 10081);
 			assert.strictEqual(conn.connected, false);
-			assert.strictEqual(conn.reconnectPaused, false);
 			conn.disconnect();
 		});
 
@@ -517,9 +596,9 @@ describe("dtuConnection", function () {
 			conn.disconnect();
 		});
 
-		it("reconnectPaused is false initially", function () {
-			const conn = new DtuConnection("192.168.1.100", 10081);
-			assert.strictEqual(conn.reconnectPaused, false);
+		it("accepts heartbeat generator callback", function () {
+			const conn = new DtuConnection("192.168.1.100", 10081, () => Buffer.from([0x48, 0x4d]));
+			assert.strictEqual(conn.connected, false);
 			conn.disconnect();
 		});
 	});

@@ -18,12 +18,11 @@ Open the adapter configuration in the ioBroker admin interface.
 
 | Setting | Default | Description |
 |---------|---------|-------------|
-| **Enable local** | on | Enable direct TCP/Protobuf connection |
+| **Enable local** | on | Enable direct TCP/Protobuf connection. The adapter maintains a persistent TCP connection with protobuf heartbeat. |
 | **DTU Host** | (empty) | IP address or hostname of the inverter. Leave empty for auto-discovery on adapter start. You can also find the DTU IP in your router's DHCP client list (device name: DTUBI-*). |
-| **Pause between polls** | 30 | Pause between poll cycles in seconds. 0 = no pause (fastest possible, ~2-4s per cycle). |
-| **Config/alarm poll factor** | 6 | Config and alarms are only queried every Nth poll. Reduces DTU traffic during fast polling. |
-
-> **Note:** Very short poll intervals (below ~15s) keep the TCP connection to the DTU busy and can prevent the inverter from uploading data to the Hoymiles Cloud. If you use cloud monitoring in parallel, keep the pause at 30s or higher.
+| **Data query interval** | 5s | Seconds between data requests (0-300). Set 0 for fastest possible (~1s per cycle). |
+| **Config/alarm poll factor** | 6 | Config and alarms are queried every Nth data cycle. |
+| **Cloud Relay** | on | Forward real-time data to Hoymiles Cloud on behalf of the DTU. Without this, the local TCP connection blocks the DTU from uploading to the cloud. |
 
 ### Cloud Connection (S-Miles)
 
@@ -33,7 +32,6 @@ Open the adapter configuration in the ioBroker admin interface.
 | **S-Miles Email** | — | Your S-Miles account email |
 | **S-Miles Password** | — | Your S-Miles account password (stored encrypted) |
 | **DTU Serial** | (empty) | For multiple inverters in your account: enter DTU serial to match the correct one. Leave empty for single inverter setups. |
-| **Cloud Poll Interval** | 300s | Cloud query interval (60-3600 seconds) |
 
 Both connections can be enabled simultaneously. Local data has priority — cloud data fills in when the DTU is offline (e.g. at night).
 ## States
@@ -184,9 +182,11 @@ Both connections can be enabled simultaneously. Local data has priority — clou
 
 - **Transport:** TCP port 10081
 - **Encoding:** Protocol Buffers (protobuf)
-- **Frame:** 10-byte header (`HM` magic + command ID + CRC16 + length) + protobuf payload
+- **Frame:** 10-byte header (`HM` magic + command ID + CRC16 + length) + protobuf payload, with sequence numbers (0-60000)
 - **Authentication:** None (local network only)
-- **Encryption:** Optional AES-128-CBC (detected automatically via DTU info response)
+- **Encryption:** Optional AES-128-CBC with SHA-256 key derivation (detected automatically via DTU info response)
+- **Heartbeat:** Protobuf heartbeat every 20s to maintain the persistent connection
+- **Reconnect:** 5-minute idle timeout, automatic reconnect with exponential backoff (1s-60s)
 
 ### Cloud (S-Miles API)
 

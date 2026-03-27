@@ -27,4 +27,7 @@ Thumbs.db
 # Analysis files (not part of adapter)
 temp_apk/
 firmware/
+pcap/
 *.xapk
+*.pcap
+discovery/

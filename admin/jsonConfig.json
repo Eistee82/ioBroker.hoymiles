@@ -25,10 +25,10 @@
             "disabled": "!data.enableLocal",
             "help": "dtuHostHelp"
         },
-        "pollInterval": {
+        "dataInterval": {
             "type": "number",
-            "label": "pollInterval",
-            "default": 30,
+            "label": "dataInterval",
+            "default": 5,
             "min": 0,
             "max": 300,
             "xs": 12,
@@ -37,7 +37,7 @@
             "lg": 12,
             "xl": 12,
             "disabled": "!data.enableLocal",
-            "help": "pollIntervalHelp"
+            "help": "dataIntervalHelp"
         },
         "slowPollFactor": {
             "type": "number",
@@ -52,6 +52,33 @@
             "xl": 12,
             "disabled": "!data.enableLocal",
             "help": "slowPollFactorHelp"
+        },
+        "enableCloudRelay": {
+            "type": "checkbox",
+            "label": "enableCloudRelay",
+            "default": true,
+            "xs": 12,
+            "sm": 12,
+            "md": 12,
+            "lg": 12,
+            "xl": 12,
+            "disabled": "!data.enableLocal",
+            "help": "enableCloudRelayHelp"
+        },
+        "_cloudRelayWarning": {
+            "type": "staticText",
+            "text": "cloudRelayWarning",
+            "xs": 12,
+            "sm": 12,
+            "md": 12,
+            "lg": 12,
+            "xl": 12,
+            "hidden": "!data.enableCloud || !data.enableLocal || data.enableCloudRelay",
+            "style": {
+                "fontSize": 13,
+                "color": "#e65100",
+                "fontWeight": "bold"
+            }
         },
         "_divider1": {
             "type": "divider",
@@ -108,20 +135,6 @@
             "xl": 12,
             "disabled": "!data.enableCloud || data.enableLocal",
             "help": "cloudDtuSerialHelp"
-        },
-        "cloudPollInterval": {
-            "type": "number",
-            "label": "cloudPollInterval",
-            "default": 300,
-            "min": 60,
-            "max": 3600,
-            "xs": 12,
-            "sm": 12,
-            "md": 12,
-            "lg": 12,
-            "xl": 12,
-            "disabled": "!data.enableCloud",
-            "help": "cloudPollIntervalHelp"
         },
         "_cloudInfo": {
             "type": "staticText",
