@@ -28,6 +28,15 @@ jobs:
         with:
           languages: ${{ matrix.language }}
           queries: +security-and-quality
+          # Exclude js/insufficient-password-hash: The Hoymiles cloud API
+          # requires MD5+SHA256 credential hashes for authentication
+          # (pre-inspect response has no salt/Argon2 support yet).
+          # This is a protocol-mandated transform, not password storage.
+          # See: src/lib/utils.ts buildCredentialChallenges()
+          config: |
+            query-filters:
+              - exclude:
+                  id: js/insufficient-password-hash
       - run: npm ci && npm run build
       - name: Perform CodeQL Analysis
         uses: github/codeql-action/analyze@v4
