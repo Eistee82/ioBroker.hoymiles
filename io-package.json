@@ -1,7 +1,7 @@
 {
     "common": {
         "name": "hoymiles",
-        "version": "0.3.1",
+        "version": "0.3.2",
         "titleLang": {
             "en": "Hoymiles HMS-xxxW-xT",
             "de": "Hoymiles HMS-xxxW-xT",
@@ -67,6 +67,19 @@
         ],
         "enabled": true,
         "news": {
+            "0.3.2": {
+                "en": "Fix remaining responsive layout issues for repochecker (staticText, header, divider)",
+                "de": "Verbleibende responsive Layout-Probleme für Repochecker behoben (staticText, header, divider)",
+                "ru": "Исправлены оставшиеся проблемы адаптивной разметки для repochecker",
+                "pt": "Corrigidos problemas restantes de layout responsivo para repochecker",
+                "nl": "Resterende responsieve layout problemen voor repochecker opgelost",
+                "fr": "Correction des problèmes de layout responsive restants pour repochecker",
+                "it": "Corretti i problemi di layout responsive rimanenti per repochecker",
+                "es": "Corregidos los problemas de diseño responsivo restantes para repochecker",
+                "pl": "Naprawiono pozostałe problemy z responsywnym układem dla repochecker",
+                "uk": "Виправлено залишкові проблеми адаптивного макета для repochecker",
+                "zh-cn": "修复repochecker剩余的响应式布局问题"
+            },
             "0.3.1": {
                 "en": "Fix admin UI responsive layout, fix news translations for repochecker",
                 "de": "Admin-UI responsive Layout repariert, News-Übersetzungen für Repochecker korrigiert",
