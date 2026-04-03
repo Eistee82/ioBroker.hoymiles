@@ -1,7 +1,7 @@
 {
     "common": {
         "name": "hoymiles",
-        "version": "0.2.0",
+        "version": "0.3.0",
         "titleLang": {
             "en": "Hoymiles HMS-xxxW-xT",
             "de": "Hoymiles HMS-xxxW-xT",
@@ -67,6 +67,19 @@
         ],
         "enabled": true,
         "news": {
+            "0.3.0": {
+                "en": "Multi-inverter support, cloud auto-discovery, station-level aggregated data, per-inverter cloud data",
+                "de": "Multi-Wechselrichter-Unterstützung, Cloud-Auto-Erkennung, Stationsebene aggregierte Daten, Cloud-Daten pro Wechselrichter",
+                "ru": "Поддержка нескольких инверторов, автоматическое обнаружение облака, агрегированные данные на уровне станции",
+                "pt": "Suporte a múltiplos inversores, auto-descoberta na nuvem, dados agregados ao nível da estação",
+                "nl": "Multi-omvormer ondersteuning, cloud auto-detectie, geaggregeerde stationsgegevens",
+                "fr": "Support multi-onduleur, auto-découverte cloud, données agrégées au niveau station",
+                "it": "Supporto multi-inverter, auto-discovery cloud, dati aggregati a livello stazione",
+                "es": "Soporte multi-inversor, auto-descubrimiento en la nube, datos agregados a nivel de estación",
+                "pl": "Obsługa wielu falowników, automatyczne wykrywanie w chmurze, zagregowane dane na poziomie stacji",
+                "uk": "Підтримка кількох інверторів, автоматичне виявлення хмари, агреговані дані на рівні станції",
+                "zh-cn": "多逆变器支持，云端自动发现，站级聚合数据，每台逆变器云端数据"
+            },
             "0.2.0": {
                 "en": "Protocol rewrite with Cloud Relay — fast local data + cloud upload simultaneously",
                 "de": "Protokoll-Rewrite mit Cloud-Relay — schnelle lokale Daten + Cloud-Upload gleichzeitig",

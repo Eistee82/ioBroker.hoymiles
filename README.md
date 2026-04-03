@@ -134,8 +134,7 @@ Each DTU creates a device node using its serial number as ID (e.g. `hoymiles.0.4
 Cloud stations create aggregated device nodes (e.g. `hoymiles.0.station-12345.*`).
 
 ## Changelog
-
-### **WORK IN PROGRESS**
+### 0.3.0 (2026-04-03)
 - (@Eistee82) Multi-inverter support: multiple DTUs in a single adapter instance
 - (@Eistee82) Cloud auto-discovery: all inverters and stations in the account are automatically detected
 - (@Eistee82) Station-level aggregated data as separate device (power, energy, CO2, income)
