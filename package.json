@@ -32,7 +32,8 @@
     "test": "npm run test:package && npm run test:unit",
     "prepare": "npm run build",
     "release": "release-script in npm this --hierarchical",
-    "translate": "translate-adapter"
+    "translate": "translate-adapter",
+    "test:repo": "npx --yes @iobroker/repochecker https://github.com/Eistee82/ioBroker.hoymiles --local"
   },
   "keywords": [
     "ioBroker",
