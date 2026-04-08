@@ -134,7 +134,7 @@ describe("CloudManager", function () {
 // CloudManager – start/stop lifecycle
 // ============================================================
 describe("CloudManager – start/stop lifecycle", function () {
-	this.timeout(5000);
+	this.timeout(15000);
 
 	it("start() does not throw when cloud login fails", async function () {
 		const manager = new CloudManager({

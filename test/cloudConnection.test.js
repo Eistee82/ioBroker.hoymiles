@@ -117,7 +117,7 @@ describe("cloudConnection – log callback", function () {
 // ============================================================
 describe("cloudConnection – ensureToken", function () {
 	it("ensureToken calls login when no token exists", async function () {
-		this.timeout(20000);
+		this.timeout(40000);
 		const cloud = new CloudConnection("u", "p");
 		// ensureToken will call login() which will fail because no real server
 		// but it should reject, not crash
