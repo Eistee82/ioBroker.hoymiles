@@ -1,170 +1,183 @@
 {
-    "common": {
-        "name": "hoymiles",
-        "version": "0.3.2",
-        "titleLang": {
-            "en": "Hoymiles HMS-xxxW-xT",
-            "de": "Hoymiles HMS-xxxW-xT",
-            "ru": "Hoymiles HMS-xxxW-xT",
-            "pt": "Hoymiles HMS-xxxW-xT",
-            "nl": "Hoymiles HMS-xxxW-xT",
-            "fr": "Hoymiles HMS-xxxW-xT",
-            "it": "Hoymiles HMS-xxxW-xT",
-            "es": "Hoymiles HMS-xxxW-xT",
-            "pl": "Hoymiles HMS-xxxW-xT",
-            "uk": "Hoymiles HMS-xxxW-xT",
-            "zh-cn": "Hoymiles HMS-xxxW-xT"
-        },
-        "desc": {
-            "en": "Monitor Hoymiles HMS inverters via local TCP/Protobuf and/or S-Miles Cloud API",
-            "de": "Hoymiles HMS Wechselrichter per lokalem TCP/Protobuf und/oder S-Miles Cloud-API überwachen",
-            "ru": "Мониторинг инверторов Hoymiles HMS через локальный TCP/Protobuf и/или облачный API S-Miles",
-            "pt": "Monitorar inversores Hoymiles HMS via TCP/Protobuf local e/ou API Cloud S-Miles",
-            "nl": "Hoymiles HMS omvormers monitoren via lokaal TCP/Protobuf en/of S-Miles Cloud API",
-            "fr": "Surveiller les onduleurs Hoymiles HMS via TCP/Protobuf local et/ou API Cloud S-Miles",
-            "it": "Monitorare inverter Hoymiles HMS tramite TCP/Protobuf locale e/o API Cloud S-Miles",
-            "es": "Monitorear inversores Hoymiles HMS vía TCP/Protobuf local y/o API Cloud S-Miles",
-            "pl": "Monitorowanie falowników Hoymiles HMS przez lokalny TCP/Protobuf i/lub API Cloud S-Miles",
-            "uk": "Моніторинг інверторів Hoymiles HMS через локальний TCP/Protobuf та/або хмарний API S-Miles",
-            "zh-cn": "通过本地TCP/Protobuf和/或S-Miles云API监控Hoymiles HMS逆变器"
-        },
-        "authors": [
-            "Eistee"
-        ],
-        "keywords": [
-            "solar",
-            "hoymiles",
-            "inverter",
-            "photovoltaic",
-            "HMS",
-            "dtu",
-            "energy"
-        ],
-        "licenseInformation": {
-            "license": "MIT",
-            "type": "free"
-        },
-        "platform": "Javascript/Node.js",
-        "mode": "daemon",
-        "type": "energy",
-        "tier": 3,
-        "compact": true,
-        "messagebox": true,
-        "connectionType": "local",
-        "dataSource": "poll",
-        "adminUI": {
-            "config": "json"
-        },
-        "dependencies": [
-            {
-                "js-controller": ">=6.0.11"
-            }
-        ],
-        "globalDependencies": [
-            {
-                "admin": ">=7.6.20"
-            }
-        ],
-        "enabled": true,
-        "news": {
-            "0.3.2": {
-                "en": "Fix remaining responsive layout issues for repochecker (staticText, header, divider)",
-                "de": "Verbleibende responsive Layout-Probleme für Repochecker behoben (staticText, header, divider)",
-                "ru": "Исправлены оставшиеся проблемы адаптивной разметки для repochecker",
-                "pt": "Corrigidos problemas restantes de layout responsivo para repochecker",
-                "nl": "Resterende responsieve layout problemen voor repochecker opgelost",
-                "fr": "Correction des problèmes de layout responsive restants pour repochecker",
-                "it": "Corretti i problemi di layout responsive rimanenti per repochecker",
-                "es": "Corregidos los problemas de diseño responsivo restantes para repochecker",
-                "pl": "Naprawiono pozostałe problemy z responsywnym układem dla repochecker",
-                "uk": "Виправлено залишкові проблеми адаптивного макета для repochecker",
-                "zh-cn": "修复repochecker剩余的响应式布局问题"
-            },
-            "0.3.1": {
-                "en": "Fix admin UI responsive layout, fix news translations for repochecker",
-                "de": "Admin-UI responsive Layout repariert, News-Übersetzungen für Repochecker korrigiert",
-                "ru": "Исправлена адаптивная разметка интерфейса администратора, исправлены переводы новостей",
-                "pt": "Correção do layout responsivo da UI admin, correção de traduções de notícias",
-                "nl": "Admin UI responsieve layout gerepareerd, nieuwsvertalingen gecorrigeerd",
-                "fr": "Correction du layout responsive de l'interface admin, correction des traductions des actualités",
-                "it": "Corretto il layout responsive dell'interfaccia admin, corrette le traduzioni delle news",
-                "es": "Corrección del diseño responsivo de la UI admin, corrección de traducciones de noticias",
-                "pl": "Naprawiono responsywny układ interfejsu administracyjnego, poprawiono tłumaczenia wiadomości",
-                "uk": "Виправлено адаптивний макет інтерфейсу адміністратора, виправлено переклади новин",
-                "zh-cn": "修复管理界面响应式布局，修复新闻翻译"
-            },
-            "0.3.0": {
-                "en": "Multi-inverter support, cloud auto-discovery, station-level aggregated data, per-inverter cloud data",
-                "de": "Multi-Wechselrichter-Unterstützung, Cloud-Auto-Erkennung, Stationsebene aggregierte Daten, Cloud-Daten pro Wechselrichter",
-                "ru": "Поддержка нескольких инверторов, автоматическое обнаружение облака, агрегированные данные на уровне станции",
-                "pt": "Suporte a múltiplos inversores, auto-descoberta na nuvem, dados agregados ao nível da estação",
-                "nl": "Multi-omvormer ondersteuning, cloud auto-detectie, geaggregeerde stationsgegevens",
-                "fr": "Support multi-onduleur, auto-découverte cloud, données agrégées au niveau station",
-                "it": "Supporto multi-inverter, auto-discovery cloud, dati aggregati a livello stazione",
-                "es": "Soporte multi-inversor, auto-descubrimiento en la nube, datos agregados a nivel de estación",
-                "pl": "Obsługa wielu falowników, automatyczne wykrywanie w chmurze, zagregowane dane na poziomie stacji",
-                "uk": "Підтримка кількох інверторів, автоматичне виявлення хмари, агреговані дані на рівні станції",
-                "zh-cn": "多逆变器支持，云端自动发现，站级聚合数据，每台逆变器云端数据"
-            }
-        },
-        "extIcon": "https://raw.githubusercontent.com/Eistee82/ioBroker.hoymiles/main/admin/hoymiles.png",
-        "icon": "hoymiles.png",
-        "readme": "https://github.com/Eistee82/ioBroker.hoymiles/blob/main/README.md",
-        "loglevel": "info",
-        "stopBeforeUpdate": true,
-        "stopTimeout": 6000
+  "common": {
+    "name": "hoymiles",
+    "version": "0.3.3",
+    "titleLang": {
+      "en": "Hoymiles HMS-xxxW-xT",
+      "de": "Hoymiles HMS-xxxW-xT",
+      "ru": "Hoymiles HMS-xxxW-xT",
+      "pt": "Hoymiles HMS-xxxW-xT",
+      "nl": "Hoymiles HMS-xxxW-xT",
+      "fr": "Hoymiles HMS-xxxW-xT",
+      "it": "Hoymiles HMS-xxxW-xT",
+      "es": "Hoymiles HMS-xxxW-xT",
+      "pl": "Hoymiles HMS-xxxW-xT",
+      "uk": "Hoymiles HMS-xxxW-xT",
+      "zh-cn": "Hoymiles HMS-xxxW-xT"
     },
-    "native": {
-        "enableLocal": true,
-        "devices": [],
-        "dataInterval": 5,
-        "slowPollFactor": 6,
-        "enableCloudRelay": true,
-        "enableCloud": false,
-        "cloudUser": "",
-        "cloudPassword": ""
+    "desc": {
+      "en": "Monitor Hoymiles HMS inverters via local TCP/Protobuf and/or S-Miles Cloud API",
+      "de": "Hoymiles HMS Wechselrichter per lokalem TCP/Protobuf und/oder S-Miles Cloud-API überwachen",
+      "ru": "Мониторинг инверторов Hoymiles HMS через локальный TCP/Protobuf и/или облачный API S-Miles",
+      "pt": "Monitorar inversores Hoymiles HMS via TCP/Protobuf local e/ou API Cloud S-Miles",
+      "nl": "Hoymiles HMS omvormers monitoren via lokaal TCP/Protobuf en/of S-Miles Cloud API",
+      "fr": "Surveiller les onduleurs Hoymiles HMS via TCP/Protobuf local et/ou API Cloud S-Miles",
+      "it": "Monitorare inverter Hoymiles HMS tramite TCP/Protobuf locale e/o API Cloud S-Miles",
+      "es": "Monitorear inversores Hoymiles HMS vía TCP/Protobuf local y/o API Cloud S-Miles",
+      "pl": "Monitorowanie falowników Hoymiles HMS przez lokalny TCP/Protobuf i/lub API Cloud S-Miles",
+      "uk": "Моніторинг інверторів Hoymiles HMS через локальний TCP/Protobuf та/або хмарний API S-Miles",
+      "zh-cn": "通过本地TCP/Protobuf和/或S-Miles云API监控Hoymiles HMS逆变器"
     },
-    "encryptedNative": [
-        "cloudPassword"
+    "authors": [
+      "Eistee"
     ],
-    "protectedNative": [
-        "cloudPassword"
+    "keywords": [
+      "solar",
+      "hoymiles",
+      "inverter",
+      "photovoltaic",
+      "HMS",
+      "dtu",
+      "energy"
     ],
-    "instanceObjects": [
-        {
-            "_id": "info",
-            "type": "channel",
-            "common": {
-                "name": "Device information"
-            },
-            "native": {}
-        },
-        {
-            "_id": "info.connection",
-            "type": "state",
-            "common": {
-                "name": "Connected (local or cloud)",
-                "role": "indicator.connected",
-                "type": "boolean",
-                "read": true,
-                "write": false,
-                "def": false
-            },
-            "native": {}
-        },
-        {
-            "_id": "info.cloudConnected",
-            "type": "state",
-            "common": {
-                "name": "Cloud connected",
-                "role": "indicator.connected",
-                "type": "boolean",
-                "read": true,
-                "write": false,
-                "def": false
-            },
-            "native": {}
-        }
+    "licenseInformation": {
+      "license": "MIT",
+      "type": "free"
+    },
+    "platform": "Javascript/Node.js",
+    "mode": "daemon",
+    "type": "energy",
+    "tier": 3,
+    "compact": true,
+    "messagebox": true,
+    "connectionType": "local",
+    "dataSource": "poll",
+    "adminUI": {
+      "config": "json"
+    },
+    "dependencies": [
+      {
+        "js-controller": ">=6.0.11"
+      }
     ],
-    "objects": []
+    "globalDependencies": [
+      {
+        "admin": ">=7.6.20"
+      }
+    ],
+    "enabled": true,
+    "news": {
+      "0.3.3": {
+        "en": "Fix jsonConfig schema warnings: button color, remove unsupported table properties",
+        "de": "JsonConfig-Schemawarnungen beheben: Knopffarbe, ununterstützte Tabelleneigenschaften entfernen",
+        "ru": "Предупреждения по схеме Fix jsonConfig: цвет кнопки, удаление неподдерживаемых свойств стола",
+        "pt": "Corrigir os avisos do esquema jsonConfig: cor do botão, remover as propriedades da tabela não suportadas",
+        "nl": "Fix jsonConfig schema waarschuwingen: knop kleur, verwijder niet ondersteunde tabel eigenschappen",
+        "fr": "Correction des avertissements de schéma de jsonConfig : couleur du bouton, supprimer les propriétés de table non prises en charge",
+        "it": "Fissare jsonConfig avvisi di schema: colore del pulsante, rimuovere le proprietà della tabella non supportate",
+        "es": "Arreglar jsonConfig schema advertencias: color botón, eliminar las propiedades de la mesa sin soporte",
+        "pl": "Fix jsonConfig schematy ostrzeżenia: kolor przycisku, usunąć nieobsługiwane właściwości tabeli",
+        "uk": "Виправлення jsonConfig schema попередження: колір кнопки, видалення непідтримуваних властивостей таблиці",
+        "zh-cn": "修复 jsonFig 计划警告: 按钮颜色, 删除不支持的表格属性"
+      },
+      "0.3.2": {
+        "en": "Fix remaining responsive layout issues for repochecker (staticText, header, divider)",
+        "de": "Verbleibende responsive Layout-Probleme für Repochecker behoben (staticText, header, divider)",
+        "ru": "Исправлены оставшиеся проблемы адаптивной разметки для repochecker",
+        "pt": "Corrigidos problemas restantes de layout responsivo para repochecker",
+        "nl": "Resterende responsieve layout problemen voor repochecker opgelost",
+        "fr": "Correction des problèmes de layout responsive restants pour repochecker",
+        "it": "Corretti i problemi di layout responsive rimanenti per repochecker",
+        "es": "Corregidos los problemas de diseño responsivo restantes para repochecker",
+        "pl": "Naprawiono pozostałe problemy z responsywnym układem dla repochecker",
+        "uk": "Виправлено залишкові проблеми адаптивного макета для repochecker",
+        "zh-cn": "修复repochecker剩余的响应式布局问题"
+      },
+      "0.3.1": {
+        "en": "Fix admin UI responsive layout, fix news translations for repochecker",
+        "de": "Admin-UI responsive Layout repariert, News-Übersetzungen für Repochecker korrigiert",
+        "ru": "Исправлена адаптивная разметка интерфейса администратора, исправлены переводы новостей",
+        "pt": "Correção do layout responsivo da UI admin, correção de traduções de notícias",
+        "nl": "Admin UI responsieve layout gerepareerd, nieuwsvertalingen gecorrigeerd",
+        "fr": "Correction du layout responsive de l'interface admin, correction des traductions des actualités",
+        "it": "Corretto il layout responsive dell'interfaccia admin, corrette le traduzioni delle news",
+        "es": "Corrección del diseño responsivo de la UI admin, corrección de traducciones de noticias",
+        "pl": "Naprawiono responsywny układ interfejsu administracyjnego, poprawiono tłumaczenia wiadomości",
+        "uk": "Виправлено адаптивний макет інтерфейсу адміністратора, виправлено переклади новин",
+        "zh-cn": "修复管理界面响应式布局，修复新闻翻译"
+      },
+      "0.3.0": {
+        "en": "Multi-inverter support, cloud auto-discovery, station-level aggregated data, per-inverter cloud data",
+        "de": "Multi-Wechselrichter-Unterstützung, Cloud-Auto-Erkennung, Stationsebene aggregierte Daten, Cloud-Daten pro Wechselrichter",
+        "ru": "Поддержка нескольких инверторов, автоматическое обнаружение облака, агрегированные данные на уровне станции",
+        "pt": "Suporte a múltiplos inversores, auto-descoberta na nuvem, dados agregados ao nível da estação",
+        "nl": "Multi-omvormer ondersteuning, cloud auto-detectie, geaggregeerde stationsgegevens",
+        "fr": "Support multi-onduleur, auto-découverte cloud, données agrégées au niveau station",
+        "it": "Supporto multi-inverter, auto-discovery cloud, dati aggregati a livello stazione",
+        "es": "Soporte multi-inversor, auto-descubrimiento en la nube, datos agregados a nivel de estación",
+        "pl": "Obsługa wielu falowników, automatyczne wykrywanie w chmurze, zagregowane dane na poziomie stacji",
+        "uk": "Підтримка кількох інверторів, автоматичне виявлення хмари, агреговані дані на рівні станції",
+        "zh-cn": "多逆变器支持，云端自动发现，站级聚合数据，每台逆变器云端数据"
+      }
+    },
+    "extIcon": "https://raw.githubusercontent.com/Eistee82/ioBroker.hoymiles/main/admin/hoymiles.png",
+    "icon": "hoymiles.png",
+    "readme": "https://github.com/Eistee82/ioBroker.hoymiles/blob/main/README.md",
+    "loglevel": "info",
+    "stopBeforeUpdate": true,
+    "stopTimeout": 6000
+  },
+  "native": {
+    "enableLocal": true,
+    "devices": [],
+    "dataInterval": 5,
+    "slowPollFactor": 6,
+    "enableCloudRelay": true,
+    "enableCloud": false,
+    "cloudUser": "",
+    "cloudPassword": ""
+  },
+  "encryptedNative": [
+    "cloudPassword"
+  ],
+  "protectedNative": [
+    "cloudPassword"
+  ],
+  "instanceObjects": [
+    {
+      "_id": "info",
+      "type": "channel",
+      "common": {
+        "name": "Device information"
+      },
+      "native": {}
+    },
+    {
+      "_id": "info.connection",
+      "type": "state",
+      "common": {
+        "name": "Connected (local or cloud)",
+        "role": "indicator.connected",
+        "type": "boolean",
+        "read": true,
+        "write": false,
+        "def": false
+      },
+      "native": {}
+    },
+    {
+      "_id": "info.cloudConnected",
+      "type": "state",
+      "common": {
+        "name": "Cloud connected",
+        "role": "indicator.connected",
+        "type": "boolean",
+        "read": true,
+        "write": false,
+        "def": false
+      },
+      "native": {}
+    }
+  ],
+  "objects": []
 }
