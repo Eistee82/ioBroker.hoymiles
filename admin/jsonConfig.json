@@ -89,7 +89,7 @@
                     "type": "text",
                     "title": "deviceSerial",
                     "attr": "serial",
-                    "disabled": true,
+                    "disabled": "true",
                     "filter": false,
                     "sort": false,
                     "default": ""
@@ -98,7 +98,7 @@
                     "type": "checkbox",
                     "title": "deviceReachable",
                     "attr": "reachable",
-                    "disabled": true,
+                    "disabled": "true",
                     "width": "60px",
                     "filter": false,
                     "sort": false,
