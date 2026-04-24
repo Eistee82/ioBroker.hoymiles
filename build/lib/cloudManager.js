@@ -159,6 +159,9 @@ class CloudManager {
             await this.adapter.setStateAsync("info.cloudConnected", false, true);
             await this.adapter.setStateAsync("info.cloudLastError", err.message, true);
             await this.adapter.updateConnectionState();
+            if (typeof this.adapter.registerNotification === "function") {
+                await this.adapter.registerNotification("hoymiles", "cloudAuth", `Cloud authentication failed: ${err.message}`);
+            }
         }
         catch (stateErr) {
             this.adapter.log.warn(`Failed to persist cloud auth error state: ${errorMessage(stateErr)}`);

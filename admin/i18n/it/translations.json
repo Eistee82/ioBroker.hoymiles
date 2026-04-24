@@ -24,6 +24,5 @@
     "slowPollFactorHelp": "I dati di configurazione e allarmi cambiano raramente. Vengono interrogati solo ogni N cicli di dati per ridurre il carico. Predefinito: 6 (= ogni 30 secondi con intervallo di 5s).",
     "tabCloud": "Cloud (S-Miles)",
     "tabLocal": "Connessione locale",
-    "testConnectionButton": "Testa connessione",
-    "cloudAuthErrorLabel": "Last cloud login error (empty = OK; non-empty suspends automatic retries to prevent your Hoymiles account from being locked out)"
+    "testConnectionButton": "Testa connessione"
 }

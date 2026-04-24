@@ -229,20 +229,6 @@
                 "opacity": 0.7,
                 "marginTop": 8
             }
-        },
-        "_cloudAuthError": {
-            "type": "state",
-            "oid": "info.cloudLastError",
-            "control": "text",
-            "readOnly": true,
-            "label": "cloudAuthErrorLabel",
-            "newLine": true,
-            "size": "normal",
-            "xs": 12,
-            "sm": 12,
-            "md": 12,
-            "lg": 12,
-            "xl": 12
         }
     }
 }

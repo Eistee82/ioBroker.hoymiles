@@ -218,7 +218,8 @@ class CloudManager {
 
 	/**
 	 * Handle a permanent authentication failure: stop retrying, persist the error so
-	 * the admin UI can surface it, and leave the cloud marked offline until the user
+	 * the admin UI can surface it, register a system notification (visible as red
+	 * banner in the admin header), and leave the cloud marked offline until the user
 	 * updates credentials. An adapter restart (triggered by config change) resets
 	 * authErrorActive via the new CloudManager instance.
 	 *
@@ -233,6 +234,13 @@ class CloudManager {
 			await this.adapter.setStateAsync("info.cloudConnected", false, true);
 			await this.adapter.setStateAsync("info.cloudLastError", err.message, true);
 			await this.adapter.updateConnectionState();
+			if (typeof this.adapter.registerNotification === "function") {
+				await this.adapter.registerNotification(
+					"hoymiles",
+					"cloudAuth",
+					`Cloud authentication failed: ${err.message}`,
+				);
+			}
 		} catch (stateErr) {
 			this.adapter.log.warn(`Failed to persist cloud auth error state: ${errorMessage(stateErr)}`);
 		}

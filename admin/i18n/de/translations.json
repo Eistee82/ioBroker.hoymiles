@@ -1,5 +1,4 @@
 {
-    "cloudAuthErrorLabel": "Letzter Cloud-Anmeldefehler (leer = OK; nicht-leer stoppt Wiederholungsversuche, damit dein Hoymiles-Konto nicht gesperrt wird)",
     "cloudInfo": "Verwendet den gleichen Account wie die Hoymiles S-Miles App. Das Passwort wird verschlüsselt gespeichert. Die Cloud liefert Daten die lokal nicht verfügbar sind, z.B. Monats-/Jahresenergie und Wechselrichter-Leistung wenn nicht lokal verbunden.",
     "cloudPassword": "S-Miles Passwort",
     "cloudPasswordRequired": "Passwort ist erforderlich",

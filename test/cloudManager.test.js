@@ -1006,8 +1006,10 @@ describe("CloudManager – auth error handling", function () {
 	function makeTrackingAdapter() {
 		const states = new Map();
 		const timers = new Set();
+		const notifications = [];
 		return {
 			states,
+			notifications,
 			log: { debug: () => {}, info: () => {}, warn: () => {}, error: () => {} },
 			devices: new Map(),
 			setStateAsync: async (id, val) => {
@@ -1017,6 +1019,9 @@ describe("CloudManager – auth error handling", function () {
 			extendObjectAsync: async () => {},
 			setObjectNotExistsAsync: async () => {},
 			updateConnectionState: async () => {},
+			registerNotification: async (scope, category, message) => {
+				notifications.push({ scope, category, message });
+			},
 			subscribeStates: () => {},
 			unsubscribeStates: () => {},
 			setTimeout: (fn, ms) => {
@@ -1057,6 +1062,31 @@ describe("CloudManager – auth error handling", function () {
 		assert.strictEqual(adapter.states.get("info.cloudConnected"), false);
 		assert.strictEqual(adapter.states.get("info.cloudLastError"), "Invalid username or password");
 		assert.strictEqual(adapter._timerCount(), 0, "no retry timer should be scheduled after CloudAuthError");
+	});
+
+	it("registers a system notification on CloudAuthError", async function () {
+		const adapter = makeTrackingAdapter();
+		const manager = new CloudManager({
+			adapter,
+			protobuf: {},
+			cloudUser: "u@x",
+			cloudPassword: "wrong",
+			enableLocal: false,
+			enableCloudRelay: false,
+			dataInterval: 5,
+			slowPollFactor: 6,
+			localContexts: [],
+		});
+		manager.cloud.login = async () => {
+			throw new CloudAuthError("Invalid username or password", "1");
+		};
+
+		await manager.start();
+
+		assert.strictEqual(adapter.notifications.length, 1);
+		assert.strictEqual(adapter.notifications[0].scope, "hoymiles");
+		assert.strictEqual(adapter.notifications[0].category, "cloudAuth");
+		assert.match(adapter.notifications[0].message, /Invalid username or password/);
 	});
 
 	it("still retries on transient (non-auth) errors", async function () {

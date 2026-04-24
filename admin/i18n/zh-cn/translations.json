@@ -24,6 +24,5 @@
     "slowPollFactorHelp": "配置和告警数据很少变化。它们仅在每第N个数据周期查询一次以减少负载。默认值：6（= 在5秒间隔下每30秒查询一次）。",
     "tabCloud": "云端 (S-Miles)",
     "tabLocal": "本地连接",
-    "testConnectionButton": "测试连接",
-    "cloudAuthErrorLabel": "Last cloud login error (empty = OK; non-empty suspends automatic retries to prevent your Hoymiles account from being locked out)"
+    "testConnectionButton": "测试连接"
 }

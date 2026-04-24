@@ -24,6 +24,5 @@
     "cloudUserRequired": "Email address is required",
     "cloudPassword": "S-Miles password",
     "cloudPasswordRequired": "Password is required",
-    "cloudInfo": "Uses the same account as the Hoymiles S-Miles app. Your password is stored encrypted. The cloud provides data that is not available locally, such as monthly/yearly energy totals and per-inverter power when not connected locally.",
-    "cloudAuthErrorLabel": "Last cloud login error (empty = OK; non-empty suspends automatic retries to prevent your Hoymiles account from being locked out)"
+    "cloudInfo": "Uses the same account as the Hoymiles S-Miles app. Your password is stored encrypted. The cloud provides data that is not available locally, such as monthly/yearly energy totals and per-inverter power when not connected locally."
 }
