@@ -138,72 +138,73 @@
     "readme": "https://github.com/Eistee82/ioBroker.hoymiles/blob/main/README.md",
     "loglevel": "info",
     "stopBeforeUpdate": true,
-    "stopTimeout": 6000,
-    "notifications": [
-      {
-        "scope": "hoymiles",
-        "name": {
-          "en": "Hoymiles",
-          "de": "Hoymiles",
-          "ru": "Hoymiles",
-          "pt": "Hoymiles",
-          "nl": "Hoymiles",
-          "fr": "Hoymiles",
-          "it": "Hoymiles",
-          "es": "Hoymiles",
-          "pl": "Hoymiles",
-          "uk": "Hoymiles",
-          "zh-cn": "Hoymiles"
-        },
-        "description": {
-          "en": "Notifications from the Hoymiles adapter",
-          "de": "Benachrichtigungen vom Hoymiles-Adapter",
-          "ru": "Уведомления от адаптера Hoymiles",
-          "pt": "Notificações do adaptador Hoymiles",
-          "nl": "Meldingen van de Hoymiles-adapter",
-          "fr": "Notifications de l'adaptateur Hoymiles",
-          "it": "Notifiche dall'adattatore Hoymiles",
-          "es": "Notificaciones del adaptador Hoymiles",
-          "pl": "Powiadomienia z adaptera Hoymiles",
-          "uk": "Сповіщення від адаптера Hoymiles",
-          "zh-cn": "来自 Hoymiles 适配器的通知"
-        },
-        "categories": [
-          {
-            "category": "cloudAuth",
-            "name": {
-              "en": "Cloud login failed",
-              "de": "Cloud-Anmeldung fehlgeschlagen",
-              "ru": "Ошибка входа в облако",
-              "pt": "Falha no login na nuvem",
-              "nl": "Cloud-aanmelding mislukt",
-              "fr": "Échec de connexion au cloud",
-              "it": "Accesso cloud fallito",
-              "es": "Fallo de inicio de sesión en la nube",
-              "pl": "Logowanie do chmury nie powiodło się",
-              "uk": "Помилка входу в хмару",
-              "zh-cn": "云登录失败"
-            },
-            "severity": "alert",
-            "description": {
-              "en": "Cloud login failed — automatic retries have been stopped to prevent your Hoymiles account from being locked out. Please verify email and password, then save.",
-              "de": "Cloud-Anmeldung fehlgeschlagen — automatische Wiederholungsversuche wurden gestoppt, damit dein Hoymiles-Konto nicht gesperrt wird. Bitte E-Mail und Passwort prüfen und speichern.",
-              "ru": "Cloud login failed — automatic retries have been stopped to prevent your Hoymiles account from being locked out. Please verify email and password, then save.",
-              "pt": "Cloud login failed — automatic retries have been stopped to prevent your Hoymiles account from being locked out. Please verify email and password, then save.",
-              "nl": "Cloud login failed — automatic retries have been stopped to prevent your Hoymiles account from being locked out. Please verify email and password, then save.",
-              "fr": "Cloud login failed — automatic retries have been stopped to prevent your Hoymiles account from being locked out. Please verify email and password, then save.",
-              "it": "Cloud login failed — automatic retries have been stopped to prevent your Hoymiles account from being locked out. Please verify email and password, then save.",
-              "es": "Cloud login failed — automatic retries have been stopped to prevent your Hoymiles account from being locked out. Please verify email and password, then save.",
-              "pl": "Cloud login failed — automatic retries have been stopped to prevent your Hoymiles account from being locked out. Please verify email and password, then save.",
-              "uk": "Cloud login failed — automatic retries have been stopped to prevent your Hoymiles account from being locked out. Please verify email and password, then save.",
-              "zh-cn": "Cloud login failed — automatic retries have been stopped to prevent your Hoymiles account from being locked out. Please verify email and password, then save."
-            },
-            "regex": "Cloud authentication failed"
-          }
-        ]
-      }
-    ]
+    "stopTimeout": 6000
   },
+  "notifications": [
+    {
+      "scope": "hoymiles",
+      "name": {
+        "en": "Hoymiles",
+        "de": "Hoymiles",
+        "ru": "Hoymiles",
+        "pt": "Hoymiles",
+        "nl": "Hoymiles",
+        "fr": "Hoymiles",
+        "it": "Hoymiles",
+        "es": "Hoymiles",
+        "pl": "Hoymiles",
+        "uk": "Hoymiles",
+        "zh-cn": "Hoymiles"
+      },
+      "description": {
+        "en": "Notifications from the Hoymiles adapter",
+        "de": "Benachrichtigungen vom Hoymiles-Adapter",
+        "ru": "Уведомления от адаптера Hoymiles",
+        "pt": "Notificações do adaptador Hoymiles",
+        "nl": "Meldingen van de Hoymiles-adapter",
+        "fr": "Notifications de l'adaptateur Hoymiles",
+        "it": "Notifiche dall'adattatore Hoymiles",
+        "es": "Notificaciones del adaptador Hoymiles",
+        "pl": "Powiadomienia z adaptera Hoymiles",
+        "uk": "Сповіщення від адаптера Hoymiles",
+        "zh-cn": "来自 Hoymiles 适配器的通知"
+      },
+      "categories": [
+        {
+          "category": "cloudAuth",
+          "name": {
+            "en": "Cloud login failed",
+            "de": "Cloud-Anmeldung fehlgeschlagen",
+            "ru": "Ошибка входа в облако",
+            "pt": "Falha no login na nuvem",
+            "nl": "Cloud-aanmelding mislukt",
+            "fr": "Échec de connexion au cloud",
+            "it": "Accesso cloud fallito",
+            "es": "Fallo de inicio de sesión en la nube",
+            "pl": "Logowanie do chmury nie powiodło się",
+            "uk": "Помилка входу в хмару",
+            "zh-cn": "云登录失败"
+          },
+          "severity": "alert",
+          "description": {
+            "en": "Cloud login failed — automatic retries have been stopped to prevent your Hoymiles account from being locked out. Please verify email and password, then save.",
+            "de": "Cloud-Anmeldung fehlgeschlagen — automatische Wiederholungsversuche wurden gestoppt, damit dein Hoymiles-Konto nicht gesperrt wird. Bitte E-Mail und Passwort prüfen und speichern.",
+            "ru": "Не удалось войти в облако — автоматические повторные попытки остановлены, чтобы ваша учётная запись Hoymiles не была заблокирована. Пожалуйста, проверьте e-mail и пароль, затем сохраните.",
+            "pt": "Falha no login na nuvem — as tentativas automáticas foram paradas para evitar o bloqueio da sua conta Hoymiles. Por favor, verifique o e-mail e a senha e salve.",
+            "nl": "Cloud-aanmelding mislukt — automatische herhalingen zijn gestopt om te voorkomen dat je Hoymiles-account wordt vergrendeld. Controleer e-mail en wachtwoord en sla op.",
+            "fr": "Échec de connexion au cloud — les tentatives automatiques ont été arrêtées pour éviter le verrouillage de votre compte Hoymiles. Veuillez vérifier l'e-mail et le mot de passe, puis enregistrer.",
+            "it": "Accesso al cloud non riuscito — i tentativi automatici sono stati interrotti per evitare il blocco del tuo account Hoymiles. Verifica e-mail e password, quindi salva.",
+            "es": "Inicio de sesión en la nube fallido — los reintentos automáticos se han detenido para evitar que tu cuenta Hoymiles sea bloqueada. Verifica el correo electrónico y la contraseña, luego guarda.",
+            "pl": "Logowanie do chmury nie powiodło się — automatyczne ponawianie prób zostało zatrzymane, aby konto Hoymiles nie zostało zablokowane. Sprawdź adres e-mail i hasło, a następnie zapisz.",
+            "uk": "Не вдалося увійти в хмару — автоматичні повторні спроби зупинено, щоб ваш обліковий запис Hoymiles не було заблоковано. Перевірте електронну пошту та пароль і збережіть.",
+            "zh-cn": "云登录失败 — 已停止自动重试以防止您的 Hoymiles 帐户被锁定。请验证电子邮件和密码后保存。"
+          },
+          "regex": ["Cloud authentication failed"],
+          "limit": 1
+        }
+      ]
+    }
+  ],
   "native": {
     "enableLocal": true,
     "devices": [],

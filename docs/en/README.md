@@ -336,3 +336,4 @@ Protocol reverse-engineering by the community:
 ### Cloud login failed
 - Check your S-Miles email and password
 - Make sure you can login at https://global.hoymiles.com/website/login
+- On a permanent authentication error (wrong credentials, account locked) the adapter stops the retry loop to avoid further account lockouts. The error is written to `info.cloudLastError` and an ioBroker alert notification (scope `hoymiles`, category `cloudAuth`) is raised. Correct the credentials and save the configuration to clear the state and resume retries.
