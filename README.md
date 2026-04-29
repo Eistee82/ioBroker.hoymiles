@@ -134,10 +134,23 @@ Each DTU creates a device node using its serial number as ID (e.g. `hoymiles.0.4
 Cloud stations create aggregated device nodes (e.g. `hoymiles.0.station-12345.*`).
 
 ## Changelog
+<!-- Older entries are kept in [CHANGELOG_OLD.md](CHANGELOG_OLD.md). -->
+
 ### **WORK IN PROGRESS**
 - (@Eistee82) Stop retry loop on permanent cloud auth errors to prevent Hoymiles account lockout
 - (@Eistee82) Add `info.cloudLastError` state and raise an ioBroker alert notification with reset instructions on permanent cloud auth errors
 - (@Eistee82) Bump axios to 1.15.0 and protobufjs to 8.0.1
+- (@Eistee82) Move state-name translations into `src/lib/i18n/<lang>.json` and resolve them at object-creation time via `@iobroker/adapter-core`'s `I18n` facility; full translations for all 11 mandatory languages (en, de, ru, pt, nl, fr, it, es, pl, uk, zh-cn)
+- (@Eistee82) Migrate the remaining inline state names (PV-input channel + per-PV power/voltage/current/dailyEnergy/totalEnergy, energy meter channel + 14 meter states, power-history channel + 4 history states, device-info channel) to the i18n facility — fully translated in all 11 languages
+- (@Eistee82) Translate the OpenWeatherMap weather description state value into all 11 languages and write it in the configured adapter language (was always English)
+- (@Eistee82) Translate the network-discovery sendto reply ("No DTUs found") into all 11 languages
+- (@Eistee82) Refresh the per-DTU device name to "Hoymiles &lt;model&gt; (&lt;serial&gt;)" once the cloud reports the inverter model (only when the user has not renamed it)
+- (@Eistee82) Add `@iobroker/type-detector` as a dev-only test gate that asserts our object tree resolves to the expected ioBroker device-types (weatherCurrent, location, percentage)
+- (@Eistee82) Add `common.desc` to channels and most states via the i18n facility (107 stems × 11 languages — covers the non-self-explanatory states)
+- (@Eistee82) Document how to make the inverter visible in `ioBroker.devices` (assign DTUs / stations to a function via Admin → Objects → Functions and Rooms — adapter does not touch user-managed enums)
+- (@Eistee82) Move older changelog entries (0.3.0 and earlier) to `CHANGELOG_OLD.md`
+- (@Eistee82) Fix `release` script in `package.json` (was an invalid `release-script in npm this --hierarchical` invocation) and add `release-patch`/`release-minor`/`release-major` aliases
+- (@Eistee82) Ignore `.dev-server/` and `.serena/` developer-local directories
 
 ### 0.3.4 (2026-04-08)
 - (@Eistee82) Fix disabled property type in jsonConfig table items (string, not boolean)
@@ -153,50 +166,7 @@ Cloud stations create aggregated device nodes (e.g. `hoymiles.0.station-12345.*`
 - (@Eistee82) Fix admin UI responsive layout (add missing size attributes for repochecker)
 - (@Eistee82) Fix news translations in io-package.json for repochecker E2004
 
-### 0.3.0 (2026-04-03)
-- (@Eistee82) Multi-inverter support: multiple DTUs in a single adapter instance
-- (@Eistee82) Cloud auto-discovery: all inverters and stations in the account are automatically detected
-- (@Eistee82) Station-level aggregated data as separate device (power, energy, CO2, income)
-- (@Eistee82) Per-inverter and per-panel cloud realtime data (power, voltage, current, temperature)
-- (@Eistee82) Network discovery: scan for DTUs via admin UI button
-- (@Eistee82) Weather data per station: temperature, icon, description, sunrise/sunset
-- (@Eistee82) Firmware update check: daily check via cloud API
-- (@Eistee82) State quality (`q`): marks data as stale on disconnect (`0x42`), substitute for cloud fallback (`0x40`), auto-reset on reconnect
-- (@Eistee82) Night mode: reduced cloud polling when inverter is offline (weather + firmware only)
-- (@Eistee82) Cloud relay: configurable RealData interval from DTU serverSendTime, exponential backoff
-- (@Eistee82) Cloud login retry with exponential backoff (60s → max 600s)
-- (@Eistee82) Automatic config migration from v0.2.0 single-device format
-- (@Eistee82) Migrated to ESM (ECMAScript Modules) with Node.js >= 20.11.0
-- (@Eistee82) Fix: automatic reconnect when DTU is offline at adapter start
-- (@Eistee82) Fix: various connection lifecycle issues (socket cleanup, stale events, timer resets)
-
-### 0.2.0 (2026-03-27)
-- (@Eistee82) Protocol rewrite based on original Hoymiles app decompilation and PCAP analysis
-- (@Eistee82) Persistent TCP connection with protobuf heartbeat (20s idle keepalive)
-- (@Eistee82) Cloud Relay: forwards inverter data to Hoymiles Cloud on behalf of DTU (heartbeat every 60s, RealData every 5 min)
-- (@Eistee82) Automatic cloud poll timing derived from DTU sendTime config
-- (@Eistee82) Sequence numbers in message framing (0-60000 wrap-around)
-- (@Eistee82) AES-128-CBC encryption with SHA-256 key derivation for newer DTU firmware
-- (@Eistee82) New commands: power factor limit, reactive power limit, clean warnings, clean grounding fault, lock/unlock inverter
-- (@Eistee82) Configurable data interval (0 = fastest, ~1s per cycle)
-- (@Eistee82) Writable cloud send interval (config.serverSendTime)
-- (@Eistee82) 5-minute idle timeout with automatic reconnect
-
-### 0.1.0 (2026-03-26)
-- (@Eistee82) First tested release — HMS-800W-2T verified with local TCP and S-Miles Cloud
-- (@Eistee82) Direct TCP/Protobuf communication with Hoymiles HMS inverters (integrated WiFi DTU)
-- (@Eistee82) Hoymiles S-Miles Cloud API integration (dual mode: local and/or cloud)
-- (@Eistee82) Real-time data: grid power, voltage, current, frequency, energy
-- (@Eistee82) Per-panel data (PV0/PV1): voltage, current, power, energy
-- (@Eistee82) Energy aggregates: daily, monthly, yearly, total (kWh)
-- (@Eistee82) Inverter control: power limit (2-100%), on/off, reboot
-- (@Eistee82) DTU control: reboot, configuration readout
-- (@Eistee82) Alarm and warning monitoring (109 codes DE/EN)
-- (@Eistee82) Dynamic state creation based on active modes (local/cloud)
-- (@Eistee82) Dynamic meter state creation (only when meter detected)
-- (@Eistee82) AES encryption support for newer DTU firmware
-- (@Eistee82) Network discovery module for ioBroker.discovery
-- (@Eistee82) Full i18n: en, de, ru, pt, nl, fr, it, es, pl, uk, zh-cn
+Older entries (0.3.0 and earlier) have moved to [CHANGELOG_OLD.md](CHANGELOG_OLD.md).
 
 ## License
 

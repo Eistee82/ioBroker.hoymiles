@@ -15,6 +15,8 @@ function makeMockAdapter() {
 		setStateAsync: async () => {},
 		getStateAsync: async () => null,
 		extendObjectAsync: async () => {},
+		i18nName: key => ({ en: key }),
+		i18nDescOptional: () => undefined,
 		setObjectNotExistsAsync: async () => {},
 		updateConnectionState: async () => {},
 		subscribeStates: () => {},
@@ -1017,6 +1019,8 @@ describe("CloudManager – auth error handling", function () {
 			},
 			getStateAsync: async () => null,
 			extendObjectAsync: async () => {},
+			i18nName: key => ({ en: key }),
+			i18nDescOptional: () => undefined,
 			setObjectNotExistsAsync: async () => {},
 			updateConnectionState: async () => {},
 			registerNotification: async (scope, category, message) => {

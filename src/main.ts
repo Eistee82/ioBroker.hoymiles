@@ -1,5 +1,6 @@
 import * as utils from "@iobroker/adapter-core";
 import { fileURLToPath } from "node:url";
+import { dirname, join } from "node:path";
 import CloudManager from "./lib/cloudManager.js";
 import DeviceContext from "./lib/deviceContext.js";
 import { ProtobufHandler } from "./lib/protobufHandler.js";
@@ -50,7 +51,47 @@ class Hoymiles extends utils.Adapter {
 		this.sharedProtobuf = null;
 	}
 
+	/**
+	 * Resolve a state-name i18n key to a translated name object.
+	 * Implements `HoymilesAdapter.i18nName` so lib modules can stay free of a
+	 * direct `@iobroker/adapter-core` import (which would force js-controller
+	 * to be installed for unit tests).
+	 *
+	 * @param key i18n key, e.g. `dev.grid.power.name`
+	 * @param args optional values that replace `%s` placeholders inside the translation
+	 */
+	public i18nName(key: string, ...args: (string | number | boolean | null)[]): ioBroker.StringOrTranslated {
+		return utils.I18n.getTranslatedObject(key, ...args);
+	}
+
+	/**
+	 * Resolve a description i18n key. Returns `undefined` when the key has no
+	 * translation in any language file — `utils.I18n.getTranslatedObject` then
+	 * returns `{ en: key }` as fallback, which would look ugly as `common.desc`.
+	 * Lib modules use this to attach `common.desc` only when a translation
+	 * actually exists.
+	 *
+	 * @param key i18n key, e.g. `dev.grid.power.desc`
+	 */
+	public i18nDescOptional(key: string): ioBroker.StringOrTranslated | undefined {
+		const obj = utils.I18n.getTranslatedObject(key);
+		if (
+			typeof obj === "object" &&
+			obj !== null &&
+			Object.keys(obj).length === 1 &&
+			(obj as Record<string, string>).en === key
+		) {
+			return undefined;
+		}
+		return obj;
+	}
+
 	private async onReady(): Promise<void> {
+		// Load state-name i18n translations from build/lib/i18n/<lang>.json before
+		// any device or station object is created (CloudManager / DeviceContext
+		// call setObject*Async with i18n-resolved names).
+		await utils.I18n.init(join(dirname(fileURLToPath(import.meta.url)), "lib"), this);
+
 		const cfg = this.config as HoymilesConfig;
 		const enableLocal = cfg.enableLocal !== false; // default-on (primary use case)
 		const enableCloud = cfg.enableCloud === true; // opt-in
@@ -321,7 +362,21 @@ class Hoymiles extends utils.Adapter {
 
 			if (found.length === 0) {
 				this.log.info("No DTUs found on the local network");
-				this.reply(obj, { error: { en: "No DTUs found", de: "Keine DTUs gefunden" } });
+				this.reply(obj, {
+					error: {
+						en: "No DTUs found",
+						de: "Keine DTUs gefunden",
+						ru: "DTU не найдены",
+						pt: "Nenhuma DTU encontrada",
+						nl: "Geen DTU's gevonden",
+						fr: "Aucune DTU trouvée",
+						it: "Nessuna DTU trovata",
+						es: "No se encontraron DTUs",
+						pl: "Nie znaleziono żadnych DTU",
+						uk: "DTU не знайдено",
+						"zh-cn": "未找到 DTU",
+					},
+				});
 				return;
 			}
 

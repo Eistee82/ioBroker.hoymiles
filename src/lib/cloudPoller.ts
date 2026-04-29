@@ -11,26 +11,250 @@ import { errorMessage, logOnError, mapLimit } from "./utils.js";
  */
 const num = (v: string | undefined | null): number => parseFloat(v as string) || 0;
 
-/** OpenWeatherMap icon codes → human-readable descriptions. */
-const WEATHER_DESCRIPTIONS: Record<string, { en: string; de: string }> = {
-	"01d": { en: "Clear sky", de: "Klarer Himmel" },
-	"01n": { en: "Clear sky", de: "Klarer Himmel" },
-	"02d": { en: "Few clouds", de: "Leicht bewölkt" },
-	"02n": { en: "Few clouds", de: "Leicht bewölkt" },
-	"03d": { en: "Scattered clouds", de: "Aufgelockert bewölkt" },
-	"03n": { en: "Scattered clouds", de: "Aufgelockert bewölkt" },
-	"04d": { en: "Overcast", de: "Bedeckt" },
-	"04n": { en: "Overcast", de: "Bedeckt" },
-	"09d": { en: "Shower rain", de: "Regenschauer" },
-	"09n": { en: "Shower rain", de: "Regenschauer" },
-	"10d": { en: "Rain", de: "Regen" },
-	"10n": { en: "Rain", de: "Regen" },
-	"11d": { en: "Thunderstorm", de: "Gewitter" },
-	"11n": { en: "Thunderstorm", de: "Gewitter" },
-	"13d": { en: "Snow", de: "Schnee" },
-	"13n": { en: "Snow", de: "Schnee" },
-	"50d": { en: "Mist/Fog", de: "Nebel" },
-	"50n": { en: "Mist/Fog", de: "Nebel" },
+/**
+ * Languages we can write the weather description state value in. Mirrors the
+ *  11 mandatory ioBroker languages. The state value is plain text, so we pick
+ *  a single language at write-time based on the adapter's configured language.
+ */
+type WeatherLang = "en" | "de" | "ru" | "pt" | "nl" | "fr" | "it" | "es" | "pl" | "uk" | "zh-cn";
+type WeatherDescription = Record<WeatherLang, string>;
+
+/** OpenWeatherMap icon codes → human-readable descriptions in all 11 languages. */
+const WEATHER_DESCRIPTIONS: Record<string, WeatherDescription> = {
+	"01d": {
+		en: "Clear sky",
+		de: "Klarer Himmel",
+		ru: "Ясное небо",
+		pt: "Céu limpo",
+		nl: "Heldere hemel",
+		fr: "Ciel dégagé",
+		it: "Cielo sereno",
+		es: "Cielo despejado",
+		pl: "Bezchmurnie",
+		uk: "Ясне небо",
+		"zh-cn": "晴空",
+	},
+	"01n": {
+		en: "Clear sky",
+		de: "Klarer Himmel",
+		ru: "Ясное небо",
+		pt: "Céu limpo",
+		nl: "Heldere hemel",
+		fr: "Ciel dégagé",
+		it: "Cielo sereno",
+		es: "Cielo despejado",
+		pl: "Bezchmurnie",
+		uk: "Ясне небо",
+		"zh-cn": "晴空",
+	},
+	"02d": {
+		en: "Few clouds",
+		de: "Leicht bewölkt",
+		ru: "Малооблачно",
+		pt: "Pouco nublado",
+		nl: "Licht bewolkt",
+		fr: "Peu nuageux",
+		it: "Poco nuvoloso",
+		es: "Poco nuboso",
+		pl: "Lekkie zachmurzenie",
+		uk: "Малохмарно",
+		"zh-cn": "少云",
+	},
+	"02n": {
+		en: "Few clouds",
+		de: "Leicht bewölkt",
+		ru: "Малооблачно",
+		pt: "Pouco nublado",
+		nl: "Licht bewolkt",
+		fr: "Peu nuageux",
+		it: "Poco nuvoloso",
+		es: "Poco nuboso",
+		pl: "Lekkie zachmurzenie",
+		uk: "Малохмарно",
+		"zh-cn": "少云",
+	},
+	"03d": {
+		en: "Scattered clouds",
+		de: "Aufgelockert bewölkt",
+		ru: "Переменная облачность",
+		pt: "Nuvens dispersas",
+		nl: "Verspreide bewolking",
+		fr: "Nuages épars",
+		it: "Nubi sparse",
+		es: "Nubes dispersas",
+		pl: "Zachmurzenie umiarkowane",
+		uk: "Мінлива хмарність",
+		"zh-cn": "多云",
+	},
+	"03n": {
+		en: "Scattered clouds",
+		de: "Aufgelockert bewölkt",
+		ru: "Переменная облачность",
+		pt: "Nuvens dispersas",
+		nl: "Verspreide bewolking",
+		fr: "Nuages épars",
+		it: "Nubi sparse",
+		es: "Nubes dispersas",
+		pl: "Zachmurzenie umiarkowane",
+		uk: "Мінлива хмарність",
+		"zh-cn": "多云",
+	},
+	"04d": {
+		en: "Overcast",
+		de: "Bedeckt",
+		ru: "Пасмурно",
+		pt: "Encoberto",
+		nl: "Zwaar bewolkt",
+		fr: "Couvert",
+		it: "Coperto",
+		es: "Cubierto",
+		pl: "Pochmurno",
+		uk: "Хмарно",
+		"zh-cn": "阴天",
+	},
+	"04n": {
+		en: "Overcast",
+		de: "Bedeckt",
+		ru: "Пасмурно",
+		pt: "Encoberto",
+		nl: "Zwaar bewolkt",
+		fr: "Couvert",
+		it: "Coperto",
+		es: "Cubierto",
+		pl: "Pochmurno",
+		uk: "Хмарно",
+		"zh-cn": "阴天",
+	},
+	"09d": {
+		en: "Shower rain",
+		de: "Regenschauer",
+		ru: "Ливень",
+		pt: "Aguaceiros",
+		nl: "Regenbui",
+		fr: "Averses",
+		it: "Rovesci di pioggia",
+		es: "Chubascos",
+		pl: "Przelotny deszcz",
+		uk: "Злива",
+		"zh-cn": "阵雨",
+	},
+	"09n": {
+		en: "Shower rain",
+		de: "Regenschauer",
+		ru: "Ливень",
+		pt: "Aguaceiros",
+		nl: "Regenbui",
+		fr: "Averses",
+		it: "Rovesci di pioggia",
+		es: "Chubascos",
+		pl: "Przelotny deszcz",
+		uk: "Злива",
+		"zh-cn": "阵雨",
+	},
+	"10d": {
+		en: "Rain",
+		de: "Regen",
+		ru: "Дождь",
+		pt: "Chuva",
+		nl: "Regen",
+		fr: "Pluie",
+		it: "Pioggia",
+		es: "Lluvia",
+		pl: "Deszcz",
+		uk: "Дощ",
+		"zh-cn": "雨",
+	},
+	"10n": {
+		en: "Rain",
+		de: "Regen",
+		ru: "Дождь",
+		pt: "Chuva",
+		nl: "Regen",
+		fr: "Pluie",
+		it: "Pioggia",
+		es: "Lluvia",
+		pl: "Deszcz",
+		uk: "Дощ",
+		"zh-cn": "雨",
+	},
+	"11d": {
+		en: "Thunderstorm",
+		de: "Gewitter",
+		ru: "Гроза",
+		pt: "Trovoada",
+		nl: "Onweer",
+		fr: "Orage",
+		it: "Temporale",
+		es: "Tormenta",
+		pl: "Burza",
+		uk: "Гроза",
+		"zh-cn": "雷暴",
+	},
+	"11n": {
+		en: "Thunderstorm",
+		de: "Gewitter",
+		ru: "Гроза",
+		pt: "Trovoada",
+		nl: "Onweer",
+		fr: "Orage",
+		it: "Temporale",
+		es: "Tormenta",
+		pl: "Burza",
+		uk: "Гроза",
+		"zh-cn": "雷暴",
+	},
+	"13d": {
+		en: "Snow",
+		de: "Schnee",
+		ru: "Снег",
+		pt: "Neve",
+		nl: "Sneeuw",
+		fr: "Neige",
+		it: "Neve",
+		es: "Nieve",
+		pl: "Śnieg",
+		uk: "Сніг",
+		"zh-cn": "雪",
+	},
+	"13n": {
+		en: "Snow",
+		de: "Schnee",
+		ru: "Снег",
+		pt: "Neve",
+		nl: "Sneeuw",
+		fr: "Neige",
+		it: "Neve",
+		es: "Nieve",
+		pl: "Śnieg",
+		uk: "Сніг",
+		"zh-cn": "雪",
+	},
+	"50d": {
+		en: "Mist/Fog",
+		de: "Nebel",
+		ru: "Туман",
+		pt: "Nevoeiro",
+		nl: "Mist",
+		fr: "Brume / Brouillard",
+		it: "Foschia / Nebbia",
+		es: "Niebla",
+		pl: "Mgła",
+		uk: "Туман",
+		"zh-cn": "雾",
+	},
+	"50n": {
+		en: "Mist/Fog",
+		de: "Nebel",
+		ru: "Туман",
+		pt: "Nevoeiro",
+		nl: "Mist",
+		fr: "Brume / Brouillard",
+		it: "Foschia / Nebbia",
+		es: "Niebla",
+		pl: "Mgła",
+		uk: "Туман",
+		"zh-cn": "雾",
+	},
 };
 
 /** Cloud polling states that determine what data is fetched and at what interval. */
@@ -458,7 +682,8 @@ class CloudPoller {
 			}
 			if (dtu.children?.[0]) {
 				const inv = dtu.children[0];
-				writes.push(s(`${sn}.inverter.model`, inv.model_no || "", true));
+				const model = inv.model_no || "";
+				writes.push(s(`${sn}.inverter.model`, model, true));
 				if (!isLocal) {
 					writes.push(
 						s(`${sn}.inverter.serialNumber`, inv.sn || "", true),
@@ -466,6 +691,9 @@ class CloudPoller {
 						s(`${sn}.inverter.hwVersion`, inv.hard_ver || "", true),
 						s(`${sn}.inverter.linkStatus`, inv.warn_data?.connect ? 1 : 0, true),
 					);
+				}
+				if (model) {
+					await dtuDevice.refreshDeviceNameWithModel(model);
 				}
 			}
 			await Promise.all(writes);
@@ -663,7 +891,10 @@ class CloudPoller {
 			const s = this.boundSetState;
 			await s(`${deviceId}.weather.icon`, weather.icon || "", true);
 			const desc = WEATHER_DESCRIPTIONS[weather.icon];
-			await s(`${deviceId}.weather.description`, desc?.en || weather.icon || "", true);
+			// Pick the description in the adapter's configured language; fall back to English,
+			// then to the raw icon code if the description map has no entry for the icon.
+			const lang = (this.adapter.language ?? "en") as WeatherLang;
+			await s(`${deviceId}.weather.description`, desc?.[lang] || desc?.en || weather.icon || "", true);
 			await s(`${deviceId}.weather.temperature`, weather.temp ?? 0, true);
 			await s(`${deviceId}.weather.sunrise`, (weather.sunrise || 0) * 1000, true);
 			await s(`${deviceId}.weather.sunset`, (weather.sunset || 0) * 1000, true);

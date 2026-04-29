@@ -393,19 +393,26 @@ class CloudManager {
 		});
 
 		await Promise.all(
-			stationChannels.map(ch =>
-				this.adapter.setObjectNotExistsAsync(`${deviceId}.${ch.id}`, {
+			stationChannels.map(ch => {
+				const channelCommon: Partial<ioBroker.ChannelCommon> = {
+					name: this.adapter.i18nName(ch.nameKey),
+				};
+				const desc = this.adapter.i18nDescOptional(ch.descKey);
+				if (desc) {
+					channelCommon.desc = desc;
+				}
+				return this.adapter.setObjectNotExistsAsync(`${deviceId}.${ch.id}`, {
 					type: "channel",
-					common: { name: ch.name },
+					common: channelCommon as ioBroker.ChannelCommon,
 					native: {},
-				}),
-			),
+				});
+			}),
 		);
 
 		await Promise.all(
 			stationStates.map(def => {
 				const common: Partial<ioBroker.StateCommon> = {
-					name: def.name,
+					name: this.adapter.i18nName(def.nameKey),
 					type: def.type,
 					role: def.role,
 					unit: def.unit || "",
@@ -414,6 +421,10 @@ class CloudManager {
 					def: def.type === "boolean" ? false : def.type === "number" ? 0 : "",
 					states: def.states,
 				};
+				const desc = this.adapter.i18nDescOptional(def.descKey);
+				if (desc) {
+					common.desc = desc;
+				}
 				return this.adapter.extendObjectAsync(`${deviceId}.${def.id}`, {
 					type: "state",
 					common: common as ioBroker.StateCommon,

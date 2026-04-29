@@ -19,7 +19,7 @@
   },
   "homepage": "https://github.com/Eistee82/ioBroker.hoymiles#readme",
   "scripts": {
-    "build": "tsc -p tsconfig.build.json && copyfiles -u 1 \"src/lib/proto/*.proto\" build/",
+    "build": "tsc -p tsconfig.build.json && copyfiles -u 1 \"src/lib/proto/*.proto\" \"src/lib/i18n/*.json\" build/",
     "watch": "tsc -p tsconfig.build.json --watch",
     "clean": "rimraf build/",
     "lint": "eslint src/ test/",
@@ -31,7 +31,10 @@
     "test:integration": "mocha test/integration.cjs --exit",
     "test": "npm run test:package && npm run test:unit",
     "prepare": "npm run build",
-    "release": "release-script in npm this --hierarchical",
+    "release": "release-script",
+    "release-patch": "release-script patch --yes",
+    "release-minor": "release-script minor --yes",
+    "release-major": "release-script major --yes",
     "translate": "translate-adapter",
     "test:repo": "npx --yes @iobroker/repochecker https://github.com/Eistee82/ioBroker.hoymiles --local"
   },
@@ -59,6 +62,7 @@
     "@iobroker/adapter-dev": "^1.5.0",
     "@iobroker/eslint-config": "^2.2.0",
     "@iobroker/testing": "^5.2.2",
+    "@iobroker/type-detector": "^5.0.13",
     "@tsconfig/node20": "^20.1.0",
     "@types/node": "^22.19.17",
     "c8": "^11.0.0",

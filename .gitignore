@@ -7,7 +7,9 @@ node_modules/
 # IDE & developer-local
 .idea/
 .claude/
+.serena/
 CLAUDE.md
+.dev-server/
 *.code-workspace
 
 # Logs

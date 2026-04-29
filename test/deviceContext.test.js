@@ -289,6 +289,8 @@ describe("deviceContext – initFromSerial", function () {
 		log: { info: () => {}, warn: () => {}, debug: () => {}, error: () => {} },
 		setStateAsync: async () => {},
 		extendObjectAsync: async () => {},
+		i18nName: key => ({ en: key }),
+		i18nDescOptional: () => undefined,
 		setObjectNotExistsAsync: async () => {},
 		getStateAsync: async () => null,
 		setInterval: () => undefined,
@@ -405,6 +407,8 @@ describe("deviceContext – setState / stateCache deduplication", function () {
 					calls.push(args);
 				},
 				extendObjectAsync: async () => {},
+				i18nName: key => ({ en: key }),
+				i18nDescOptional: () => undefined,
 				setObjectNotExistsAsync: async () => {},
 				getStateAsync: async () => null,
 				setInterval: () => undefined,
@@ -522,6 +526,8 @@ describe("deviceContext – setStates batch writes", function () {
 					calls.push(args);
 				},
 				extendObjectAsync: async () => {},
+				i18nName: key => ({ en: key }),
+				i18nDescOptional: () => undefined,
 				setObjectNotExistsAsync: async () => {},
 				getStateAsync: async () => null,
 				setInterval: () => undefined,
@@ -666,6 +672,8 @@ describe("deviceContext – markStatesDisconnected", function () {
 					calls.push(args);
 				},
 				extendObjectAsync: async () => {},
+				i18nName: key => ({ en: key }),
+				i18nDescOptional: () => undefined,
 				setObjectNotExistsAsync: async () => {},
 				getStateAsync: async () => null,
 				setInterval: () => undefined,
@@ -794,6 +802,8 @@ describe("deviceContext – createPvStates", function () {
 				extendObjectAsync: async (...args) => {
 					extendCalls.push(args);
 				},
+				i18nName: key => ({ en: key }),
+				i18nDescOptional: () => undefined,
 				setObjectNotExistsAsync: async () => {},
 				getStateAsync: async () => null,
 				setInterval: () => undefined,
@@ -913,6 +923,8 @@ describe("deviceContext – stopPollCycle", function () {
 			log: { info: () => {}, warn: () => {}, debug: () => {}, error: () => {} },
 			setStateAsync: async () => {},
 			extendObjectAsync: async () => {},
+			i18nName: key => ({ en: key }),
+			i18nDescOptional: () => undefined,
 			setObjectNotExistsAsync: async () => {},
 			getStateAsync: async () => null,
 			setInterval: () => "fake-interval",
@@ -1041,6 +1053,8 @@ describe("deviceContext – handleRealData", function () {
 					calls.push(args);
 				},
 				extendObjectAsync: async () => {},
+				i18nName: key => ({ en: key }),
+				i18nDescOptional: () => undefined,
 				setObjectNotExistsAsync: async () => {},
 				getStateAsync: async () => null,
 				setInterval: () => undefined,
@@ -1170,6 +1184,8 @@ describe("deviceContext – handleRealData", function () {
 			},
 			setStateAsync: async () => {},
 			extendObjectAsync: async () => {},
+			i18nName: key => ({ en: key }),
+			i18nDescOptional: () => undefined,
 			setObjectNotExistsAsync: async () => {},
 			getStateAsync: async () => null,
 			setInterval: () => undefined,
@@ -1256,6 +1272,8 @@ describe("deviceContext – handleAlarmData", function () {
 					calls.push(args);
 				},
 				extendObjectAsync: async () => {},
+				i18nName: key => ({ en: key }),
+				i18nDescOptional: () => undefined,
 				setObjectNotExistsAsync: async () => {},
 				getStateAsync: async () => null,
 				setInterval: () => undefined,
@@ -1396,6 +1414,8 @@ describe("deviceContext – handleConfigData", function () {
 					calls.push(args);
 				},
 				extendObjectAsync: async () => {},
+				i18nName: key => ({ en: key }),
+				i18nDescOptional: () => undefined,
 				setObjectNotExistsAsync: async () => {},
 				getStateAsync: async () => null,
 				setInterval: () => undefined,
@@ -1489,6 +1509,8 @@ describe("deviceContext – handleConfigData", function () {
 			},
 			setStateAsync: async () => {},
 			extendObjectAsync: async () => {},
+			i18nName: key => ({ en: key }),
+			i18nDescOptional: () => undefined,
 			setObjectNotExistsAsync: async () => {},
 			getStateAsync: async () => null,
 			setInterval: () => undefined,
@@ -1546,6 +1568,8 @@ describe("deviceContext – handleHistPower", function () {
 				extendObjectAsync: async (...args) => {
 					extendCalls.push(args);
 				},
+				i18nName: key => ({ en: key }),
+				i18nDescOptional: () => undefined,
 				setObjectNotExistsAsync: async () => {},
 				getStateAsync: async () => null,
 				setInterval: () => undefined,
@@ -1678,6 +1702,8 @@ describe("deviceContext – createDeviceAndStates", function () {
 				extendObjectAsync: async (...args) => {
 					extendCalls.push(args);
 				},
+				i18nName: key => ({ en: key }),
+				i18nDescOptional: () => undefined,
 				setObjectNotExistsAsync: async () => {},
 				getStateAsync: async () => null,
 				setInterval: () => undefined,
@@ -1717,7 +1743,7 @@ describe("deviceContext – createDeviceAndStates", function () {
 		// Should have created device object
 		const deviceCall = extendCalls.find(c => c[0] === "DTU_SERIAL" && c[1].type === "device");
 		assert.ok(deviceCall, "Should create device object");
-		assert.strictEqual(deviceCall[1].common.name, "DTU DTU_SERIAL");
+		assert.strictEqual(deviceCall[1].common.name, "Hoymiles DTU DTU_SERIAL");
 
 		// Should have subscribed to writable states
 		assert.ok(subscribeCalls.length > 0, "Should subscribe to writable states");
@@ -1762,6 +1788,8 @@ describe("deviceContext – disconnect clears stateCache", function () {
 					calls.push(args);
 				},
 				extendObjectAsync: async () => {},
+				i18nName: key => ({ en: key }),
+				i18nDescOptional: () => undefined,
 				setObjectNotExistsAsync: async () => {},
 				getStateAsync: async () => null,
 				setInterval: () => undefined,
@@ -1948,6 +1976,8 @@ describe("deviceContext – createMeterStates", function () {
 				extendObjectAsync: async (...args) => {
 					extendCalls.push(args);
 				},
+				i18nName: key => ({ en: key }),
+				i18nDescOptional: () => undefined,
 				setObjectNotExistsAsync: async (...args) => {
 					setObjCalls.push(args);
 				},
@@ -2061,6 +2091,8 @@ describe("deviceContext – createPvStates extended", function () {
 				extendObjectAsync: async (...args) => {
 					extendCalls.push(args);
 				},
+				i18nName: key => ({ en: key }),
+				i18nDescOptional: () => undefined,
 				setObjectNotExistsAsync: async () => {},
 				getStateAsync: async () => null,
 				setInterval: () => undefined,
@@ -2198,6 +2230,8 @@ describe("deviceContext – handleResponse", function () {
 					calls.push(args);
 				},
 				extendObjectAsync: async () => {},
+				i18nName: key => ({ en: key }),
+				i18nDescOptional: () => undefined,
 				setObjectNotExistsAsync: async () => {},
 				getStateAsync: async () => null,
 				setInterval: () => undefined,
@@ -2730,6 +2764,8 @@ describe("deviceContext – handleCommandResponse", function () {
 					calls.push(args);
 				},
 				extendObjectAsync: async () => {},
+				i18nName: key => ({ en: key }),
+				i18nDescOptional: () => undefined,
 				setObjectNotExistsAsync: async () => {},
 				getStateAsync: async () => null,
 				setInterval: () => undefined,
@@ -2887,6 +2923,8 @@ describe("deviceContext – handleStateChange", function () {
 			},
 			setStateAsync: async () => {},
 			extendObjectAsync: async () => {},
+			i18nName: key => ({ en: key }),
+			i18nDescOptional: () => undefined,
 			setObjectNotExistsAsync: async () => {},
 			getStateAsync: async () => null,
 			setInterval: () => undefined,
@@ -2939,6 +2977,8 @@ describe("deviceContext – handleStateChange", function () {
 			},
 			setStateAsync: async () => {},
 			extendObjectAsync: async () => {},
+			i18nName: key => ({ en: key }),
+			i18nDescOptional: () => undefined,
 			setObjectNotExistsAsync: async () => {},
 			getStateAsync: async () => null,
 			setInterval: () => undefined,
@@ -2993,6 +3033,8 @@ describe("deviceContext – disconnect full lifecycle", function () {
 			log: { info: () => {}, warn: () => {}, debug: () => {}, error: () => {} },
 			setStateAsync: async () => {},
 			extendObjectAsync: async () => {},
+			i18nName: key => ({ en: key }),
+			i18nDescOptional: () => undefined,
 			setObjectNotExistsAsync: async () => {},
 			getStateAsync: async () => null,
 			setInterval: () => "fake-interval",
@@ -3114,6 +3156,8 @@ describe("deviceContext – handleRealData with meter data", function () {
 				extendObjectAsync: async (...args) => {
 					extendCalls.push(args);
 				},
+				i18nName: key => ({ en: key }),
+				i18nDescOptional: () => undefined,
 				setObjectNotExistsAsync: async (...args) => {
 					setObjCalls.push(args);
 				},
@@ -3262,6 +3306,8 @@ describe("deviceContext – handleInfoData", function () {
 				extendObjectAsync: async (...args) => {
 					extendCalls.push(args);
 				},
+				i18nName: key => ({ en: key }),
+				i18nDescOptional: () => undefined,
 				setObjectNotExistsAsync: async () => {},
 				getStateAsync: async () => null,
 				setInterval: () => undefined,
@@ -3394,6 +3440,8 @@ describe("deviceContext – handleInfoData", function () {
 			},
 			setStateAsync: async () => {},
 			extendObjectAsync: async () => {},
+			i18nName: key => ({ en: key }),
+			i18nDescOptional: () => undefined,
 			setObjectNotExistsAsync: async () => {},
 			getStateAsync: async () => null,
 			setInterval: () => undefined,
@@ -3440,6 +3488,8 @@ describe("deviceContext – sendAndWait", function () {
 			log: { info: () => {}, warn: () => {}, debug: () => {}, error: () => {} },
 			setStateAsync: async () => {},
 			extendObjectAsync: async () => {},
+			i18nName: key => ({ en: key }),
+			i18nDescOptional: () => undefined,
 			setObjectNotExistsAsync: async () => {},
 			getStateAsync: async () => null,
 			setInterval: () => undefined,
@@ -3497,6 +3547,8 @@ describe("deviceContext – sendAndWait", function () {
 			log: { info: () => {}, warn: () => {}, debug: () => {}, error: () => {} },
 			setStateAsync: async () => {},
 			extendObjectAsync: async () => {},
+			i18nName: key => ({ en: key }),
+			i18nDescOptional: () => undefined,
 			setObjectNotExistsAsync: async () => {},
 			getStateAsync: async () => null,
 			setInterval: () => undefined,
@@ -3811,6 +3863,8 @@ describe("deviceContext – handleAutoSearch", function () {
 				calls.push(args);
 			},
 			extendObjectAsync: async () => {},
+			i18nName: key => ({ en: key }),
+			i18nDescOptional: () => undefined,
 			setObjectNotExistsAsync: async () => {},
 			getStateAsync: async () => null,
 			setInterval: () => undefined,
@@ -3864,6 +3918,8 @@ describe("deviceContext – handleAutoSearch", function () {
 			log: { info: () => {}, warn: () => {}, debug: () => {}, error: () => {} },
 			setStateAsync: async () => {},
 			extendObjectAsync: async () => {},
+			i18nName: key => ({ en: key }),
+			i18nDescOptional: () => undefined,
 			setObjectNotExistsAsync: async () => {},
 			getStateAsync: async () => null,
 			setInterval: () => undefined,
@@ -3950,6 +4006,8 @@ describe("deviceContext – setStates with quality parameter", function () {
 					calls.push(args);
 				},
 				extendObjectAsync: async () => {},
+				i18nName: key => ({ en: key }),
+				i18nDescOptional: () => undefined,
 				setObjectNotExistsAsync: async () => {},
 				getStateAsync: async () => null,
 				setInterval: () => undefined,
@@ -4033,6 +4091,8 @@ describe("deviceContext – handleConfigData relay integration", function () {
 			log: { info: () => {}, warn: () => {}, debug: () => {}, error: () => {} },
 			setStateAsync: async () => {},
 			extendObjectAsync: async () => {},
+			i18nName: key => ({ en: key }),
+			i18nDescOptional: () => undefined,
 			setObjectNotExistsAsync: async () => {},
 			getStateAsync: async () => null,
 			setInterval: () => undefined,
@@ -4115,6 +4175,8 @@ describe("deviceContext – handleInfoData with dtuInfo/pvInfo", function () {
 					calls.push(args);
 				},
 				extendObjectAsync: async () => {},
+				i18nName: key => ({ en: key }),
+				i18nDescOptional: () => undefined,
 				setObjectNotExistsAsync: async () => {},
 				getStateAsync: async () => null,
 				setInterval: () => undefined,
@@ -4288,6 +4350,8 @@ describe("deviceContext – handleInfoData with dtuInfo/pvInfo", function () {
 			},
 			setStateAsync: async () => {},
 			extendObjectAsync: async () => {},
+			i18nName: key => ({ en: key }),
+			i18nDescOptional: () => undefined,
 			setObjectNotExistsAsync: async () => {},
 			getStateAsync: async () => null,
 			setInterval: () => undefined,
@@ -4388,6 +4452,8 @@ describe("deviceContext – handleInfoData with dtuInfo/pvInfo", function () {
 			log: { info: () => {}, warn: () => {}, debug: () => {}, error: () => {} },
 			setStateAsync: async () => {},
 			extendObjectAsync: async () => {},
+			i18nName: key => ({ en: key }),
+			i18nDescOptional: () => undefined,
 			setObjectNotExistsAsync: async () => {},
 			getStateAsync: async () => null,
 			setInterval: () => undefined,
@@ -4491,6 +4557,8 @@ describe("deviceContext – handleAlarmData double decode failure", function () 
 			},
 			setStateAsync: async () => {},
 			extendObjectAsync: async () => {},
+			i18nName: key => ({ en: key }),
+			i18nDescOptional: () => undefined,
 			setObjectNotExistsAsync: async () => {},
 			getStateAsync: async () => null,
 			setInterval: () => undefined,
@@ -4551,6 +4619,8 @@ describe("deviceContext – handleAutoSearch decode error", function () {
 			},
 			setStateAsync: async () => {},
 			extendObjectAsync: async () => {},
+			i18nName: key => ({ en: key }),
+			i18nDescOptional: () => undefined,
 			setObjectNotExistsAsync: async () => {},
 			getStateAsync: async () => null,
 			setInterval: () => undefined,
@@ -4605,6 +4675,8 @@ describe("deviceContext – handleStateChange with connection", function () {
 				calls.push(args);
 			},
 			extendObjectAsync: async () => {},
+			i18nName: key => ({ en: key }),
+			i18nDescOptional: () => undefined,
 			setObjectNotExistsAsync: async () => {},
 			getStateAsync: async () => null,
 			setInterval: () => undefined,
@@ -4674,6 +4746,8 @@ describe("deviceContext – handleHistPower decode error", function () {
 			},
 			setStateAsync: async () => {},
 			extendObjectAsync: async () => {},
+			i18nName: key => ({ en: key }),
+			i18nDescOptional: () => undefined,
 			setObjectNotExistsAsync: async () => {},
 			getStateAsync: async () => null,
 			setInterval: () => undefined,

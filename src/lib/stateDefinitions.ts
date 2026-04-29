@@ -1,14 +1,21 @@
 // source?: "local" = only from local TCP, "cloud" = only from cloud API, undefined = available from both
+//
+// State and channel names are stored as i18n keys (nameKey). The actual translated
+// `name` object is resolved at object-creation time via @iobroker/adapter-core's I18n
+// facility (see deviceContext.ts / cloudManager.ts). The translations live in
+// src/lib/i18n/<lang>.json and are loaded once during adapter startup (main.ts).
 
 interface ChannelDefinition {
 	id: string;
-	name: ioBroker.StringOrTranslated;
+	nameKey: string;
+	descKey: string;
 	source?: "local" | "cloud";
 }
 
 interface StateDefinition {
 	id: string;
-	name: ioBroker.StringOrTranslated;
+	nameKey: string;
+	descKey: string;
 	type: ioBroker.CommonType;
 	role: string;
 	unit?: string;
@@ -19,170 +26,149 @@ interface StateDefinition {
 	source?: "local" | "cloud";
 }
 
-// Factory helpers to reduce repetition in state definitions
+// Factory helpers — both `name` and `desc` are auto-derived from
+// `<prefix>.<id>.{name,desc}` so callers stay terse.
 type Extra = Partial<Pick<StateDefinition, "write" | "min" | "max" | "states" | "source">>;
-const n = (id: string, en: string, de: string, role: string, unit: string, extra?: Extra): StateDefinition => ({
-	id,
-	name: { en, de },
-	type: "number",
-	role,
-	unit,
-	...extra,
+interface Helpers {
+	n: (id: string, role: string, unit: string, extra?: Extra) => StateDefinition;
+	s: (id: string, role: string, extra?: Extra) => StateDefinition;
+	b: (id: string, role: string, extra?: Extra) => StateDefinition;
+	ch: (id: string, source?: "local" | "cloud") => ChannelDefinition;
+}
+const makeHelpers = (prefix: string): Helpers => ({
+	n: (id: string, role: string, unit: string, extra?: Extra): StateDefinition => ({
+		id,
+		nameKey: `${prefix}.${id}.name`,
+		descKey: `${prefix}.${id}.desc`,
+		type: "number",
+		role,
+		unit,
+		...extra,
+	}),
+	s: (id: string, role: string, extra?: Extra): StateDefinition => ({
+		id,
+		nameKey: `${prefix}.${id}.name`,
+		descKey: `${prefix}.${id}.desc`,
+		type: "string",
+		role,
+		unit: "",
+		...extra,
+	}),
+	b: (id: string, role: string, extra?: Extra): StateDefinition => ({
+		id,
+		nameKey: `${prefix}.${id}.name`,
+		descKey: `${prefix}.${id}.desc`,
+		type: "boolean",
+		role,
+		unit: "",
+		...extra,
+	}),
+	ch: (id: string, source?: "local" | "cloud"): ChannelDefinition => ({
+		id,
+		nameKey: `${prefix}.${id}.name`,
+		descKey: `${prefix}.${id}.desc`,
+		...(source ? { source } : {}),
+	}),
 });
-const s = (id: string, en: string, de: string, role: string, extra?: Extra): StateDefinition => ({
-	id,
-	name: { en, de },
-	type: "string",
-	role,
-	unit: "",
-	...extra,
-});
-const b = (id: string, en: string, de: string, role: string, extra?: Extra): StateDefinition => ({
-	id,
-	name: { en, de },
-	type: "boolean",
-	role,
-	unit: "",
-	...extra,
-});
+
+const { n, s, b, ch } = makeHelpers("dev");
 
 // === Per-DTU device channels & states (prefixed with <dtuSerial>.) ===
 
 const channels: ChannelDefinition[] = [
-	{ id: "info", name: { en: "Device information", de: "Geräteinformationen" } },
-	{ id: "grid", name: { en: "Grid output", de: "Netzeinspeisung" } },
+	ch("info"),
+	ch("grid"),
 	// PV channels (pv0, pv1, pv2, pv3) are created dynamically based on pvNumber
-	{ id: "inverter", name: { en: "Inverter", de: "Wechselrichter" } },
-	{ id: "dtu", name: { en: "DTU", de: "DTU" } },
-	{ id: "alarms", name: { en: "Alarms & warnings", de: "Alarme & Warnungen" }, source: "local" },
-	{ id: "config", name: { en: "DTU configuration", de: "DTU-Konfiguration" }, source: "local" },
+	ch("inverter"),
+	ch("dtu"),
+	ch("alarms", "local"),
+	ch("config", "local"),
 	// meter channel is created dynamically when meter data is first received
 ];
 
 const states: StateDefinition[] = [
 	// === Grid (from SGSMO / Cloud) ===
-	n("grid.power", "Grid power", "Netzleistung", "value.power", "W"),
-	n("grid.voltage", "Grid voltage", "Netzspannung", "value.voltage", "V"),
-	n("grid.current", "Grid current", "Netzstrom", "value.current", "A", { source: "local" }),
-	n("grid.frequency", "Grid frequency", "Netzfrequenz", "value", "Hz"),
-	n("grid.reactivePower", "Reactive power", "Blindleistung", "value", "var", { source: "local" }),
-	n("grid.powerFactor", "Power factor", "Leistungsfaktor", "value", "", { source: "local" }),
-	n("grid.dailyEnergy", "Daily energy", "Tagesenergie", "value.energy", "kWh", { source: "local" }),
+	n("grid.power", "value.power", "W"),
+	n("grid.voltage", "value.voltage", "V"),
+	n("grid.current", "value.current", "A", { source: "local" }),
+	n("grid.frequency", "value", "Hz"),
+	n("grid.reactivePower", "value", "var", { source: "local" }),
+	n("grid.powerFactor", "value", "", { source: "local" }),
+	n("grid.dailyEnergy", "value.energy", "kWh", { source: "local" }),
 	// PV states are created dynamically based on pvNumber from DTU info response
 	// (see createPvStates() in deviceContext.ts)
 
 	// === Inverter ===
-	s("inverter.serialNumber", "Serial number", "Seriennummer", "text"),
-	s("inverter.hwVersion", "Hardware version", "Hardware-Version", "text"),
-	s("inverter.swVersion", "Software version", "Software-Version", "text"),
-	n("inverter.temperature", "Temperature", "Temperatur", "value.temperature", "\u00b0C"),
-	n("inverter.powerLimit", "Power limit", "Leistungslimit", "level", "%", {
-		write: true,
-		min: 0,
-		max: 100,
-		source: "local",
-	}),
-	n("inverter.activePowerLimit", "Active power limit (live)", "Aktives Leistungslimit (live)", "value", "%", {
-		source: "local",
-	}),
-	b("inverter.active", "Inverter active", "Wechselrichter aktiv", "switch", { write: true, source: "local" }),
-	b("inverter.reboot", "Reboot inverter", "Wechselrichter neustarten", "button", { write: true, source: "local" }),
-	n("inverter.powerFactorLimit", "Power factor limit", "Leistungsfaktor-Limit", "level", "", {
-		write: true,
-		min: -1,
-		max: 1,
-		source: "local",
-	}),
-	n("inverter.reactivePowerLimit", "Reactive power limit", "Blindleistungs-Limit", "level", "°", {
-		write: true,
-		min: -50,
-		max: 50,
-		source: "local",
-	}),
-	b("inverter.cleanWarnings", "Clean warnings", "Warnungen löschen", "button", { write: true, source: "local" }),
-	b("inverter.cleanGroundingFault", "Clean grounding fault", "Erdungsfehler löschen", "button", {
-		write: true,
-		source: "local",
-	}),
-	b("inverter.lock", "Lock inverter", "Wechselrichter sperren", "switch", { write: true, source: "local" }),
-	n("inverter.warnCount", "Active warning code", "Aktiver Warnungscode", "value", "", { source: "local" }),
-	s("inverter.warnMessage", "Active warning message", "Aktive Warnungsmeldung", "text", { source: "local" }),
-	n("inverter.linkStatus", "Link status", "Verbindungsstatus", "value", ""),
-	s("inverter.model", "Model", "Modell", "text", { source: "cloud" }),
+	s("inverter.serialNumber", "text"),
+	s("inverter.hwVersion", "text"),
+	s("inverter.swVersion", "text"),
+	n("inverter.temperature", "value.temperature", "°C"),
+	n("inverter.powerLimit", "level", "%", { write: true, min: 0, max: 100, source: "local" }),
+	n("inverter.activePowerLimit", "value", "%", { source: "local" }),
+	b("inverter.active", "switch", { write: true, source: "local" }),
+	b("inverter.reboot", "button", { write: true, source: "local" }),
+	n("inverter.powerFactorLimit", "level", "", { write: true, min: -1, max: 1, source: "local" }),
+	n("inverter.reactivePowerLimit", "level", "°", { write: true, min: -50, max: 50, source: "local" }),
+	b("inverter.cleanWarnings", "button", { write: true, source: "local" }),
+	b("inverter.cleanGroundingFault", "button", { write: true, source: "local" }),
+	b("inverter.lock", "switch", { write: true, source: "local" }),
+	n("inverter.warnCount", "value", "", { source: "local" }),
+	s("inverter.warnMessage", "text", { source: "local" }),
+	n("inverter.linkStatus", "value", ""),
+	s("inverter.model", "text", { source: "cloud" }),
 
 	// === DTU ===
-	b("dtu.fwUpdateAvailable", "Firmware update available", "Firmware-Update verfügbar", "indicator", {
-		source: "cloud",
-	}),
-	s("dtu.serialNumber", "Serial number", "Seriennummer", "text"),
-	s("dtu.hwVersion", "Hardware version", "Hardware-Version", "text"),
-	s("dtu.swVersion", "Software version", "Software-Version", "text"),
-	n("dtu.rssi", "Signal strength", "Signalstärke", "value", "dBm", { source: "local" }),
-	s("dtu.wifiVersion", "WiFi version", "WLAN-Version", "text", { source: "local" }),
-	b("dtu.reboot", "Reboot DTU", "DTU neustarten", "button", { write: true, source: "local" }),
-	n("dtu.stepTime", "Step time", "Schrittzeit", "value", "s", { source: "local" }),
-	n("dtu.rfHwVersion", "RF hardware version", "RF Hardware-Version", "value", "", { source: "local" }),
-	n("dtu.rfSwVersion", "RF software version", "RF Software-Version", "value", "", { source: "local" }),
-	n("dtu.accessModel", "Network access mode", "Netzwerk-Zugangsart", "value", "", {
+	b("dtu.fwUpdateAvailable", "indicator", { source: "cloud" }),
+	s("dtu.serialNumber", "text"),
+	s("dtu.hwVersion", "text"),
+	s("dtu.swVersion", "text"),
+	n("dtu.rssi", "value", "dBm", { source: "local" }),
+	s("dtu.wifiVersion", "text", { source: "local" }),
+	b("dtu.reboot", "button", { write: true, source: "local" }),
+	n("dtu.stepTime", "value", "s", { source: "local" }),
+	n("dtu.rfHwVersion", "value", "", { source: "local" }),
+	n("dtu.rfSwVersion", "value", "", { source: "local" }),
+	n("dtu.accessModel", "value", "", {
 		states: { 0: "GPRS", 1: "WiFi", 2: "Ethernet" },
 		source: "local",
 	}),
-	n("dtu.communicationTime", "Last communication", "Letzte Kommunikation", "value.time", "", { source: "local" }),
-	n("dtu.connState", "DTU error code", "DTU Fehlercode", "value", "", { states: { 0: "OK" }, source: "local" }),
-	n("dtu.mode485", "RS485 mode", "RS485 Modus", "value", "", {
+	n("dtu.communicationTime", "value.time", "", { source: "local" }),
+	n("dtu.connState", "value", "", { states: { 0: "OK" }, source: "local" }),
+	n("dtu.mode485", "value", "", {
 		states: { 0: "Reflux/Auto", 1: "Remote Control" },
 		source: "local",
 	}),
-	n("dtu.sub1gFrequencyBand", "Sub-1G frequency band", "Sub-1G Frequenzband", "value", "", { source: "local" }),
-	s(
-		"dtu.searchResult",
-		"AutoSearch result (inverter serials)",
-		"AutoSearch-Ergebnis (Wechselrichter-Seriennummern)",
-		"json",
-		{ source: "local" },
-	),
+	n("dtu.sub1gFrequencyBand", "value", "", { source: "local" }),
+	s("dtu.searchResult", "json", { source: "local" }),
 
 	// === Per-device info ===
-	b("info.connected", "Connected", "Verbunden", "indicator.connected"),
-	n("info.lastResponse", "Last response time", "Letzte Antwortzeit", "value.time", "", { source: "local" }),
+	b("info.connected", "indicator.connected"),
+	n("info.lastResponse", "value.time", "", { source: "local" }),
 
 	// === Alarms ===
-	n("alarms.count", "Alarm count", "Alarmanzahl", "value", "", { source: "local" }),
-	n("alarms.activeCount", "Active alarm count", "Aktive Alarme", "value", "", { source: "local" }),
-	b("alarms.hasActive", "Has active alarms", "Aktive Alarme vorhanden", "indicator.alarm", { source: "local" }),
-	n("alarms.lastCode", "Last alarm code", "Letzter Alarmcode", "value", "", { source: "local" }),
-	s("alarms.lastMessage", "Last alarm message", "Letzte Alarmmeldung", "text", { source: "local" }),
-	n("alarms.lastStartTime", "Last alarm start time", "Letzter Alarm Startzeit", "value.time", "", {
-		source: "local",
-	}),
-	n("alarms.lastEndTime", "Last alarm end time", "Letzter Alarm Endzeit", "value.time", "", { source: "local" }),
-	n("alarms.lastData1", "Last alarm data 1 (raw sensor)", "Letzter Alarm Daten 1 (Rohwert)", "value", "", {
-		source: "local",
-	}),
-	n("alarms.lastData2", "Last alarm data 2 (raw sensor)", "Letzter Alarm Daten 2 (Rohwert)", "value", "", {
-		source: "local",
-	}),
-	s("alarms.json", "All alarms (JSON)", "Alle Alarme (JSON)", "json", { source: "local" }),
+	n("alarms.count", "value", "", { source: "local" }),
+	n("alarms.activeCount", "value", "", { source: "local" }),
+	b("alarms.hasActive", "indicator.alarm", { source: "local" }),
+	n("alarms.lastCode", "value", "", { source: "local" }),
+	s("alarms.lastMessage", "text", { source: "local" }),
+	n("alarms.lastStartTime", "value.time", "", { source: "local" }),
+	n("alarms.lastEndTime", "value.time", "", { source: "local" }),
+	n("alarms.lastData1", "value", "", { source: "local" }),
+	n("alarms.lastData2", "value", "", { source: "local" }),
+	s("alarms.json", "json", { source: "local" }),
 
 	// === Config (from GetConfig) ===
-	s("config.serverDomain", "Cloud server domain", "Cloud-Server Domain", "text", { source: "local" }),
-	n("config.serverPort", "Cloud server port", "Cloud-Server Port", "value", "", { source: "local" }),
-	n("config.serverSendTime", "Cloud send interval", "Cloud-Sendeintervall", "level", "min", {
-		write: true,
-		source: "local",
-	}),
-	s("config.wifiSsid", "WiFi SSID", "WLAN SSID", "text", { source: "local" }),
-	n("config.wifiRssi", "WiFi RSSI", "WLAN Signalstärke", "value", "dBm", { source: "local" }),
-	b("config.zeroExportEnable", "Zero export enabled", "Nulleinspeisung aktiviert", "switch.enable", {
-		write: true,
-		source: "local",
-	}),
-	n("config.zeroExport433Addr", "Zero export 433MHz address", "Nulleinspeisung 433MHz Adresse", "value", "", {
-		source: "local",
-	}),
+	s("config.serverDomain", "text", { source: "local" }),
+	n("config.serverPort", "value", "", { source: "local" }),
+	n("config.serverSendTime", "level", "min", { write: true, source: "local" }),
+	s("config.wifiSsid", "text", { source: "local" }),
+	n("config.wifiRssi", "value", "dBm", { source: "local" }),
+	b("config.zeroExportEnable", "switch.enable", { write: true, source: "local" }),
+	n("config.zeroExport433Addr", "value", "", { source: "local" }),
 	{
 		id: "config.meterKind",
-		name: { en: "Meter type", de: "Zählertyp" },
+		nameKey: "dev.config.meterKind.name",
+		descKey: "dev.config.meterKind.desc",
 		type: "string",
 		role: "text",
 		states: {
@@ -197,57 +183,55 @@ const states: StateDefinition[] = [
 		unit: "",
 		source: "local",
 	},
-	s("config.meterInterface", "Meter interface", "Zähler-Schnittstelle", "text", { source: "local" }),
-	n("config.netDhcpSwitch", "DHCP enabled", "DHCP aktiviert", "value", "", { source: "local" }),
-	s("config.dtuApSsid", "DTU AP SSID", "DTU AP SSID", "text", { source: "local" }),
-	n("config.netmodeSelect", "Network mode", "Netzwerkmodus", "value", "", {
+	s("config.meterInterface", "text", { source: "local" }),
+	n("config.netDhcpSwitch", "value", "", { source: "local" }),
+	s("config.dtuApSsid", "text", { source: "local" }),
+	n("config.netmodeSelect", "value", "", {
 		states: { 0: "GPRS", 1: "WiFi", 2: "Ethernet" },
 		source: "local",
 	}),
-	n("config.channelSelect", "Channel select", "Kanalauswahl", "value", "", { source: "local" }),
-	n("config.sub1gSweepSwitch", "Sub-1G sweep", "Sub-1G Sweep", "value", "", { source: "local" }),
-	n("config.sub1gWorkChannel", "Sub-1G work channel", "Sub-1G Arbeitskanal", "value", "", { source: "local" }),
-	n("config.invType", "Inverter type", "Wechselrichter-Typ", "value", "", { source: "local" }),
-	s("config.netIpAddress", "IP address", "IP-Adresse", "text", { source: "local" }),
-	s("config.netSubnetMask", "Subnet mask", "Subnetzmaske", "text", { source: "local" }),
-	s("config.netGateway", "Default gateway", "Standard-Gateway", "text", { source: "local" }),
-	s("config.wifiIpAddress", "WiFi IP address", "WLAN IP-Adresse", "text", { source: "local" }),
-	s("config.netMacAddress", "MAC address", "MAC-Adresse", "text", { source: "local" }),
-	s("config.wifiMacAddress", "WiFi MAC address", "WLAN MAC-Adresse", "text", { source: "local" }),
+	n("config.channelSelect", "value", "", { source: "local" }),
+	n("config.sub1gSweepSwitch", "value", "", { source: "local" }),
+	n("config.sub1gWorkChannel", "value", "", { source: "local" }),
+	n("config.invType", "value", "", { source: "local" }),
+	s("config.netIpAddress", "text", { source: "local" }),
+	s("config.netSubnetMask", "text", { source: "local" }),
+	s("config.netGateway", "text", { source: "local" }),
+	s("config.wifiIpAddress", "text", { source: "local" }),
+	s("config.netMacAddress", "text", { source: "local" }),
+	s("config.wifiMacAddress", "text", { source: "local" }),
 ];
 
 // === Station channels & states (prefixed with station-<stationId>.) ===
 
-const stationChannels: ChannelDefinition[] = [
-	{ id: "grid", name: { en: "Station grid output", de: "Anlagen-Netzeinspeisung" } },
-	{ id: "info", name: { en: "Station info", de: "Anlagen-Info" } },
-	{ id: "weather", name: { en: "Weather at station", de: "Wetter am Standort" } },
-];
+const sta = makeHelpers("sta");
+
+const stationChannels: ChannelDefinition[] = [sta.ch("grid"), sta.ch("info"), sta.ch("weather")];
 
 const stationStates: StateDefinition[] = [
 	// Grid aggregates
-	n("grid.power", "Total power", "Gesamtleistung", "value.power", "W"),
-	n("grid.dailyEnergy", "Daily energy", "Tagesenergie", "value.energy", "kWh"),
-	n("grid.monthEnergy", "Month energy", "Monatsenergie", "value.energy", "kWh"),
-	n("grid.yearEnergy", "Year energy", "Jahresenergie", "value.energy", "kWh"),
-	n("grid.totalEnergy", "Total energy (AC)", "Gesamtenergie (AC)", "value.energy", "kWh"),
-	n("grid.co2Saved", "CO2 saved", "CO2-Einsparung", "value", "kg"),
-	n("grid.treesPlanted", "Trees planted equivalent", "Bäume-Äquivalent", "value", ""),
-	b("grid.isBalance", "Zero export active", "Nulleinspeisung aktiv", "indicator"),
-	b("grid.isReflux", "Feed-in active", "Rückspeisung aktiv", "indicator"),
-	n("grid.electricityPrice", "Electricity price", "Strompreis", "value", "/kWh"),
-	s("grid.currency", "Currency", "Währung", "text"),
-	n("grid.todayIncome", "Today income", "Tagesertrag", "value", ""),
-	n("grid.totalIncome", "Total income", "Gesamtertrag", "value", ""),
+	sta.n("grid.power", "value.power", "W"),
+	sta.n("grid.dailyEnergy", "value.energy", "kWh"),
+	sta.n("grid.monthEnergy", "value.energy", "kWh"),
+	sta.n("grid.yearEnergy", "value.energy", "kWh"),
+	sta.n("grid.totalEnergy", "value.energy", "kWh"),
+	sta.n("grid.co2Saved", "value", "kg"),
+	sta.n("grid.treesPlanted", "value", ""),
+	sta.b("grid.isBalance", "indicator"),
+	sta.b("grid.isReflux", "indicator"),
+	sta.n("grid.electricityPrice", "value", "/kWh"),
+	sta.s("grid.currency", "text"),
+	sta.n("grid.todayIncome", "value", ""),
+	sta.n("grid.totalIncome", "value", ""),
 
 	// Station info
-	s("info.stationName", "Station name", "Anlagenname", "text"),
-	n("info.stationId", "Station ID", "Anlagen-ID", "value", ""),
-	n("info.systemCapacity", "System capacity", "Anlagenleistung", "value", "kWp"),
-	s("info.address", "Station address", "Anlagenstandort", "text"),
-	n("info.latitude", "Latitude", "Breitengrad", "value.gps.latitude", "\u00b0"),
-	n("info.longitude", "Longitude", "Längengrad", "value.gps.longitude", "\u00b0"),
-	n("info.stationStatus", "Station status", "Anlagenstatus", "value", "", {
+	sta.s("info.stationName", "text"),
+	sta.n("info.stationId", "value", ""),
+	sta.n("info.systemCapacity", "value", "kWp"),
+	sta.s("info.address", "text"),
+	sta.n("info.latitude", "value.gps.latitude", "°"),
+	sta.n("info.longitude", "value.gps.longitude", "°"),
+	sta.n("info.stationStatus", "value", "", {
 		states: {
 			0: "Offline",
 			10: "Standby",
@@ -258,17 +242,17 @@ const stationStates: StateDefinition[] = [
 			60: "Maintenance",
 		},
 	}),
-	n("info.installedAt", "Installation date", "Installationsdatum", "value.time", ""),
-	s("info.timezone", "Timezone", "Zeitzone", "text"),
-	n("info.lastCloudUpdate", "Last cloud update", "Letztes Cloud-Update", "value.time", ""),
-	n("info.lastDataTime", "Last DTU data time", "Letzte DTU-Datenzeit", "value.time", ""),
+	sta.n("info.installedAt", "value.time", ""),
+	sta.s("info.timezone", "text"),
+	sta.n("info.lastCloudUpdate", "value.time", ""),
+	sta.n("info.lastDataTime", "value.time", ""),
 
 	// Weather
-	s("weather.icon", "Weather icon code (OpenWeatherMap)", "Wetter-Icon-Code (OpenWeatherMap)", "weather.icon"),
-	s("weather.description", "Weather description", "Wetterbeschreibung", "weather.state"),
-	n("weather.temperature", "Temperature", "Temperatur", "value.temperature", "°C"),
-	n("weather.sunrise", "Sunrise", "Sonnenaufgang", "date.sunrise", ""),
-	n("weather.sunset", "Sunset", "Sonnenuntergang", "date.sunset", ""),
+	sta.s("weather.icon", "weather.icon"),
+	sta.s("weather.description", "weather.state"),
+	sta.n("weather.temperature", "value.temperature", "°C"),
+	sta.n("weather.sunrise", "date.sunrise", ""),
+	sta.n("weather.sunset", "date.sunset", ""),
 ];
 
 export type { ChannelDefinition, StateDefinition };

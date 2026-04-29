@@ -1,5 +1,6 @@
 import * as utils from "@iobroker/adapter-core";
 import { fileURLToPath } from "node:url";
+import { dirname, join } from "node:path";
 import CloudManager from "./lib/cloudManager.js";
 import DeviceContext from "./lib/deviceContext.js";
 import { ProtobufHandler } from "./lib/protobufHandler.js";
@@ -24,7 +25,21 @@ class Hoymiles extends utils.Adapter {
         this.cloudManager = null;
         this.sharedProtobuf = null;
     }
+    i18nName(key, ...args) {
+        return utils.I18n.getTranslatedObject(key, ...args);
+    }
+    i18nDescOptional(key) {
+        const obj = utils.I18n.getTranslatedObject(key);
+        if (typeof obj === "object" &&
+            obj !== null &&
+            Object.keys(obj).length === 1 &&
+            obj.en === key) {
+            return undefined;
+        }
+        return obj;
+    }
     async onReady() {
+        await utils.I18n.init(join(dirname(fileURLToPath(import.meta.url)), "lib"), this);
         const cfg = this.config;
         const enableLocal = cfg.enableLocal !== false;
         const enableCloud = cfg.enableCloud === true;
@@ -205,7 +220,21 @@ class Hoymiles extends utils.Adapter {
             const found = await discoverDtus(DISCOVERY_TIMEOUT_MS, DISCOVERY_CONCURRENCY);
             if (found.length === 0) {
                 this.log.info("No DTUs found on the local network");
-                this.reply(obj, { error: { en: "No DTUs found", de: "Keine DTUs gefunden" } });
+                this.reply(obj, {
+                    error: {
+                        en: "No DTUs found",
+                        de: "Keine DTUs gefunden",
+                        ru: "DTU не найдены",
+                        pt: "Nenhuma DTU encontrada",
+                        nl: "Geen DTU's gevonden",
+                        fr: "Aucune DTU trouvée",
+                        it: "Nessuna DTU trovata",
+                        es: "No se encontraron DTUs",
+                        pl: "Nie znaleziono żadnych DTU",
+                        uk: "DTU не знайдено",
+                        "zh-cn": "未找到 DTU",
+                    },
+                });
                 return;
             }
             const cfg = this.config;

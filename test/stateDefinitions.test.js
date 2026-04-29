@@ -1,5 +1,13 @@
 import assert from "node:assert";
+import { readFileSync } from "node:fs";
+import { fileURLToPath } from "node:url";
+import { dirname, join } from "node:path";
 import { channels, states, stationChannels, stationStates } from "../build/lib/stateDefinitions.js";
+
+const __dirname = dirname(fileURLToPath(import.meta.url));
+const i18nDir = join(__dirname, "..", "src", "lib", "i18n");
+const enWords = JSON.parse(readFileSync(join(i18nDir, "en.json"), "utf8"));
+const deWords = JSON.parse(readFileSync(join(i18nDir, "de.json"), "utf8"));
 
 // ============================================================
 // stateDefinitions
@@ -13,19 +21,23 @@ describe("stateDefinitions", function () {
 		assert.ok(states.length > 0);
 	});
 
-	it("all states have required fields (id, name, type, role)", function () {
+	it("all states have required fields (id, nameKey, type, role)", function () {
 		for (const s of states) {
 			assert.ok(s.id, `State missing id: ${JSON.stringify(s)}`);
-			assert.ok(s.name, `State ${s.id} missing name`);
+			assert.ok(s.nameKey, `State ${s.id} missing nameKey`);
 			assert.ok(s.type, `State ${s.id} missing type`);
 			assert.ok(s.role, `State ${s.id} missing role`);
 		}
 	});
 
-	it("all state names have en and de translations", function () {
+	it("all channel and state nameKeys resolve in en + de i18n files", function () {
+		for (const c of channels) {
+			assert.ok(enWords[c.nameKey], `Channel ${c.id}: nameKey ${c.nameKey} missing in en.json`);
+			assert.ok(deWords[c.nameKey], `Channel ${c.id}: nameKey ${c.nameKey} missing in de.json`);
+		}
 		for (const s of states) {
-			assert.ok(typeof s.name === "object" && s.name.en, `State ${s.id} missing English name`);
-			assert.ok(typeof s.name === "object" && s.name.de, `State ${s.id} missing German name`);
+			assert.ok(enWords[s.nameKey], `State ${s.id}: nameKey ${s.nameKey} missing in en.json`);
+			assert.ok(deWords[s.nameKey], `State ${s.id}: nameKey ${s.nameKey} missing in de.json`);
 		}
 	});
 
@@ -119,16 +131,20 @@ describe("stateDefinitions – station", function () {
 	it("all station states have required fields", function () {
 		for (const s of stationStates) {
 			assert.ok(s.id, `Station state missing id`);
-			assert.ok(s.name, `Station state ${s.id} missing name`);
+			assert.ok(s.nameKey, `Station state ${s.id} missing nameKey`);
 			assert.ok(s.type, `Station state ${s.id} missing type`);
 			assert.ok(s.role, `Station state ${s.id} missing role`);
 		}
 	});
 
-	it("all station state names have en and de translations", function () {
+	it("all station nameKeys resolve in en + de i18n files", function () {
+		for (const c of stationChannels) {
+			assert.ok(enWords[c.nameKey], `Station channel ${c.id}: nameKey ${c.nameKey} missing in en.json`);
+			assert.ok(deWords[c.nameKey], `Station channel ${c.id}: nameKey ${c.nameKey} missing in de.json`);
+		}
 		for (const s of stationStates) {
-			assert.ok(typeof s.name === "object" && s.name.en, `Station state ${s.id} missing EN name`);
-			assert.ok(typeof s.name === "object" && s.name.de, `Station state ${s.id} missing DE name`);
+			assert.ok(enWords[s.nameKey], `Station state ${s.id}: nameKey ${s.nameKey} missing in en.json`);
+			assert.ok(deWords[s.nameKey], `Station state ${s.id}: nameKey ${s.nameKey} missing in de.json`);
 		}
 	});
 
@@ -172,6 +188,41 @@ describe("stateDefinitions – station", function () {
 	it("station states are all read-only", function () {
 		for (const s of stationStates) {
 			assert.ok(!s.write, `Station state ${s.id} should not be writable`);
+		}
+	});
+});
+
+// ============================================================
+// i18n parity — every language file has the same keys
+// ============================================================
+describe("i18n", function () {
+	const langs = ["en", "de", "ru", "pt", "nl", "fr", "it", "es", "pl", "uk", "zh-cn"];
+	const wordsPerLang = Object.fromEntries(
+		langs.map(l => [l, JSON.parse(readFileSync(join(i18nDir, `${l}.json`), "utf8"))]),
+	);
+
+	it("all 11 mandatory languages exist", function () {
+		for (const l of langs) {
+			assert.ok(wordsPerLang[l], `i18n file missing for language ${l}`);
+		}
+	});
+
+	it("each language file has the same set of keys as en.json", function () {
+		const enKeys = Object.keys(wordsPerLang.en).sort();
+		for (const l of langs) {
+			if (l === "en") {
+				continue;
+			}
+			const langKeys = Object.keys(wordsPerLang[l]).sort();
+			assert.deepStrictEqual(langKeys, enKeys, `Key set in ${l}.json differs from en.json`);
+		}
+	});
+
+	it("no empty translation values", function () {
+		for (const l of langs) {
+			for (const [k, v] of Object.entries(wordsPerLang[l])) {
+				assert.ok(typeof v === "string" && v.length > 0, `${l}.json: empty value for key ${k}`);
+			}
 		}
 	});
 });

@@ -321,6 +321,32 @@ Protocol reverse-engineering by the community:
 - [dtuGateway](https://github.com/ohAnd/dtuGateway) — ESP32 gateway
 - [Hoymiles-DTU-Proto](https://github.com/henkwiedig/Hoymiles-DTU-Proto) — Original protobuf definitions
 
+## Integration with `ioBroker.devices`
+
+The `ioBroker.devices` adapter uses `@iobroker/type-detector` to recognise
+states/channels and group them as "automatic" devices. It only lists
+devices that are members of an enum (function and/or room) — that is an
+ioBroker convention, not a configuration of this adapter, and following
+ioBroker conventions this adapter does not modify user-managed enums on
+its own. So a freshly created Hoymiles device tree initially does not
+show up under "automatic devices".
+
+To make the inverter visible there, open *Admin → Objects → Functions
+and Rooms* and assign every Hoymiles DTU / station to a function (for
+example *Energy*) and optionally a room. From that moment on,
+`ioBroker.devices` detects the inverter automatically.
+
+Once an enum membership is in place, `ioBroker.devices` exposes the
+following auto-detected sub-devices for every DTU:
+- `<dtuSerial>.inverter.powerLimit` → **percentage** slider
+- `<dtuSerial>.inverter.powerFactorLimit` / `reactivePowerLimit` → **slider**
+- `<dtuSerial>.inverter.active`, `.lock`, `config.zeroExportEnable` → **socket / light** switch
+- `<dtuSerial>.inverter.reboot`, `.cleanWarnings`, `dtu.reboot` → **button**
+
+…and for every cloud-discovered station:
+- `station-<id>.weather` → **weatherCurrent** (icon + temperature)
+- `station-<id>.info` (latitude, longitude) → **location**
+
 ## Troubleshooting
 
 ### Adapter can't connect

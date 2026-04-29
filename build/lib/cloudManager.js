@@ -284,14 +284,23 @@ class CloudManager {
             },
             native: { stationId },
         });
-        await Promise.all(stationChannels.map(ch => this.adapter.setObjectNotExistsAsync(`${deviceId}.${ch.id}`, {
-            type: "channel",
-            common: { name: ch.name },
-            native: {},
-        })));
+        await Promise.all(stationChannels.map(ch => {
+            const channelCommon = {
+                name: this.adapter.i18nName(ch.nameKey),
+            };
+            const desc = this.adapter.i18nDescOptional(ch.descKey);
+            if (desc) {
+                channelCommon.desc = desc;
+            }
+            return this.adapter.setObjectNotExistsAsync(`${deviceId}.${ch.id}`, {
+                type: "channel",
+                common: channelCommon,
+                native: {},
+            });
+        }));
         await Promise.all(stationStates.map(def => {
             const common = {
-                name: def.name,
+                name: this.adapter.i18nName(def.nameKey),
                 type: def.type,
                 role: def.role,
                 unit: def.unit || "",
@@ -300,6 +309,10 @@ class CloudManager {
                 def: def.type === "boolean" ? false : def.type === "number" ? 0 : "",
                 states: def.states,
             };
+            const desc = this.adapter.i18nDescOptional(def.descKey);
+            if (desc) {
+                common.desc = desc;
+            }
             return this.adapter.extendObjectAsync(`${deviceId}.${def.id}`, {
                 type: "state",
                 common: common,

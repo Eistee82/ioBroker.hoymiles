@@ -10,13 +10,13 @@ import { whToKwh } from "./convert.js";
 import { errorMessage, safeJsonStringify, unixSeconds } from "./utils.js";
 const MAX_PV_PORTS = 6;
 const PV_FIELDS_BASE = [
-    { suffix: "power", en: "power", de: "Leistung", role: "value.power", unit: "W" },
-    { suffix: "voltage", en: "voltage", de: "Spannung", role: "value.voltage", unit: "V" },
-    { suffix: "current", en: "current", de: "Strom", role: "value.current", unit: "A" },
+    { suffix: "power", role: "value.power", unit: "W" },
+    { suffix: "voltage", role: "value.voltage", unit: "V" },
+    { suffix: "current", role: "value.current", unit: "A" },
 ];
 const PV_FIELDS_LOCAL_ONLY = [
-    { suffix: "dailyEnergy", en: "daily energy", de: "Tagesenergie", role: "value.energy", unit: "kWh" },
-    { suffix: "totalEnergy", en: "total energy", de: "Gesamtenergie", role: "value.energy", unit: "kWh" },
+    { suffix: "dailyEnergy", role: "value.energy", unit: "kWh" },
+    { suffix: "totalEnergy", role: "value.energy", unit: "kWh" },
 ];
 const WRITABLE_STATES = [
     "inverter.powerLimit",
@@ -114,6 +114,29 @@ class DeviceContext {
         const isConnected = this.connection && this.connection.connected;
         await this.adapter.setStateAsync(`${this.deviceId}.info.connected`, !!isConnected, true);
     }
+    async refreshDeviceNameWithModel(model) {
+        if (!this.deviceId || !model) {
+            return;
+        }
+        const initial = `Hoymiles DTU ${this.deviceId}`;
+        const target = `Hoymiles ${model} (${this.deviceId})`;
+        try {
+            const obj = await this.adapter.getObjectAsync(this.deviceId);
+            if (obj?.type !== "device" || typeof obj.common.name !== "string") {
+                return;
+            }
+            if (obj.common.name === initial && obj.common.name !== target) {
+                await this.adapter.extendObjectAsync(this.deviceId, {
+                    type: "device",
+                    common: { name: target },
+                    native: {},
+                });
+            }
+        }
+        catch (err) {
+            this.adapter.log.debug(`[${this.deviceId}] Could not refresh device name with model: ${errorMessage(err)}`);
+        }
+    }
     connect() {
         if (!this.enableLocal || !this.host) {
             return;
@@ -199,7 +222,7 @@ class DeviceContext {
         await this.adapter.extendObjectAsync(this.deviceId, {
             type: "device",
             common: {
-                name: `DTU ${this.deviceId}`,
+                name: `Hoymiles DTU ${this.deviceId}`,
                 statusStates: { onlineId: "info.connected" },
                 icon: "hoymiles.png",
             },
@@ -207,19 +230,28 @@ class DeviceContext {
         });
         await this.adapter.extendObjectAsync(`${this.deviceId}.info`, {
             type: "channel",
-            common: { name: { en: "Device info", de: "Geräte-Info" } },
+            common: { name: this.adapter.i18nName("dev.deviceInfo.name") },
             native: {},
         });
         const activeChannels = channels.filter(ch => !(ch.source === "local" && !this.enableLocal) && !(ch.source === "cloud" && !this.enableCloud));
-        await Promise.all(activeChannels.map(ch => this.adapter.setObjectNotExistsAsync(`${this.deviceId}.${ch.id}`, {
-            type: "channel",
-            common: { name: ch.name },
-            native: {},
-        })));
+        await Promise.all(activeChannels.map(ch => {
+            const channelCommon = {
+                name: this.adapter.i18nName(ch.nameKey),
+            };
+            const desc = this.adapter.i18nDescOptional(ch.descKey);
+            if (desc) {
+                channelCommon.desc = desc;
+            }
+            return this.adapter.setObjectNotExistsAsync(`${this.deviceId}.${ch.id}`, {
+                type: "channel",
+                common: channelCommon,
+                native: {},
+            });
+        }));
         const activeStates = states.filter(def => !(def.source === "local" && !this.enableLocal) && !(def.source === "cloud" && !this.enableCloud));
         await Promise.all(activeStates.map(def => {
             const common = {
-                name: def.name,
+                name: this.adapter.i18nName(def.nameKey),
                 type: def.type,
                 role: def.role,
                 unit: def.unit || "",
@@ -230,6 +262,10 @@ class DeviceContext {
                 max: def.max,
                 states: def.states,
             };
+            const desc = this.adapter.i18nDescOptional(def.descKey);
+            if (desc) {
+                common.desc = desc;
+            }
             return this.adapter.extendObjectAsync(`${this.deviceId}.${def.id}`, {
                 type: "state",
                 common: common,
@@ -258,7 +294,7 @@ class DeviceContext {
             const ch = `${this.deviceId}.pv${i}`;
             await this.adapter.extendObjectAsync(ch, {
                 type: "channel",
-                common: { name: { en: `PV input ${i}`, de: `PV-Eingang ${i}` } },
+                common: { name: this.adapter.i18nName("dev.pv.name", i) },
                 native: {},
             });
             const pvFields = cloudOnly ? PV_FIELDS_BASE : [...PV_FIELDS_BASE, ...PV_FIELDS_LOCAL_ONLY];
@@ -266,7 +302,7 @@ class DeviceContext {
                 await this.adapter.extendObjectAsync(`${ch}.${f.suffix}`, {
                     type: "state",
                     common: {
-                        name: { en: `PV${i} ${f.en}`, de: `PV${i} ${f.de}` },
+                        name: this.adapter.i18nName(`dev.pv.field.${f.suffix}.name`, i),
                         type: "number",
                         role: f.role,
                         unit: f.unit,
@@ -286,35 +322,29 @@ class DeviceContext {
         this.adapter.log.info(`[${this.deviceId}] Meter detected, creating meter states`);
         await this.adapter.setObjectNotExistsAsync(`${this.deviceId}.meter`, {
             type: "channel",
-            common: { name: { en: "Energy meter", de: "Energiezähler" } },
+            common: { name: this.adapter.i18nName("dev.meter.name") },
             native: {},
         });
-        const m = (id, en, de, role, unit) => ({
-            id: `meter.${id}`,
-            name: { en, de },
-            role,
-            unit,
-        });
         const meterDefs = [
-            m("totalPower", "Total power", "Gesamtleistung", "value.power", "W"),
-            m("phaseAPower", "Phase A power", "Phase A Leistung", "value.power", "W"),
-            m("phaseBPower", "Phase B power", "Phase B Leistung", "value.power", "W"),
-            m("phaseCPower", "Phase C power", "Phase C Leistung", "value.power", "W"),
-            m("powerFactorTotal", "Power factor total", "Leistungsfaktor gesamt", "value", ""),
-            m("energyTotalExport", "Total energy export", "Gesamtenergie Export", "value.energy", "kWh"),
-            m("energyTotalImport", "Total energy import", "Gesamtenergie Import", "value.energy", "kWh"),
-            m("voltagePhaseA", "Voltage phase A", "Spannung Phase A", "value.voltage", "V"),
-            m("voltagePhaseB", "Voltage phase B", "Spannung Phase B", "value.voltage", "V"),
-            m("voltagePhaseC", "Voltage phase C", "Spannung Phase C", "value.voltage", "V"),
-            m("currentPhaseA", "Current phase A", "Strom Phase A", "value.current", "A"),
-            m("currentPhaseB", "Current phase B", "Strom Phase B", "value.current", "A"),
-            m("currentPhaseC", "Current phase C", "Strom Phase C", "value.current", "A"),
-            m("faultCode", "Fault code", "Fehlercode", "value", ""),
+            { suffix: "totalPower", role: "value.power", unit: "W" },
+            { suffix: "phaseAPower", role: "value.power", unit: "W" },
+            { suffix: "phaseBPower", role: "value.power", unit: "W" },
+            { suffix: "phaseCPower", role: "value.power", unit: "W" },
+            { suffix: "powerFactorTotal", role: "value", unit: "" },
+            { suffix: "energyTotalExport", role: "value.energy", unit: "kWh" },
+            { suffix: "energyTotalImport", role: "value.energy", unit: "kWh" },
+            { suffix: "voltagePhaseA", role: "value.voltage", unit: "V" },
+            { suffix: "voltagePhaseB", role: "value.voltage", unit: "V" },
+            { suffix: "voltagePhaseC", role: "value.voltage", unit: "V" },
+            { suffix: "currentPhaseA", role: "value.current", unit: "A" },
+            { suffix: "currentPhaseB", role: "value.current", unit: "A" },
+            { suffix: "currentPhaseC", role: "value.current", unit: "A" },
+            { suffix: "faultCode", role: "value", unit: "" },
         ];
-        await Promise.all(meterDefs.map(def => this.adapter.extendObjectAsync(`${this.deviceId}.${def.id}`, {
+        await Promise.all(meterDefs.map(def => this.adapter.extendObjectAsync(`${this.deviceId}.meter.${def.suffix}`, {
             type: "state",
             common: {
-                name: def.name,
+                name: this.adapter.i18nName(`dev.meter.${def.suffix}.name`),
                 type: "number",
                 role: def.role,
                 unit: def.unit,
@@ -861,34 +891,34 @@ class DeviceContext {
             if (!this.histStatesCreated) {
                 await this.adapter.extendObjectAsync(`${this.deviceId}.history`, {
                     type: "channel",
-                    common: { name: { en: "Power history", de: "Leistungsverlauf" } },
+                    common: { name: this.adapter.i18nName("dev.history.name") },
                     native: {},
                 });
                 const histStates = [
                     {
                         id: "history.powerJson",
-                        name: { en: "Power history (JSON)", de: "Leistungsverlauf (JSON)" },
+                        nameKey: "dev.history.json.name",
                         type: "string",
                         role: "json",
                         unit: "",
                     },
                     {
                         id: "history.dailyEnergy",
-                        name: { en: "Daily energy", de: "Tagesenergie" },
+                        nameKey: "dev.history.dailyEnergy.name",
                         type: "number",
                         role: "value.energy",
                         unit: "Wh",
                     },
                     {
                         id: "history.totalEnergy",
-                        name: { en: "Total energy", de: "Gesamtenergie" },
+                        nameKey: "dev.history.totalEnergy.name",
                         type: "number",
                         role: "value.energy",
                         unit: "kWh",
                     },
                     {
                         id: "history.stepTime",
-                        name: { en: "Step time", de: "Schrittzeit" },
+                        nameKey: "dev.history.stepTime.name",
                         type: "number",
                         role: "value",
                         unit: "s",
@@ -898,7 +928,7 @@ class DeviceContext {
                     await this.adapter.extendObjectAsync(`${this.deviceId}.${s.id}`, {
                         type: "state",
                         common: {
-                            name: s.name,
+                            name: this.adapter.i18nName(s.nameKey),
                             type: s.type,
                             role: s.role,
                             unit: s.unit,

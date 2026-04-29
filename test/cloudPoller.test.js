@@ -710,6 +710,7 @@ describe("CloudPoller – pollDevicesAndInverters", function () {
 			connection: null, // not locally connected
 			pvStatesCreated: false,
 			createPvStates: async () => {},
+			refreshDeviceNameWithModel: async () => {},
 		});
 
 		const poller = makePoller({
@@ -810,6 +811,7 @@ describe("CloudPoller – pollDevicesAndInverters", function () {
 			connection: null,
 			pvStatesCreated: true,
 			createPvStates: async () => {},
+			refreshDeviceNameWithModel: async () => {},
 		});
 
 		const poller = makePoller({
@@ -887,6 +889,7 @@ describe("CloudPoller – pollDevicesAndInverters", function () {
 			connection: null,
 			pvStatesCreated: true,
 			createPvStates: async () => {},
+			refreshDeviceNameWithModel: async () => {},
 		});
 
 		const poller = makePoller({
@@ -947,6 +950,7 @@ describe("CloudPoller – pollDevicesAndInverters", function () {
 			connection: null, // cloud-only
 			pvStatesCreated: true,
 			createPvStates: async () => {},
+			refreshDeviceNameWithModel: async () => {},
 		});
 
 		const poller = makePoller({
@@ -997,6 +1001,7 @@ describe("CloudPoller – pollDevicesAndInverters", function () {
 			connection: null,
 			pvStatesCreated: true,
 			createPvStates: async () => {},
+			refreshDeviceNameWithModel: async () => {},
 		});
 
 		const poller = makePoller({
@@ -1247,6 +1252,7 @@ describe("CloudPoller – setPvStates (via pollInverterRealtimeData)", function 
 			connection: null,
 			pvStatesCreated: false,
 			createPvStates: async () => {},
+			refreshDeviceNameWithModel: async () => {},
 		});
 
 		const poller = makePoller({
@@ -1304,6 +1310,7 @@ describe("CloudPoller – setPvStates (via pollInverterRealtimeData)", function 
 			connection: null,
 			pvStatesCreated: true,
 			createPvStates: async () => {},
+			refreshDeviceNameWithModel: async () => {},
 		});
 
 		const poller = makePoller({

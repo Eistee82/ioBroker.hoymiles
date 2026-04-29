@@ -321,6 +321,33 @@ Protokoll-Reverse-Engineering durch die Community:
 - [dtuGateway](https://github.com/ohAnd/dtuGateway) — ESP32-Gateway
 - [Hoymiles-DTU-Proto](https://github.com/henkwiedig/Hoymiles-DTU-Proto) — Originale Protobuf-Definitionen
 
+## Integration mit `ioBroker.devices`
+
+Der `ioBroker.devices`-Adapter erkennt mit `@iobroker/type-detector`
+States/Channels und gruppiert sie als „automatische" Geräte. Er zeigt
+allerdings nur Geräte an, die einem Enum (Funktion und/oder Raum)
+zugewiesen sind — das ist eine ioBroker-Konvention, keine Eigenheit
+dieses Adapters; entsprechend dieser Konvention modifiziert dieser
+Adapter keine vom User verwalteten Enums von selbst. Eine frisch
+erstellte Hoymiles-Geräte-Struktur erscheint daher zunächst **nicht**
+unter „Automatische Geräte".
+
+Um das zu ändern, öffne *Admin → Objekte → Funktionen und Räume* und
+weise jede Hoymiles-DTU/-Anlage einer Funktion (z. B. *Energie*) und
+optional einem Raum zu. Ab diesem Moment erkennt `ioBroker.devices` den
+Wechselrichter automatisch.
+
+Sobald die Enum-Mitgliedschaft gesetzt ist, listet `ioBroker.devices`
+für jede DTU folgende auto-erkannte Sub-Geräte:
+- `<dtuSerial>.inverter.powerLimit` → **percentage**-Slider
+- `<dtuSerial>.inverter.powerFactorLimit` / `reactivePowerLimit` → **slider**
+- `<dtuSerial>.inverter.active`, `.lock`, `config.zeroExportEnable` → **socket / light**-Schalter
+- `<dtuSerial>.inverter.reboot`, `.cleanWarnings`, `dtu.reboot` → **button**
+
+…und für jede Cloud-erkannte Anlage:
+- `station-<id>.weather` → **weatherCurrent** (Icon + Temperatur)
+- `station-<id>.info` (Breitengrad, Längengrad) → **location**
+
 ## Fehlerbehebung
 
 ### Adapter kann keine Verbindung herstellen

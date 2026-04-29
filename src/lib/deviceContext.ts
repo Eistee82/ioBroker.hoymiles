@@ -28,6 +28,17 @@ export interface HoymilesAdapter extends ioBroker.Adapter {
 	onSendTimeUpdated(ctx: DeviceContext): void;
 	/** Adapter-weiten Verbindungsstatus neu berechnen. */
 	updateConnectionState(): Promise<void>;
+	/**
+	 * Resolve an i18n key from src/lib/i18n/<lang>.json into a translated name object.
+	 *  Optional args replace %s placeholders in the translation.
+	 */
+	i18nName(key: string, ...args: (string | number | boolean | null)[]): ioBroker.StringOrTranslated;
+	/**
+	 * Resolve a description i18n key, returning `undefined` when no translation
+	 * exists for the key. Used by lib modules to attach `common.desc` only when
+	 * a translation actually exists.
+	 */
+	i18nDescOptional(key: string): ioBroker.StringOrTranslated | undefined;
 }
 
 interface DeviceContextOptions {
@@ -41,17 +52,20 @@ interface DeviceContextOptions {
 	slowPollFactor: number;
 }
 
-/** PV field definitions — base fields available from both local and cloud. */
+/**
+ * PV field definitions — base fields available from both local and cloud.
+ *  Names come from i18n key `dev.pv.field.<suffix>.name` at object-creation time.
+ */
 const PV_FIELDS_BASE = [
-	{ suffix: "power", en: "power", de: "Leistung", role: "value.power", unit: "W" },
-	{ suffix: "voltage", en: "voltage", de: "Spannung", role: "value.voltage", unit: "V" },
-	{ suffix: "current", en: "current", de: "Strom", role: "value.current", unit: "A" },
+	{ suffix: "power", role: "value.power", unit: "W" },
+	{ suffix: "voltage", role: "value.voltage", unit: "V" },
+	{ suffix: "current", role: "value.current", unit: "A" },
 ] as const;
 
 /** PV field definitions — only available from local TCP connection. */
 const PV_FIELDS_LOCAL_ONLY = [
-	{ suffix: "dailyEnergy", en: "daily energy", de: "Tagesenergie", role: "value.energy", unit: "kWh" },
-	{ suffix: "totalEnergy", en: "total energy", de: "Gesamtenergie", role: "value.energy", unit: "kWh" },
+	{ suffix: "dailyEnergy", role: "value.energy", unit: "kWh" },
+	{ suffix: "totalEnergy", role: "value.energy", unit: "kWh" },
 ] as const;
 
 /** Writable state IDs that need subscriptions (relative to device prefix). */
@@ -190,6 +204,37 @@ class DeviceContext {
 		await this.adapter.setStateAsync(`${this.deviceId}.info.connected`, !!isConnected, true);
 	}
 
+	/**
+	 * Update the device name to include the inverter model from the cloud, but
+	 * only if the user has not renamed the device yet. We detect "user has not
+	 * renamed" by checking the current name still matches the initial pattern
+	 * `Hoymiles DTU <serial>`. Once renamed, we never touch the name again.
+	 *
+	 * @param model Hoymiles model identifier (e.g. `HMS-800W-2T`)
+	 */
+	async refreshDeviceNameWithModel(model: string): Promise<void> {
+		if (!this.deviceId || !model) {
+			return;
+		}
+		const initial = `Hoymiles DTU ${this.deviceId}`;
+		const target = `Hoymiles ${model} (${this.deviceId})`;
+		try {
+			const obj = await this.adapter.getObjectAsync(this.deviceId);
+			if (obj?.type !== "device" || typeof obj.common.name !== "string") {
+				return;
+			}
+			if (obj.common.name === initial && obj.common.name !== target) {
+				await this.adapter.extendObjectAsync(this.deviceId, {
+					type: "device",
+					common: { name: target },
+					native: {},
+				});
+			}
+		} catch (err) {
+			this.adapter.log.debug(`[${this.deviceId}] Could not refresh device name with model: ${errorMessage(err)}`);
+		}
+	}
+
 	// --- Connection lifecycle ---
 
 	/** Start local TCP connection to DTU. */
@@ -308,11 +353,13 @@ class DeviceContext {
 			return;
 		}
 
-		// Create device node with statusStates for admin UI indicator
+		// Create device node with statusStates for admin UI indicator.
+		// Initial name "Hoymiles DTU <serial>" — refreshed to include the model
+		// once the cloud reports it (refreshDeviceNameWithModel).
 		await this.adapter.extendObjectAsync(this.deviceId, {
 			type: "device",
 			common: {
-				name: `DTU ${this.deviceId}`,
+				name: `Hoymiles DTU ${this.deviceId}`,
 				statusStates: { onlineId: "info.connected" },
 				icon: "hoymiles.png",
 			} as ioBroker.DeviceCommon,
@@ -322,7 +369,7 @@ class DeviceContext {
 		// Create info channel under device
 		await this.adapter.extendObjectAsync(`${this.deviceId}.info`, {
 			type: "channel",
-			common: { name: { en: "Device info", de: "Geräte-Info" } },
+			common: { name: this.adapter.i18nName("dev.deviceInfo.name") },
 			native: {},
 		});
 
@@ -331,13 +378,20 @@ class DeviceContext {
 			ch => !(ch.source === "local" && !this.enableLocal) && !(ch.source === "cloud" && !this.enableCloud),
 		);
 		await Promise.all(
-			activeChannels.map(ch =>
-				this.adapter.setObjectNotExistsAsync(`${this.deviceId}.${ch.id}`, {
+			activeChannels.map(ch => {
+				const channelCommon: Partial<ioBroker.ChannelCommon> = {
+					name: this.adapter.i18nName(ch.nameKey),
+				};
+				const desc = this.adapter.i18nDescOptional(ch.descKey);
+				if (desc) {
+					channelCommon.desc = desc;
+				}
+				return this.adapter.setObjectNotExistsAsync(`${this.deviceId}.${ch.id}`, {
 					type: "channel",
-					common: { name: ch.name },
+					common: channelCommon as ioBroker.ChannelCommon,
 					native: {},
-				}),
-			),
+				});
+			}),
 		);
 
 		// Create states (only for active sources)
@@ -347,7 +401,7 @@ class DeviceContext {
 		await Promise.all(
 			activeStates.map(def => {
 				const common: Partial<ioBroker.StateCommon> = {
-					name: def.name,
+					name: this.adapter.i18nName(def.nameKey),
 					type: def.type,
 					role: def.role,
 					unit: def.unit || "",
@@ -358,6 +412,10 @@ class DeviceContext {
 					max: def.max,
 					states: def.states,
 				};
+				const desc = this.adapter.i18nDescOptional(def.descKey);
+				if (desc) {
+					common.desc = desc;
+				}
 				return this.adapter.extendObjectAsync(`${this.deviceId}.${def.id}`, {
 					type: "state",
 					common: common as ioBroker.StateCommon,
@@ -401,7 +459,7 @@ class DeviceContext {
 			const ch = `${this.deviceId}.pv${i}`;
 			await this.adapter.extendObjectAsync(ch, {
 				type: "channel",
-				common: { name: { en: `PV input ${i}`, de: `PV-Eingang ${i}` } },
+				common: { name: this.adapter.i18nName("dev.pv.name", i) },
 				native: {},
 			});
 			const pvFields = cloudOnly ? PV_FIELDS_BASE : [...PV_FIELDS_BASE, ...PV_FIELDS_LOCAL_ONLY];
@@ -409,7 +467,7 @@ class DeviceContext {
 				await this.adapter.extendObjectAsync(`${ch}.${f.suffix}`, {
 					type: "state",
 					common: {
-						name: { en: `PV${i} ${f.en}`, de: `PV${i} ${f.de}` },
+						name: this.adapter.i18nName(`dev.pv.field.${f.suffix}.name`, i),
 						type: "number",
 						role: f.role,
 						unit: f.unit,
@@ -430,43 +488,31 @@ class DeviceContext {
 		this.adapter.log.info(`[${this.deviceId}] Meter detected, creating meter states`);
 		await this.adapter.setObjectNotExistsAsync(`${this.deviceId}.meter`, {
 			type: "channel",
-			common: { name: { en: "Energy meter", de: "Energiezähler" } },
+			common: { name: this.adapter.i18nName("dev.meter.name") },
 			native: {},
 		});
-		const m = (
-			id: string,
-			en: string,
-			de: string,
-			role: string,
-			unit: string,
-		): { id: string; name: ioBroker.StringOrTranslated; role: string; unit: string } => ({
-			id: `meter.${id}`,
-			name: { en, de } as ioBroker.StringOrTranslated,
-			role,
-			unit,
-		});
-		const meterDefs = [
-			m("totalPower", "Total power", "Gesamtleistung", "value.power", "W"),
-			m("phaseAPower", "Phase A power", "Phase A Leistung", "value.power", "W"),
-			m("phaseBPower", "Phase B power", "Phase B Leistung", "value.power", "W"),
-			m("phaseCPower", "Phase C power", "Phase C Leistung", "value.power", "W"),
-			m("powerFactorTotal", "Power factor total", "Leistungsfaktor gesamt", "value", ""),
-			m("energyTotalExport", "Total energy export", "Gesamtenergie Export", "value.energy", "kWh"),
-			m("energyTotalImport", "Total energy import", "Gesamtenergie Import", "value.energy", "kWh"),
-			m("voltagePhaseA", "Voltage phase A", "Spannung Phase A", "value.voltage", "V"),
-			m("voltagePhaseB", "Voltage phase B", "Spannung Phase B", "value.voltage", "V"),
-			m("voltagePhaseC", "Voltage phase C", "Spannung Phase C", "value.voltage", "V"),
-			m("currentPhaseA", "Current phase A", "Strom Phase A", "value.current", "A"),
-			m("currentPhaseB", "Current phase B", "Strom Phase B", "value.current", "A"),
-			m("currentPhaseC", "Current phase C", "Strom Phase C", "value.current", "A"),
-			m("faultCode", "Fault code", "Fehlercode", "value", ""),
+		const meterDefs: { suffix: string; role: string; unit: string }[] = [
+			{ suffix: "totalPower", role: "value.power", unit: "W" },
+			{ suffix: "phaseAPower", role: "value.power", unit: "W" },
+			{ suffix: "phaseBPower", role: "value.power", unit: "W" },
+			{ suffix: "phaseCPower", role: "value.power", unit: "W" },
+			{ suffix: "powerFactorTotal", role: "value", unit: "" },
+			{ suffix: "energyTotalExport", role: "value.energy", unit: "kWh" },
+			{ suffix: "energyTotalImport", role: "value.energy", unit: "kWh" },
+			{ suffix: "voltagePhaseA", role: "value.voltage", unit: "V" },
+			{ suffix: "voltagePhaseB", role: "value.voltage", unit: "V" },
+			{ suffix: "voltagePhaseC", role: "value.voltage", unit: "V" },
+			{ suffix: "currentPhaseA", role: "value.current", unit: "A" },
+			{ suffix: "currentPhaseB", role: "value.current", unit: "A" },
+			{ suffix: "currentPhaseC", role: "value.current", unit: "A" },
+			{ suffix: "faultCode", role: "value", unit: "" },
 		];
 		await Promise.all(
 			meterDefs.map(def =>
-				this.adapter.extendObjectAsync(`${this.deviceId}.${def.id}`, {
+				this.adapter.extendObjectAsync(`${this.deviceId}.meter.${def.suffix}`, {
 					type: "state",
 					common: {
-						name: def.name,
+						name: this.adapter.i18nName(`dev.meter.${def.suffix}.name`),
 						type: "number",
 						role: def.role,
 						unit: def.unit,
@@ -1233,35 +1279,41 @@ class DeviceContext {
 			if (!this.histStatesCreated) {
 				await this.adapter.extendObjectAsync(`${this.deviceId}.history`, {
 					type: "channel",
-					common: { name: { en: "Power history", de: "Leistungsverlauf" } },
+					common: { name: this.adapter.i18nName("dev.history.name") },
 					native: {},
 				});
-				const histStates = [
+				const histStates: {
+					id: string;
+					nameKey: string;
+					type: ioBroker.CommonType;
+					role: string;
+					unit: string;
+				}[] = [
 					{
 						id: "history.powerJson",
-						name: { en: "Power history (JSON)", de: "Leistungsverlauf (JSON)" },
-						type: "string" as const,
+						nameKey: "dev.history.json.name",
+						type: "string",
 						role: "json",
 						unit: "",
 					},
 					{
 						id: "history.dailyEnergy",
-						name: { en: "Daily energy", de: "Tagesenergie" },
-						type: "number" as const,
+						nameKey: "dev.history.dailyEnergy.name",
+						type: "number",
 						role: "value.energy",
 						unit: "Wh",
 					},
 					{
 						id: "history.totalEnergy",
-						name: { en: "Total energy", de: "Gesamtenergie" },
-						type: "number" as const,
+						nameKey: "dev.history.totalEnergy.name",
+						type: "number",
 						role: "value.energy",
 						unit: "kWh",
 					},
 					{
 						id: "history.stepTime",
-						name: { en: "Step time", de: "Schrittzeit" },
-						type: "number" as const,
+						nameKey: "dev.history.stepTime.name",
+						type: "number",
 						role: "value",
 						unit: "s",
 					},
@@ -1270,7 +1322,7 @@ class DeviceContext {
 					await this.adapter.extendObjectAsync(`${this.deviceId}.${s.id}`, {
 						type: "state",
 						common: {
-							name: s.name,
+							name: this.adapter.i18nName(s.nameKey),
 							type: s.type,
 							role: s.role,
 							unit: s.unit,
