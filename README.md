@@ -198,6 +198,8 @@ Cloud stations create aggregated device nodes (e.g. `hoymiles.0.station-12345.*`
 - (@Eistee82) Network discovery module for ioBroker.discovery
 - (@Eistee82) Full i18n: en, de, ru, pt, nl, fr, it, es, pl, uk, zh-cn
 
+[Older changelogs can be found there](CHANGELOG_OLD.md)
+
 ## License
 
 MIT License
