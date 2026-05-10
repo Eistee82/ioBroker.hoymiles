@@ -24,5 +24,7 @@
     "slowPollFactorHelp": "Konfiguration und Alarme ändern sich selten. Sie werden nur bei jedem X-ten Datenzyklus abgefragt um die Last zu reduzieren. Standard: 6 (= alle 30 Sekunden bei 5s Intervall).",
     "tabCloud": "Cloud (S-Miles)",
     "tabLocal": "Lokale Verbindung",
+    "testCloudLoginButton": "Cloud-Login testen",
+    "testCloudLoginHelp": "Probiert beide Login-Verfahren (S-Miles Web/Installer und S-Miles Home) und zeigt, welches deinen Account akzeptiert. Hilfreich, wenn im Log 'all authentication strategies rejected' steht. Das Ergebnis erscheint als Popup und wird zusätzlich ins Adapter-Log geschrieben.",
     "testConnectionButton": "Verbindung testen"
 }

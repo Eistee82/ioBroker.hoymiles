@@ -24,5 +24,7 @@
     "slowPollFactorHelp": "配置和告警数据很少变化。它们仅在每第N个数据周期查询一次以减少负载。默认值：6（= 在5秒间隔下每30秒查询一次）。",
     "tabCloud": "云端 (S-Miles)",
     "tabLocal": "本地连接",
+    "testCloudLoginButton": "测试云端登录",
+    "testCloudLoginHelp": "尝试两种身份验证方法（S-Miles Web/Installer 和 S-Miles Home），并报告哪种接受您的账户。当日志中出现 'all authentication strategies rejected' 时非常有用。结果会在弹窗中显示，并同时写入适配器日志。",
     "testConnectionButton": "测试连接"
 }

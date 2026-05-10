@@ -1,9 +1,8 @@
 import { postJson, postBinary } from "./httpClient.js";
 import { parseChartResponse } from "./chartParser.js";
-import { TOKEN_MAX_AGE_MS, ENSURE_TOKEN_TIMEOUT_MS } from "./constants.js";
+import { TOKEN_MAX_AGE_MS, ENSURE_TOKEN_TIMEOUT_MS, CLOUD_HOST_DEFAULT, CLOUD_HOST_EU, IAM_PRE_INSPECT_PATH, IAM_LOGIN_V3_PATH, IAM_REGION_PATH, IAM_LOGIN_V0_PATH, } from "./constants.js";
 import { errorMessage, withTimeout, buildCredentialChallenges, buildArgon2Challenge } from "./utils.js";
-const BASE_URL = "https://neapi.hoymiles.com";
-const EU_WEATHER_URL = "https://euapi.hoymiles.com/tpa/api/0/weather/get";
+const EU_WEATHER_URL = `${CLOUD_HOST_EU}/tpa/api/0/weather/get`;
 function assertData(data, label) {
     if (data == null || typeof data !== "object") {
         throw new Error(`${label}: expected object, got ${typeof data}`);
@@ -26,6 +25,9 @@ class CloudConnection {
     log;
     tokenTime;
     tokenRefreshPromise;
+    baseUrl;
+    lastFlow;
+    lastDc;
     assertStationId(stationId) {
         if (!stationId || stationId <= 0) {
             throw new Error("Invalid stationId");
@@ -40,16 +42,82 @@ class CloudConnection {
         this.token = null;
         this.tokenTime = 0;
         this.tokenRefreshPromise = null;
+        this.baseUrl = CLOUD_HOST_DEFAULT;
+        this.lastFlow = null;
+        this.lastDc = null;
+    }
+    getBaseUrl() {
+        return this.baseUrl;
+    }
+    getLastFlow() {
+        return this.lastFlow;
+    }
+    getLastDc() {
+        return this.lastDc;
     }
     async login() {
+        let v3AuthError = null;
+        let lastTechError;
+        this.log(`Cloud login start (host=${this.baseUrl}, user=${this.user})`);
+        try {
+            const token = await this.tryLoginV3();
+            if (token) {
+                this.token = token;
+                this.tokenTime = Date.now();
+                this.lastFlow = "v3";
+                this.log(`Cloud login success via v3 (host=${this.baseUrl})`);
+                return this.token;
+            }
+            this.log("Cloud login v3: server returned status=0 but no token — will try v0 fallback");
+        }
+        catch (err) {
+            if (err instanceof CloudAuthError) {
+                v3AuthError = err;
+                this.log(`Cloud login v3 rejected: status=${err.code} message="${err.message}" — trying v0 fallback`);
+            }
+            else {
+                lastTechError = err;
+                this.log(`Cloud login v3 transient error: ${errorMessage(err)} — trying v0 fallback`);
+            }
+        }
+        await this.discoverRegion();
+        try {
+            const token = await this.tryLoginV0();
+            if (token) {
+                this.token = token;
+                this.tokenTime = Date.now();
+                this.lastFlow = "v0";
+                this.log(`Cloud login success via v0 (host=${this.baseUrl}, dc=${this.lastDc ?? "n/a"})`);
+                return this.token;
+            }
+            this.log("Cloud login v0: server returned status=0 but no token");
+        }
+        catch (err) {
+            if (err instanceof CloudAuthError) {
+                const combined = v3AuthError && v3AuthError.message !== err.message
+                    ? `${err.message} (v0); v3 also rejected: ${v3AuthError.message}`
+                    : err.message;
+                this.log(`Cloud login v0 rejected: status=${err.code} message="${err.message}"`);
+                throw new CloudAuthError(combined, err.code);
+            }
+            lastTechError = err;
+            this.log(`Cloud login v0 transient error: ${errorMessage(err)}`);
+        }
+        if (v3AuthError) {
+            throw v3AuthError;
+        }
+        if (lastTechError instanceof Error) {
+            throw lastTechError;
+        }
+        throw new Error("Login failed: all authentication strategies rejected");
+    }
+    async tryLoginV3() {
         let lastTechError;
         for (const challenge of this.credentials) {
             try {
-                const token = await this.tryLogin(challenge);
+                const token = await this.tryLoginV3Challenge(challenge);
                 if (token) {
-                    this.token = token;
-                    this.tokenTime = Date.now();
-                    return this.token;
+                    return token;
                 }
             }
             catch (err) {
@@ -62,17 +130,17 @@ class CloudConnection {
         if (lastTechError instanceof Error) {
             throw lastTechError;
         }
-        throw new Error("Login failed: all authentication strategies rejected");
+        return null;
     }
-    async tryLogin(challenge) {
-        const preInsp = await this._post("/iam/pub/3/auth/pre-insp", { u: this.user });
+    async tryLoginV3Challenge(challenge) {
+        const preInsp = await this._post(IAM_PRE_INSPECT_PATH, { u: this.user });
         if (preInsp.status !== "0") {
             throw new CloudAuthError(preInsp.message || "Pre-inspect failed", preInsp.status);
         }
         const preData = assertData(preInsp.data, "Pre-inspect");
         const { n: nonce, a: salt } = preData;
         const ch = salt ? await buildArgon2Challenge(this.credentialInput, salt) : challenge;
-        const result = await this._post("/iam/pub/3/auth/login", {
+        const result = await this._post(IAM_LOGIN_V3_PATH, {
             u: this.user,
             ch,
             n: nonce,
@@ -81,6 +149,109 @@ class CloudConnection {
             throw new CloudAuthError(result.message || "Login rejected", result.status);
         }
         return result.data?.token ?? null;
+    }
+    async discoverRegion() {
+        try {
+            const result = await this._post(IAM_REGION_PATH, { email: this.user });
+            if (result.status !== "0" || !result.data) {
+                this.log(`Cloud region_c: status=${result.status} message="${result.message ?? ""}" — keeping host ${this.baseUrl}`);
+                return;
+            }
+            const { login_url, dc } = result.data;
+            this.lastDc = typeof dc === "number" ? dc : null;
+            if (login_url && login_url !== this.baseUrl) {
+                this.log(`Cloud region_c: switching base URL ${this.baseUrl} → ${login_url} (dc=${dc})`);
+                this.baseUrl = login_url;
+            }
+            else if (login_url) {
+                this.log(`Cloud region_c: confirmed host ${this.baseUrl} (dc=${dc})`);
+            }
+            else {
+                this.log(`Cloud region_c: empty login_url, dc=${dc} — keeping host ${this.baseUrl}`);
+            }
+        }
+        catch (err) {
+            this.log(`Cloud region_c: ${errorMessage(err)} — keeping host ${this.baseUrl}`);
+        }
+    }
+    async tryLoginV0() {
+        const password = this.credentials[0];
+        this.log(`Cloud login v0: POST ${IAM_LOGIN_V0_PATH} on ${this.baseUrl}`);
+        const result = await this._post(IAM_LOGIN_V0_PATH, {
+            user_name: this.user,
+            password,
+        });
+        if (result.status !== "0") {
+            throw new CloudAuthError(result.message || "Login rejected (v0)", result.status);
+        }
+        return result.data?.token ?? null;
+    }
+    async loginDiagnostics() {
+        const attempts = [];
+        const startBase = this.baseUrl;
+        const savedToken = this.token;
+        const savedTokenTime = this.tokenTime;
+        const savedLastFlow = this.lastFlow;
+        const savedLastDc = this.lastDc;
+        try {
+            const regionResult = await this._post(IAM_REGION_PATH, { email: this.user });
+            attempts.push({
+                flow: "region",
+                host: startBase,
+                ok: regionResult.status === "0" && !!regionResult.data?.login_url,
+                status: regionResult.status,
+                message: regionResult.message,
+                dc: regionResult.data?.dc,
+            });
+            if (regionResult.status === "0" && regionResult.data?.login_url) {
+                this.baseUrl = regionResult.data.login_url;
+            }
+        }
+        catch (err) {
+            attempts.push({ flow: "region", host: startBase, ok: false, message: errorMessage(err) });
+        }
+        try {
+            const token = await this.tryLoginV3();
+            attempts.push({ flow: "v3", host: this.baseUrl, ok: !!token, hasToken: !!token });
+        }
+        catch (err) {
+            if (err instanceof CloudAuthError) {
+                attempts.push({
+                    flow: "v3",
+                    host: this.baseUrl,
+                    ok: false,
+                    status: err.code,
+                    message: err.message,
+                });
+            }
+            else {
+                attempts.push({ flow: "v3", host: this.baseUrl, ok: false, message: errorMessage(err) });
+            }
+        }
+        try {
+            const token = await this.tryLoginV0();
+            attempts.push({ flow: "v0", host: this.baseUrl, ok: !!token, hasToken: !!token });
+        }
+        catch (err) {
+            if (err instanceof CloudAuthError) {
+                attempts.push({
+                    flow: "v0",
+                    host: this.baseUrl,
+                    ok: false,
+                    status: err.code,
+                    message: err.message,
+                });
+            }
+            else {
+                attempts.push({ flow: "v0", host: this.baseUrl, ok: false, message: errorMessage(err) });
+            }
+        }
+        this.baseUrl = startBase;
+        this.token = savedToken;
+        this.tokenTime = savedTokenTime;
+        this.lastFlow = savedLastFlow;
+        this.lastDc = savedLastDc;
+        return attempts;
     }
     async ensureToken() {
         if (this.tokenRefreshPromise) {
@@ -101,6 +272,7 @@ class CloudConnection {
     }
     disconnect() {
         this.token = null;
+        this.lastFlow = null;
     }
     async getStationList() {
         await this.ensureToken();
@@ -151,7 +323,7 @@ class CloudConnection {
         }
     }
     _postBinary(apiPath, body) {
-        return postBinary(new URL(apiPath, BASE_URL).href, body, { token: this.token });
+        return postBinary(new URL(apiPath, this.baseUrl).href, body, { token: this.token });
     }
     async getModuleRealtimeData(stationId, microId, port, date, quotas) {
         this.assertStationId(stationId);
@@ -206,7 +378,7 @@ class CloudConnection {
         return assertData(result.data ?? { upgrade: 0, done: 0, tid: "" }, "Firmware status");
     }
     _post(apiPath, body) {
-        return postJson(new URL(apiPath, BASE_URL).href, body, { token: this.token });
+        return postJson(new URL(apiPath, this.baseUrl).href, body, { token: this.token });
     }
 }
 export default CloudConnection;

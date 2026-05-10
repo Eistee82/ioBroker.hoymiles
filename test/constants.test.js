@@ -2,7 +2,12 @@ import assert from "node:assert";
 import * as constants from "../build/lib/constants.js";
 
 // ============================================================
-// All exports are positive numbers
+// All exports are non-empty values of an expected shape
+//
+// Most constants are positive numbers (timeouts, sizes, ports). Cloud-host and
+// IAM-path exports are strings. Validate each export against the shape implied
+// by its name so a typo (e.g. an empty string or an unintended `false`) is
+// caught immediately.
 // ============================================================
 describe("constants – all exports", function () {
 	const entries = Object.entries(constants);
@@ -12,9 +17,18 @@ describe("constants – all exports", function () {
 	});
 
 	for (const [name, value] of entries) {
-		it(`${name} is a number > 0`, function () {
-			assert.strictEqual(typeof value, "number", `${name} should be a number`);
-			assert.ok(value > 0, `${name} should be > 0, got ${value}`);
+		it(`${name} has a sensible value`, function () {
+			if (typeof value === "string") {
+				assert.ok(value.length > 0, `${name} should not be an empty string`);
+				if (name.startsWith("CLOUD_HOST_")) {
+					assert.match(value, /^https:\/\/[^/]+$/, `${name} should be a bare HTTPS host URL`);
+				} else if (name.startsWith("IAM_") && name.endsWith("_PATH")) {
+					assert.match(value, /^\/[\w/-]+$/, `${name} should be an absolute path`);
+				}
+			} else {
+				assert.strictEqual(typeof value, "number", `${name} should be a number, got ${typeof value}`);
+				assert.ok(value > 0, `${name} should be > 0, got ${value}`);
+			}
 		});
 	}
 });

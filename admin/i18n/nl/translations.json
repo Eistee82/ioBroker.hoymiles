@@ -24,5 +24,7 @@
     "slowPollFactorHelp": "Configuratie- en alarmgegevens veranderen zelden. Ze worden slechts elke Nde datacyclus opgevraagd om de belasting te verminderen. Standaard: 6 (= elke 30 seconden bij een interval van 5s).",
     "tabCloud": "Cloud (S-Miles)",
     "tabLocal": "Lokale verbinding",
+    "testCloudLoginButton": "Cloud-login testen",
+    "testCloudLoginHelp": "Probeert beide authenticatiemethoden (S-Miles Web/Installer en S-Miles Home) en meldt welke uw account accepteert. Handig wanneer 'all authentication strategies rejected' in het log verschijnt. Het resultaat verschijnt in een popup en wordt ook naar het adapterlog geschreven.",
     "testConnectionButton": "Verbinding testen"
 }

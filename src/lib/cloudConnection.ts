@@ -1,10 +1,18 @@
 import { postJson, postBinary } from "./httpClient.js";
 import { parseChartResponse } from "./chartParser.js";
-import { TOKEN_MAX_AGE_MS, ENSURE_TOKEN_TIMEOUT_MS } from "./constants.js";
+import {
+	TOKEN_MAX_AGE_MS,
+	ENSURE_TOKEN_TIMEOUT_MS,
+	CLOUD_HOST_DEFAULT,
+	CLOUD_HOST_EU,
+	IAM_PRE_INSPECT_PATH,
+	IAM_LOGIN_V3_PATH,
+	IAM_REGION_PATH,
+	IAM_LOGIN_V0_PATH,
+} from "./constants.js";
 import { errorMessage, withTimeout, buildCredentialChallenges, buildArgon2Challenge } from "./utils.js";
 
-const BASE_URL = "https://neapi.hoymiles.com";
-const EU_WEATHER_URL = "https://euapi.hoymiles.com/tpa/api/0/weather/get";
+const EU_WEATHER_URL = `${CLOUD_HOST_EU}/tpa/api/0/weather/get`;
 
 /**
  * Validate that API response data is a non-null object.
@@ -28,6 +36,38 @@ interface CloudApiResponse<T = Record<string, unknown>> {
 interface PreInspectData {
 	n: string;
 	a?: string;
+}
+
+interface RegionData {
+	/** Regional API base URL the user's account lives on. Empty string when unknown. */
+	login_url: string;
+	/** Data-center marker. -1 = account not found, 0+ = a real region. */
+	dc: number;
+}
+
+interface LoginV0Data {
+	token?: string;
+}
+
+/**
+ * Outcome of one login attempt — used by `loginDiagnostics()` to report which
+ * flow accepted/rejected the configured credentials, without leaking the token.
+ */
+export interface LoginAttemptResult {
+	/** Which flow this attempt represents: region_c discovery, v3 login, or v0 login. */
+	flow: "v3" | "v0" | "region";
+	/** Base URL the attempt was made against (e.g. `https://neapi.hoymiles.com`). */
+	host: string;
+	/** True if the server accepted the request (region_c: returned a login_url; v3/v0: returned a token). */
+	ok: boolean;
+	/** Server-reported status code, if the request reached the server. */
+	status?: string;
+	/** Server-reported or transport error message, when not ok. */
+	message?: string;
+	/** Data-center marker from region_c response (region attempts only). */
+	dc?: number;
+	/** True if the attempt produced a session token (v3/v0 attempts only). */
+	hasToken?: boolean;
 }
 
 interface CloudStation {
@@ -141,6 +181,15 @@ class CloudConnection {
 	private readonly log: (msg: string) => void;
 	private tokenTime: number;
 	private tokenRefreshPromise: Promise<void> | null;
+	/**
+	 * Active API base URL. Starts at CLOUD_HOST_DEFAULT and may be replaced
+	 * once region_c maps the user's account to a different regional host.
+	 */
+	private baseUrl: string;
+	/** Last successful auth flow — informs re-login (skip rediscovery if v3 already worked). */
+	private lastFlow: "v3" | "v0" | null;
+	/** Last data-center returned by region_c (null = not yet queried, -1 = account unknown). */
+	private lastDc: number | null;
 
 	private assertStationId(stationId: number): void {
 		if (!stationId || stationId <= 0) {
@@ -162,31 +211,99 @@ class CloudConnection {
 		this.token = null;
 		this.tokenTime = 0;
 		this.tokenRefreshPromise = null;
+		this.baseUrl = CLOUD_HOST_DEFAULT;
+		this.lastFlow = null;
+		this.lastDc = null;
+	}
+
+	/** Currently active API base URL (changes if region_c redirects to a regional host). */
+	getBaseUrl(): string {
+		return this.baseUrl;
+	}
+
+	/** Auth flow that produced the current token: "v3" (web portal/Installer/Enduser), "v0" (S-Miles Home / legacy), or null if not yet logged in. */
+	getLastFlow(): "v3" | "v0" | null {
+		return this.lastFlow;
+	}
+
+	/** Last data-center marker from region_c. -1 = account unknown to that region; null = region_c not yet called. */
+	getLastDc(): number | null {
+		return this.lastDc;
 	}
 
 	// --- Auth ---
 
-	/** Authenticate with the Hoymiles cloud and obtain a session token. */
+	/**
+	 * Authenticate with the Hoymiles cloud and obtain a session token.
+	 *
+	 * Tries the v3 flow first (used by the S-Miles web portal and historically by
+	 * this adapter — accepts S-Miles Installer/Enduser accounts). If v3 hard-rejects
+	 * the credentials, falls back to the v0 flow (used by the S-Miles Home /
+	 * com.hm.balcony Android app), preceded by a region_c discovery call so the
+	 * request lands on the user's regional API host.
+	 */
 	async login(): Promise<string> {
+		let v3AuthError: CloudAuthError | null = null;
 		let lastTechError: unknown;
-		for (const challenge of this.credentials) {
-			try {
-				const token = await this.tryLogin(challenge);
-				if (token) {
-					this.token = token;
-					this.tokenTime = Date.now();
-					return this.token;
-				}
-			} catch (err) {
-				// Permanent auth errors bubble up immediately — no further strategies.
-				if (err instanceof CloudAuthError) {
-					throw err;
-				}
-				// Transient error (network/5xx): remember and try next strategy.
+
+		this.log(`Cloud login start (host=${this.baseUrl}, user=${this.user})`);
+
+		// --- Phase 1: v3 (current web portal flow) ---
+		try {
+			const token = await this.tryLoginV3();
+			if (token) {
+				this.token = token;
+				this.tokenTime = Date.now();
+				this.lastFlow = "v3";
+				this.log(`Cloud login success via v3 (host=${this.baseUrl})`);
+				return this.token;
+			}
+			this.log("Cloud login v3: server returned status=0 but no token — will try v0 fallback");
+		} catch (err) {
+			if (err instanceof CloudAuthError) {
+				v3AuthError = err;
+				this.log(`Cloud login v3 rejected: status=${err.code} message="${err.message}" — trying v0 fallback`);
+			} else {
+				// Transient (network/5xx) — remember, but still try v0 in case it's a v3-only outage
 				lastTechError = err;
+				this.log(`Cloud login v3 transient error: ${errorMessage(err)} — trying v0 fallback`);
 			}
 		}
 
+		// --- Phase 2: region_c discovery (best-effort) ---
+		// region_c may relocate this.baseUrl to the user's regional host. A failure here
+		// is non-fatal — we still try v0 against the current base URL.
+		await this.discoverRegion();
+
+		// --- Phase 3: v0 fallback (S-Miles Home / Installer-app flow) ---
+		try {
+			const token = await this.tryLoginV0();
+			if (token) {
+				this.token = token;
+				this.tokenTime = Date.now();
+				this.lastFlow = "v0";
+				this.log(`Cloud login success via v0 (host=${this.baseUrl}, dc=${this.lastDc ?? "n/a"})`);
+				return this.token;
+			}
+			this.log("Cloud login v0: server returned status=0 but no token");
+		} catch (err) {
+			if (err instanceof CloudAuthError) {
+				// Both flows hard-rejected → permanent auth failure.
+				const combined =
+					v3AuthError && v3AuthError.message !== err.message
+						? `${err.message} (v0); v3 also rejected: ${v3AuthError.message}`
+						: err.message;
+				this.log(`Cloud login v0 rejected: status=${err.code} message="${err.message}"`);
+				throw new CloudAuthError(combined, err.code);
+			}
+			// v0 transient — keep the more informative one
+			lastTechError = err;
+			this.log(`Cloud login v0 transient error: ${errorMessage(err)}`);
+		}
+
+		if (v3AuthError) {
+			throw v3AuthError;
+		}
 		if (lastTechError instanceof Error) {
 			throw lastTechError;
 		}
@@ -194,14 +311,39 @@ class CloudConnection {
 	}
 
 	/**
-	 * Attempt a single login flow: pre-inspect to get nonce, then login with the given credential hash.
+	 * v3 flow: pre-insp → login. Walks the credential-challenge list and attempts
+	 * each in turn until one succeeds or one throws CloudAuthError (permanent reject).
+	 */
+	private async tryLoginV3(): Promise<string | null> {
+		let lastTechError: unknown;
+		for (const challenge of this.credentials) {
+			try {
+				const token = await this.tryLoginV3Challenge(challenge);
+				if (token) {
+					return token;
+				}
+			} catch (err) {
+				if (err instanceof CloudAuthError) {
+					throw err;
+				}
+				lastTechError = err;
+			}
+		}
+		if (lastTechError instanceof Error) {
+			throw lastTechError;
+		}
+		return null;
+	}
+
+	/**
+	 * Single v3 attempt: pre-inspect to get nonce, then login with the given credential hash.
 	 *
 	 * @param challenge - The credential hash to use for authentication
 	 * @returns The session token on success, or null if the server accepted the request but returned no token
 	 * @throws CloudAuthError when the server reports a permanent auth failure (wrong credentials, locked account)
 	 */
-	private async tryLogin(challenge: string): Promise<string | null> {
-		const preInsp = await this._post<PreInspectData>("/iam/pub/3/auth/pre-insp", { u: this.user });
+	private async tryLoginV3Challenge(challenge: string): Promise<string | null> {
+		const preInsp = await this._post<PreInspectData>(IAM_PRE_INSPECT_PATH, { u: this.user });
 
 		if (preInsp.status !== "0") {
 			throw new CloudAuthError(preInsp.message || "Pre-inspect failed", preInsp.status);
@@ -212,7 +354,7 @@ class CloudConnection {
 
 		const ch = salt ? await buildArgon2Challenge(this.credentialInput, salt) : challenge;
 
-		const result = await this._post<{ token?: string }>("/iam/pub/3/auth/login", {
+		const result = await this._post<{ token?: string }>(IAM_LOGIN_V3_PATH, {
 			u: this.user,
 			ch,
 			n: nonce,
@@ -223,6 +365,134 @@ class CloudConnection {
 		}
 
 		return result.data?.token ?? null;
+	}
+
+	/**
+	 * Resolve the regional API host for the configured user via region_c.
+	 * On success, updates this.baseUrl so all subsequent v0 + data-API requests
+	 * land on the right region. Failure is logged but non-fatal.
+	 */
+	private async discoverRegion(): Promise<void> {
+		try {
+			const result = await this._post<RegionData>(IAM_REGION_PATH, { email: this.user });
+			if (result.status !== "0" || !result.data) {
+				this.log(
+					`Cloud region_c: status=${result.status} message="${result.message ?? ""}" — keeping host ${this.baseUrl}`,
+				);
+				return;
+			}
+			const { login_url, dc } = result.data;
+			this.lastDc = typeof dc === "number" ? dc : null;
+			if (login_url && login_url !== this.baseUrl) {
+				this.log(`Cloud region_c: switching base URL ${this.baseUrl} → ${login_url} (dc=${dc})`);
+				this.baseUrl = login_url;
+			} else if (login_url) {
+				this.log(`Cloud region_c: confirmed host ${this.baseUrl} (dc=${dc})`);
+			} else {
+				this.log(`Cloud region_c: empty login_url, dc=${dc} — keeping host ${this.baseUrl}`);
+			}
+		} catch (err) {
+			this.log(`Cloud region_c: ${errorMessage(err)} — keeping host ${this.baseUrl}`);
+		}
+	}
+
+	/**
+	 * v0 flow: legacy login_c endpoint used by the S-Miles Installer and S-Miles
+	 * Home (com.hm.balcony) Android apps. Body is `{user_name, password}` where
+	 * password is the `<md5>.<base64-sha256>` challenge — exactly the first
+	 * challenge in `buildCredentialChallenges()`.
+	 */
+	private async tryLoginV0(): Promise<string | null> {
+		const password = this.credentials[0];
+		this.log(`Cloud login v0: POST ${IAM_LOGIN_V0_PATH} on ${this.baseUrl}`);
+		const result = await this._post<LoginV0Data>(IAM_LOGIN_V0_PATH, {
+			user_name: this.user,
+			password,
+		});
+		if (result.status !== "0") {
+			throw new CloudAuthError(result.message || "Login rejected (v0)", result.status);
+		}
+		return result.data?.token ?? null;
+	}
+
+	/**
+	 * Run a non-destructive diagnostic of the configured credentials: query
+	 * region_c and try BOTH v3 and v0 sequentially, return what each flow said.
+	 * Used by the admin UI's "Test cloud login" button so users can see exactly
+	 * which flow accepts their account — invaluable for forum bug reports.
+	 *
+	 * Does NOT mutate this.token or this.lastFlow — purely observational.
+	 */
+	async loginDiagnostics(): Promise<LoginAttemptResult[]> {
+		const attempts: LoginAttemptResult[] = [];
+		const startBase = this.baseUrl;
+		const savedToken = this.token;
+		const savedTokenTime = this.tokenTime;
+		const savedLastFlow = this.lastFlow;
+		const savedLastDc = this.lastDc;
+
+		// 1. region_c
+		try {
+			const regionResult = await this._post<RegionData>(IAM_REGION_PATH, { email: this.user });
+			attempts.push({
+				flow: "region",
+				host: startBase,
+				ok: regionResult.status === "0" && !!regionResult.data?.login_url,
+				status: regionResult.status,
+				message: regionResult.message,
+				dc: regionResult.data?.dc,
+			});
+			if (regionResult.status === "0" && regionResult.data?.login_url) {
+				this.baseUrl = regionResult.data.login_url;
+			}
+		} catch (err) {
+			attempts.push({ flow: "region", host: startBase, ok: false, message: errorMessage(err) });
+		}
+
+		// 2. v3 against the (possibly updated) host
+		try {
+			const token = await this.tryLoginV3();
+			attempts.push({ flow: "v3", host: this.baseUrl, ok: !!token, hasToken: !!token });
+		} catch (err) {
+			if (err instanceof CloudAuthError) {
+				attempts.push({
+					flow: "v3",
+					host: this.baseUrl,
+					ok: false,
+					status: err.code,
+					message: err.message,
+				});
+			} else {
+				attempts.push({ flow: "v3", host: this.baseUrl, ok: false, message: errorMessage(err) });
+			}
+		}
+
+		// 3. v0 against the same host
+		try {
+			const token = await this.tryLoginV0();
+			attempts.push({ flow: "v0", host: this.baseUrl, ok: !!token, hasToken: !!token });
+		} catch (err) {
+			if (err instanceof CloudAuthError) {
+				attempts.push({
+					flow: "v0",
+					host: this.baseUrl,
+					ok: false,
+					status: err.code,
+					message: err.message,
+				});
+			} else {
+				attempts.push({ flow: "v0", host: this.baseUrl, ok: false, message: errorMessage(err) });
+			}
+		}
+
+		// Restore state — diagnostics must not interfere with a real login.
+		this.baseUrl = startBase;
+		this.token = savedToken;
+		this.tokenTime = savedTokenTime;
+		this.lastFlow = savedLastFlow;
+		this.lastDc = savedLastDc;
+
+		return attempts;
 	}
 
 	/** Re-login if the current token is older than 1 hour. */
@@ -247,6 +517,7 @@ class CloudConnection {
 	/** Clear the current session token. */
 	disconnect(): void {
 		this.token = null;
+		this.lastFlow = null;
 	}
 
 	// --- Data endpoints ---
@@ -323,7 +594,7 @@ class CloudConnection {
 	}
 
 	private _postBinary(apiPath: string, body: Record<string, unknown>): Promise<Buffer> {
-		return postBinary(new URL(apiPath, BASE_URL).href, body, { token: this.token });
+		return postBinary(new URL(apiPath, this.baseUrl).href, body, { token: this.token });
 	}
 
 	/**
@@ -423,7 +694,7 @@ class CloudConnection {
 		apiPath: string,
 		body: Record<string, unknown>,
 	): Promise<CloudApiResponse<T>> {
-		return postJson<CloudApiResponse<T>>(new URL(apiPath, BASE_URL).href, body, { token: this.token });
+		return postJson<CloudApiResponse<T>>(new URL(apiPath, this.baseUrl).href, body, { token: this.token });
 	}
 }
 

@@ -38,6 +38,22 @@ Alle Wechselrichter im Cloud-Account werden automatisch erkannt. Keine manuelle 
 
 Beide Verbindungen können gleichzeitig aktiv sein. Lokale Daten haben Vorrang — Cloud-Daten werden eingetragen wenn die DTU offline ist (z.B. nachts).
 
+#### Account-Typen — S-Miles Installer / Enduser / Home
+
+Der Adapter akzeptiert Accounts aus allen drei offiziellen Hoymiles-Apps:
+
+- **S-Miles Installer** (`com.hm.hemaiInstall1`)
+- **S-Miles Enduser** (`com.hm.hemaiClient1`)
+- **S-Miles Home** (`com.hm.balcony`)
+
+Der Login probiert zuerst den neueren v3-Endpunkt (auch von `global.hoymiles.com` genutzt) und fällt bei Ablehnung auf den klassischen v0-Endpunkt mit Region-Discovery zurück. S-Miles-Home-Konten, die bisher `Login failed: all authentication strategies rejected` produzierten, sollten über den v0-Fallback funktionieren.
+
+> **Hinweis:** `dataeu.hoymiles.com:10081` ist der EU-Cloud-Relay-Server, an den DTUs ihre Daten pushen — **kein** User-Login-Server. Der Adapter regelt das Cloud-Relay automatisch (siehe *Cloud-Relay*).
+
+#### Cloud-Login testen
+
+Wenn unsicher: Knopf **Cloud-Login testen** neben dem Passwortfeld klicken. Er probiert beide Login-Verfahren einmal mit den aktuellen Zugangsdaten durch, zeigt welches Verfahren den Account akzeptiert und schreibt das Ergebnis ins Adapter-Log — ideal für einen Forum-Bug-Report. Der Test speichert keinen Token und ändert keinen Adapter-Zustand.
+
 ## Verbindungsmodi
 
 Der Adapter unterstützt verschiedene Verbindungsmodi je nach Konfiguration:

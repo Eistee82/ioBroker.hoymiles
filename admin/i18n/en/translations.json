@@ -24,5 +24,7 @@
     "cloudUserRequired": "Email address is required",
     "cloudPassword": "S-Miles password",
     "cloudPasswordRequired": "Password is required",
-    "cloudInfo": "Uses the same account as the Hoymiles S-Miles app. Your password is stored encrypted. The cloud provides data that is not available locally, such as monthly/yearly energy totals and per-inverter power when not connected locally."
+    "cloudInfo": "Uses the same account as the Hoymiles S-Miles app. Your password is stored encrypted. The cloud provides data that is not available locally, such as monthly/yearly energy totals and per-inverter power when not connected locally.",
+    "testCloudLoginButton": "Test cloud login",
+    "testCloudLoginHelp": "Tries both authentication flows (S-Miles web/Installer and S-Miles Home) and reports which one accepts your account. Useful when 'all authentication strategies rejected' appears in the log. The result is shown in a popup and also written to the adapter log."
 }

@@ -9,6 +9,9 @@ node_modules/
 .claude/
 CLAUDE.md
 *.code-workspace
+.dev-server/
+.playwright-mcp/
+.serena/
 
 # Logs
 *.log

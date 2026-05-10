@@ -55,3 +55,14 @@ export const CLOUD_DISCOVER_CONCURRENCY = 5;
 // Command validation bounds
 export const POWER_LIMIT_MIN = 2;
 export const POWER_LIMIT_MAX = 100;
+
+// Cloud API hosts and auth paths
+export const CLOUD_HOST_DEFAULT = "https://neapi.hoymiles.com";
+export const CLOUD_HOST_EU = "https://euapi.hoymiles.com";
+// v3 auth — used by S-Miles Cloud web portal and historically by this adapter.
+export const IAM_PRE_INSPECT_PATH = "/iam/pub/3/auth/pre-insp";
+export const IAM_LOGIN_V3_PATH = "/iam/pub/3/auth/login";
+// v0 auth — used by the S-Miles Installer and S-Miles Home (com.hm.balcony) apps.
+// region_c maps an email to its regional login_url; login_c is the actual login.
+export const IAM_REGION_PATH = "/iam/pub/0/c/region_c";
+export const IAM_LOGIN_V0_PATH = "/iam/pub/0/c/login_c";

@@ -24,5 +24,7 @@
     "slowPollFactorHelp": "I dati di configurazione e allarmi cambiano raramente. Vengono interrogati solo ogni N cicli di dati per ridurre il carico. Predefinito: 6 (= ogni 30 secondi con intervallo di 5s).",
     "tabCloud": "Cloud (S-Miles)",
     "tabLocal": "Connessione locale",
+    "testCloudLoginButton": "Testa login cloud",
+    "testCloudLoginHelp": "Prova entrambi i metodi di autenticazione (S-Miles Web/Installer e S-Miles Home) e segnala quale accetta il tuo account. Utile quando appare 'all authentication strategies rejected' nel log. Il risultato viene mostrato in un popup e scritto anche nel log dell'adattatore.",
     "testConnectionButton": "Testa connessione"
 }

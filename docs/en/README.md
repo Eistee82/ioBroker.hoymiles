@@ -38,6 +38,22 @@ All inverters in your cloud account are automatically discovered. No manual seri
 
 Both connections can be enabled simultaneously. Local data has priority — cloud data fills in when the DTU is offline (e.g. at night).
 
+#### Account types — S-Miles Installer / Enduser / Home
+
+The adapter accepts accounts from all three official Hoymiles apps:
+
+- **S-Miles Installer** (`com.hm.hemaiInstall1`)
+- **S-Miles Enduser** (`com.hm.hemaiClient1`)
+- **S-Miles Home** (`com.hm.balcony`)
+
+The login flow tries the modern v3 endpoint (also used by `global.hoymiles.com`) first and falls back to the legacy v0 endpoint with regional discovery if v3 rejects the credentials. S-Miles Home accounts that previously yielded `Login failed: all authentication strategies rejected` should work via the v0 fallback.
+
+> **Note:** `dataeu.hoymiles.com:10081` is the European cloud-relay endpoint that DTUs push data to — it is **not** a user login server. The adapter handles cloud-relay automatically (see *Cloud Relay*).
+
+#### Test cloud login
+
+When in doubt, click the **Test cloud login** button next to the password field. It runs both authentication flows once with your current credentials, prints which one accepts your account, and writes the result to the adapter log so you can include it in a forum bug report. The test does not store a token or change adapter state.
+
 ## Connection Modes
 
 The adapter supports several connection modes depending on the configuration:

@@ -139,6 +139,9 @@ Cloud stations create aggregated device nodes (e.g. `hoymiles.0.station-12345.*`
 - (@Eistee82) Stop retry loop on permanent cloud auth errors to prevent Hoymiles account lockout
 - (@Eistee82) Add `info.cloudLastError` state and raise an ioBroker alert notification with reset instructions on permanent cloud auth errors
 - (@Eistee82) Bump axios to 1.15.0 and protobufjs to 8.0.1
+- (@Eistee82) Cloud login falls back to the legacy v0 endpoint with regional discovery (region_c → login_c) when the v3 web-portal flow rejects the credentials, so S-Miles Home (com.hm.balcony) accounts can sign in
+- (@Eistee82) Add "Test cloud login" button in the admin UI that runs both auth flows once and reports which one accepts the account — useful for diagnosing forum reports of "all authentication strategies rejected"
+- (@Eistee82) Add `scripts/test-cloud-login.mjs` standalone smoke script for the same diagnostic from the command line
 
 ### 0.3.4 (2026-04-08)
 - (@Eistee82) Fix disabled property type in jsonConfig table items (string, not boolean)
