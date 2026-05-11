@@ -46,13 +46,18 @@ The adapter accepts accounts from all three official Hoymiles apps:
 - **S-Miles Enduser** (`com.hm.hemaiClient1`)
 - **S-Miles Home** (`com.hm.balcony`)
 
-The login flow tries the modern v3 endpoint (also used by `global.hoymiles.com`) first and falls back to the legacy v0 endpoint with regional discovery if v3 rejects the credentials. S-Miles Home accounts that previously yielded `Login failed: all authentication strategies rejected` should work via the v0 fallback.
+Login is a single v3 flow (`region_c → pre-insp → login`). The pre-inspect step tells the adapter which account type it is dealing with:
+
+- **`v=3`** (with salt) → **S-Miles Home** account. Adapter switches to the *home* profile and uses the `/pvmc/.../*_c` data API. Login uses Argon2id with the parameters baked into the S-Miles Home Android app (`t=3, m=32 MiB, p=1, hashLen=32, V13`).
+- **`v=2`** (no salt) → **S-Miles Installer / Cloud-Web Enduser** account — the same accounts that work on `global.hoymiles.com`. Adapter stays on the *installer* profile and uses the existing `/pvm/...` data API. Login uses the classic `md5hex(password).sha256base64(password)` challenge.
+
+Both profiles can call `/pvmc/.../*_c` endpoints; only home accounts are restricted to them (web-API responds with HTTP 403 for home tokens). The home-profile API delivers fewer top-level fields per station than the web-profile API (no `latitude`/`longitude`/`address`/`local_time`/`status`/`warn_data`/firmware version strings), so for home accounts the adapter does **not** create the corresponding states — they only appear when the underlying response actually contains the value.
 
 > **Note:** `dataeu.hoymiles.com:10081` is the European cloud-relay endpoint that DTUs push data to — it is **not** a user login server. The adapter handles cloud-relay automatically (see *Cloud Relay*).
 
 #### Test cloud login
 
-When in doubt, click the **Test cloud login** button next to the password field. It runs both authentication flows once with your current credentials, prints which one accepts your account, and writes the result to the adapter log so you can include it in a forum bug report. The test does not store a token or change adapter state.
+When in doubt, click the **Test cloud login** button next to the password field. It runs the three login phases once with your current credentials (`region_c`, `pre-insp`, `login`) and reports which profile the server assigned (`installer` / `home`), whether a salt is present, and whether the login produced a token. The result is logged so you can paste it into a forum bug report. The test does not store a token or change adapter state.
 
 ## Connection Modes
 

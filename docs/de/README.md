@@ -46,13 +46,18 @@ Der Adapter akzeptiert Accounts aus allen drei offiziellen Hoymiles-Apps:
 - **S-Miles Enduser** (`com.hm.hemaiClient1`)
 - **S-Miles Home** (`com.hm.balcony`)
 
-Der Login probiert zuerst den neueren v3-Endpunkt (auch von `global.hoymiles.com` genutzt) und fällt bei Ablehnung auf den klassischen v0-Endpunkt mit Region-Discovery zurück. S-Miles-Home-Konten, die bisher `Login failed: all authentication strategies rejected` produzierten, sollten über den v0-Fallback funktionieren.
+Login ist ein einzelner v3-Flow (`region_c → pre-insp → login`). Der Pre-Inspect-Schritt zeigt dem Adapter, welchen Konto-Typ er vor sich hat:
+
+- **`v=3`** (mit Salt) → **S-Miles-Home-Konto**. Adapter wechselt ins *home*-Profil und nutzt die `/pvmc/.../*_c`-Daten-API. Login per Argon2id mit den Parametern aus der S-Miles-Home-Android-App (`t=3, m=32 MiB, p=1, hashLen=32, V13`).
+- **`v=2`** (ohne Salt) → **S-Miles-Installer- / Cloud-Web-Endkunden-Konto** — dieselben Konten, mit denen man sich auf `global.hoymiles.com` einloggen kann. Adapter bleibt im *installer*-Profil und nutzt die bisherige `/pvm/...`-Daten-API. Login per klassischer `md5hex(password).sha256base64(password)`-Challenge.
+
+Beide Profile können die `/pvmc/.../*_c`-Endpoints aufrufen; nur Home-Konten sind darauf beschränkt (die `/pvm/...`-Web-API antwortet mit HTTP 403 auf Home-Token). Die home-Profil-API liefert pro Anlage weniger Felder als die installer-Profil-API (kein `latitude`/`longitude`/`address`/`local_time`/`status`/`warn_data`/Firmware-Versionsstring), deshalb legt der Adapter für Home-Konten die entsprechenden States **nicht** an — sie erscheinen nur, wenn die jeweilige Antwort den Wert tatsächlich enthält.
 
 > **Hinweis:** `dataeu.hoymiles.com:10081` ist der EU-Cloud-Relay-Server, an den DTUs ihre Daten pushen — **kein** User-Login-Server. Der Adapter regelt das Cloud-Relay automatisch (siehe *Cloud-Relay*).
 
 #### Cloud-Login testen
 
-Wenn unsicher: Knopf **Cloud-Login testen** neben dem Passwortfeld klicken. Er probiert beide Login-Verfahren einmal mit den aktuellen Zugangsdaten durch, zeigt welches Verfahren den Account akzeptiert und schreibt das Ergebnis ins Adapter-Log — ideal für einen Forum-Bug-Report. Der Test speichert keinen Token und ändert keinen Adapter-Zustand.
+Wenn unsicher: Knopf **Cloud-Login testen** neben dem Passwortfeld klicken. Er läuft die drei Login-Phasen einmal mit den aktuellen Zugangsdaten durch (`region_c`, `pre-insp`, `login`) und meldet, welches Profil der Server vergibt (`installer` / `home`), ob ein Salt geliefert wurde und ob der Login einen Token produziert hat. Das Ergebnis steht im Adapter-Log — gut für Forum-Bug-Reports. Der Test speichert keinen Token und ändert keinen Adapter-Zustand.
 
 ## Verbindungsmodi
 

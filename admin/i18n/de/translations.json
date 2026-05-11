@@ -25,6 +25,6 @@
     "tabCloud": "Cloud (S-Miles)",
     "tabLocal": "Lokale Verbindung",
     "testCloudLoginButton": "Cloud-Login testen",
-    "testCloudLoginHelp": "Probiert beide Login-Verfahren (S-Miles Web/Installer und S-Miles Home) und zeigt, welches deinen Account akzeptiert. Hilfreich, wenn im Log 'all authentication strategies rejected' steht. Das Ergebnis erscheint als Popup und wird zusätzlich ins Adapter-Log geschrieben.",
+    "testCloudLoginHelp": "Läuft alle drei Login-Phasen durch (region_c, pre-insp, login) und meldet, welches Konto-Profil der Server zuweist (installer / home), ob ein Salt vorhanden ist und ob der Login einen Token produziert hat. Das Ergebnis erscheint als Popup und wird zusätzlich ins Adapter-Log geschrieben — gut für Forum-Bug-Reports.",
     "testConnectionButton": "Verbindung testen"
 }

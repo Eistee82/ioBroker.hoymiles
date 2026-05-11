@@ -59,10 +59,21 @@ export const POWER_LIMIT_MAX = 100;
 // Cloud API hosts and auth paths
 export const CLOUD_HOST_DEFAULT = "https://neapi.hoymiles.com";
 export const CLOUD_HOST_EU = "https://euapi.hoymiles.com";
-// v3 auth — used by S-Miles Cloud web portal and historically by this adapter.
+// v3 auth — region_c first to get the regional host + dc, then pre-insp + login.
+// pre-insp may return a salt (`a`) and `v`. v=3 + salt → Argon2id challenge
+// (S-Miles Home / com.hm.balcony accounts); otherwise the legacy md5/sha challenge
+// works (S-Miles Cloud Web / Installer accounts). v0 was tried as a fallback in
+// older adapter versions — server now rejects it for Home accounts with "app version
+// is low", and Web accounts succeed via v3 anyway, so v0 was removed.
+export const IAM_REGION_PATH = "/iam/pub/0/c/region_c";
 export const IAM_PRE_INSPECT_PATH = "/iam/pub/3/auth/pre-insp";
 export const IAM_LOGIN_V3_PATH = "/iam/pub/3/auth/login";
-// v0 auth — used by the S-Miles Installer and S-Miles Home (com.hm.balcony) apps.
-// region_c maps an email to its regional login_url; login_c is the actual login.
-export const IAM_REGION_PATH = "/iam/pub/0/c/region_c";
-export const IAM_LOGIN_V0_PATH = "/iam/pub/0/c/login_c";
+
+// User-Agent identifies the request as coming from the S-Miles Home Android app
+// (com.hm.balcony). Format from HttpUtils.m() in the decompiled APK 2.9.0:
+//   sma/ad/<appVersion>/<aboutUsTid>/<dc>
+// where <aboutUsTid>=159 (HOYMILES_COM). v3 endpoints reject requests without a
+// valid app-style UA; `_c` endpoints accept tokens from any account type.
+export const APP_USER_AGENT_PREFIX = "sma/ad";
+export const APP_VERSION = "2.9.0";
+export const APP_TID = 159;

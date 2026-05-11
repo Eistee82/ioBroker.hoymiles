@@ -2,7 +2,7 @@ import CloudConnection, { CloudAuthError } from "./cloudConnection.js";
 import CloudPoller from "./cloudPoller.js";
 import DeviceContext, { type HoymilesAdapter } from "./deviceContext.js";
 import type { ProtobufHandler } from "./protobufHandler.js";
-import { stationChannels, stationStates } from "./stateDefinitions.js";
+import { stationChannels } from "./stateDefinitions.js";
 import { CLOUD_DISCOVER_CONCURRENCY, CLOUD_RETRY_INITIAL_MS, CLOUD_RETRY_MAX_MS } from "./constants.js";
 import { errorMessage, mapLimit } from "./utils.js";
 
@@ -402,25 +402,10 @@ class CloudManager {
 			),
 		);
 
-		await Promise.all(
-			stationStates.map(def => {
-				const common: Partial<ioBroker.StateCommon> = {
-					name: def.name,
-					type: def.type,
-					role: def.role,
-					unit: def.unit || "",
-					read: true,
-					write: false,
-					def: def.type === "boolean" ? false : def.type === "number" ? 0 : "",
-					states: def.states,
-				};
-				return this.adapter.extendObjectAsync(`${deviceId}.${def.id}`, {
-					type: "state",
-					common: common as ioBroker.StateCommon,
-					native: {},
-				});
-			}),
-		);
+		// States used to be created up-front from `stationStates` here. Now they are
+		// created on demand by the poller's `writeStationState` helper — only when the
+		// API actually delivers a value. That way Home accounts (which lack
+		// latitude/longitude/address/status/etc.) don't see dangling zero/empty states.
 
 		this.stationDevices.add(stationId);
 		this.adapter.log.info(`Station device created: ${stationName} (${deviceId})`);

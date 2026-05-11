@@ -31,14 +31,20 @@ async function main() {
 	const cloud = new CloudConnection(user, password, log);
 
 	const results = await cloud.loginDiagnostics();
-	console.log("\n==> Per-flow results:");
+	console.log("\n==> Per-phase results:");
 	for (const r of results) {
-		const head = `${r.flow.padEnd(7)} @ ${new URL(r.host).host}`;
+		const head = `${r.flow.padEnd(8)} @ ${new URL(r.host).host}`;
 		if (r.flow === "region") {
 			console.log(
 				r.ok
-					? `  ${head}  OK     dc=${r.dc ?? "n/a"}`
-					: `  ${head}  FAIL   ${r.status ? `status=${r.status} ` : ""}${r.message ?? ""}`,
+					? `  ${head}  OK    dc=${r.dc ?? "n/a"}`
+					: `  ${head}  FAIL  ${r.status ? `status=${r.status} ` : ""}${r.message ?? ""}`,
+			);
+		} else if (r.flow === "preInsp") {
+			console.log(
+				r.ok
+					? `  ${head}  OK    v=${r.v ?? "?"} profile=${r.profile ?? "?"} salt=${r.saltPresent ? "yes" : "no"}`
+					: `  ${head}  FAIL  ${r.status ? `status=${r.status} ` : ""}${r.message ?? ""}`,
 			);
 		} else {
 			console.log(
@@ -49,17 +55,17 @@ async function main() {
 		}
 	}
 
-	const accepted = results.find((r) => (r.flow === "v3" || r.flow === "v0") && r.ok);
+	const accepted = results.find((r) => r.flow === "login" && r.ok);
 	if (!accepted) {
-		console.error("\nNeither v3 nor v0 accepted the credentials. Cloud login is not possible with this account.");
+		console.error("\nLogin did not produce a token — see per-phase summary above.");
 		process.exit(1);
 	}
 
-	// At least one flow worked — promote to a real login so we can fetch stations
-	// as an end-to-end sanity check (data API is the same for both flows).
-	console.log(`\n==> ${accepted.flow.toUpperCase()} accepted the account. Fetching station list to verify data API ...`);
+	// Login succeeded — promote to a real login so we can fetch stations as an end-to-end sanity check.
+	console.log(`\n==> Login phase accepted. Now running a real login + station list ...`);
 	try {
 		await cloud.login();
+		console.log(`    real login profile=${cloud.getProfile() ?? "?"} dc=${cloud.getLastDc() ?? "n/a"}`);
 		const stations = await cloud.getStationList();
 		console.log(`    found ${stations.length} station(s):`);
 		for (const s of stations) {

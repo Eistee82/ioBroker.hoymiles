@@ -465,6 +465,11 @@ class Hoymiles extends utils.Adapter {
 							? `${head}: ok (dc=${r.dc ?? "n/a"})`
 							: `${head}: failed${r.status ? ` status=${r.status}` : ""}${r.message ? ` "${r.message}"` : ""}`;
 					}
+					if (r.flow === "preInsp") {
+						return r.ok
+							? `${head}: ok (v=${r.v ?? "?"} profile=${r.profile ?? "?"} salt=${r.saltPresent ? "yes" : "no"})`
+							: `${head}: failed${r.status ? ` status=${r.status}` : ""}${r.message ? ` "${r.message}"` : ""}`;
+					}
 					return r.ok
 						? `${head}: ACCEPTED (token received)`
 						: `${head}: rejected${r.status ? ` status=${r.status}` : ""}${r.message ? ` "${r.message}"` : ""}`;
@@ -473,7 +478,7 @@ class Hoymiles extends utils.Adapter {
 
 			this.log.info(`[testCloudLogin] result for ${user}: ${summary}`);
 
-			const anyAccepted = results.some(r => (r.flow === "v3" || r.flow === "v0") && r.ok);
+			const anyAccepted = results.some(r => r.flow === "login" && r.ok);
 			this.reply(obj, {
 				result: {
 					ok: anyAccepted,
