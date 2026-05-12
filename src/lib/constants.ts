@@ -60,14 +60,20 @@ export const POWER_LIMIT_MAX = 100;
 export const CLOUD_HOST_DEFAULT = "https://neapi.hoymiles.com";
 export const CLOUD_HOST_EU = "https://euapi.hoymiles.com";
 // v3 auth — region_c first to get the regional host + dc, then pre-insp + login.
-// pre-insp may return a salt (`a`) and `v`. v=3 + salt → Argon2id challenge
-// (S-Miles Home / com.hm.balcony accounts); otherwise the legacy md5/sha challenge
-// works (S-Miles Cloud Web / Installer accounts). v0 was tried as a fallback in
-// older adapter versions — server now rejects it for Home accounts with "app version
-// is low", and Web accounts succeed via v3 anyway, so v0 was removed.
+// pre-insp returns a nonce, optional salt (`a`), and `v`. Until 2026 we used `v` as
+// the profile signal (v=3 ⇒ home, v=2 ⇒ installer), but Hoymiles since unified all
+// accounts onto Argon2id (v=3 + salt), so `v` no longer maps to the data-API surface.
+// The authoritative profile decision now happens AFTER login via a probe against
+// PROFILE_PROBE_PATH; see CloudProfile in cloudConnection.ts. v0 fallback was dropped
+// for the same reason — the server now uniformly rejects it with "app version is low".
 export const IAM_REGION_PATH = "/iam/pub/0/c/region_c";
 export const IAM_PRE_INSPECT_PATH = "/iam/pub/3/auth/pre-insp";
 export const IAM_LOGIN_V3_PATH = "/iam/pub/3/auth/login";
+// Profile probe — reuses the same /pvm/...select_by_page that the installer data
+// surface would call. Installer/Cloud-Web accounts get status=0 with the station list;
+// home accounts are rejected by the server ("can only be used for logging in to the
+// S-Miles Home app" or similar). Cheapest endpoint that gives a definitive answer.
+export const PROFILE_PROBE_PATH = "/pvm/api/0/station/select_by_page";
 
 // User-Agent identifies the request as coming from the S-Miles Home Android app
 // (com.hm.balcony). Format from HttpUtils.m() in the decompiled APK 2.9.0:

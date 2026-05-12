@@ -4,10 +4,10 @@
 // Usage:
 //   CLOUD_USER=you@example.com CLOUD_PASS=yourpassword node scripts/test-cloud-login.mjs
 //
-// Runs region_c → v3 → v0 against neapi.hoymiles.com (and follows region_c
-// redirects to a different regional host if the server returns one).
-// Reports which flow accepts the credentials and, when at least one flow
-// produced a token, also dumps the station list as a sanity check.
+// Runs region_c → pre-insp → v3 login → profile probe against neapi.hoymiles.com
+// (and follows region_c redirects to a different regional host if the server
+// returns one). Reports each phase and, when login produced a token, also dumps
+// the station list as a sanity check.
 //
 // No write actions, no token persistence — purely diagnostic. Safe to run
 // against a real account; the password is hashed locally before transmission
@@ -43,8 +43,14 @@ async function main() {
 		} else if (r.flow === "preInsp") {
 			console.log(
 				r.ok
-					? `  ${head}  OK    v=${r.v ?? "?"} profile=${r.profile ?? "?"} salt=${r.saltPresent ? "yes" : "no"}`
+					? `  ${head}  OK    v=${r.v ?? "?"} salt=${r.saltPresent ? "yes" : "no"}`
 					: `  ${head}  FAIL  ${r.status ? `status=${r.status} ` : ""}${r.message ?? ""}`,
+			);
+		} else if (r.flow === "probe") {
+			console.log(
+				r.ok
+					? `  ${head}  OK    profile=${r.profile ?? "?"}${r.status ? ` (status=${r.status})` : ""}`
+					: `  ${head}  FAIL  ${r.message ?? ""}`,
 			);
 		} else {
 			console.log(

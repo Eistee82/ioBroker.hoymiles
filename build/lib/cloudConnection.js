@@ -1,6 +1,6 @@
 import { postJson, postBinary } from "./httpClient.js";
 import { parseChartResponse } from "./chartParser.js";
-import { TOKEN_MAX_AGE_MS, ENSURE_TOKEN_TIMEOUT_MS, CLOUD_HOST_DEFAULT, CLOUD_HOST_EU, IAM_PRE_INSPECT_PATH, IAM_LOGIN_V3_PATH, IAM_REGION_PATH, APP_USER_AGENT_PREFIX, APP_VERSION, APP_TID, } from "./constants.js";
+import { TOKEN_MAX_AGE_MS, ENSURE_TOKEN_TIMEOUT_MS, CLOUD_HOST_DEFAULT, CLOUD_HOST_EU, IAM_PRE_INSPECT_PATH, IAM_LOGIN_V3_PATH, IAM_REGION_PATH, PROFILE_PROBE_PATH, APP_USER_AGENT_PREFIX, APP_VERSION, APP_TID, } from "./constants.js";
 import { errorMessage, withTimeout, buildCredentialChallenges, buildArgon2Challenge } from "./utils.js";
 const EU_WEATHER_URL = `${CLOUD_HOST_EU}/tpa/api/0/weather/get`;
 function assertData(data, label) {
@@ -87,6 +87,14 @@ class CloudConnection {
         }
         this.token = token;
         this.tokenTime = Date.now();
+        try {
+            this.profile = await this.probeDataProfile();
+        }
+        catch (err) {
+            this.token = null;
+            this.tokenTime = 0;
+            throw err;
+        }
         this.log(`Cloud login success: profile=${this.profile} dc=${this.lastDc ?? "n/a"} host=${this.baseUrl}`);
         return token;
     }
@@ -97,14 +105,22 @@ class CloudConnection {
         }
         const preData = assertData(preInsp.data, "Pre-inspect");
         const { n: nonce, a: salt, v } = preData;
-        this.profile = v === 3 ? "home" : "installer";
         const ch = salt ? await buildArgon2Challenge(this.credentialInput, salt) : this.credentials[0];
-        this.log(`Cloud pre-insp: v=${v ?? "?"} saltPresent=${!!salt} profile=${this.profile} dc=${preData.dc ?? "n/a"}`);
+        this.log(`Cloud pre-insp: v=${v ?? "?"} saltPresent=${!!salt} dc=${preData.dc ?? "n/a"}`);
         const result = await this._post(IAM_LOGIN_V3_PATH, { u: this.user, ch, n: nonce }, this.baseUrl);
         if (result.status !== "0") {
             throw new CloudAuthError(result.message || "Login rejected", result.status);
         }
         return result.data?.token ?? null;
+    }
+    async probeDataProfile() {
+        const result = await this._post(PROFILE_PROBE_PATH, { page: 1, page_size: 1 }, this.baseUrl);
+        if (result.status === "0") {
+            this.log(`Cloud profile probe: /pvm accepted → installer`);
+            return "installer";
+        }
+        this.log(`Cloud profile probe: /pvm rejected (status=${result.status} msg="${result.message ?? ""}") → home`);
+        return "home";
     }
     async discoverRegion() {
         try {
@@ -163,35 +179,38 @@ class CloudConnection {
                 const preInsp = await this._post(IAM_PRE_INSPECT_PATH, { u: this.user }, this.baseUrl);
                 preInspOk = preInsp.status === "0" && preInsp.data != null;
                 preData = preInsp.data;
-                const v = preData?.v;
                 attempts.push({
                     flow: "preInsp",
                     host: this.baseUrl,
                     ok: preInspOk,
                     status: preInsp.status,
                     message: preInsp.message,
-                    v,
+                    v: preData?.v,
                     saltPresent: !!preData?.a,
-                    profile: preInspOk && v != null ? (v === 3 ? "home" : "installer") : undefined,
                 });
             }
             catch (err) {
                 attempts.push({ flow: "preInsp", host: this.baseUrl, ok: false, message: errorMessage(err) });
             }
+            let probeToken = null;
             if (preInspOk && preData?.n) {
                 try {
                     const ch = preData.a
                         ? await buildArgon2Challenge(this.credentialInput, preData.a)
                         : this.credentials[0];
                     const result = await this._post(IAM_LOGIN_V3_PATH, { u: this.user, ch, n: preData.n }, this.baseUrl);
+                    const ok = result.status === "0" && !!result.data?.token;
                     attempts.push({
                         flow: "login",
                         host: this.baseUrl,
-                        ok: result.status === "0" && !!result.data?.token,
+                        ok,
                         status: result.status,
                         message: result.message,
                         hasToken: !!result.data?.token,
                     });
+                    if (ok) {
+                        probeToken = result.data?.token ?? null;
+                    }
                 }
                 catch (err) {
                     if (err instanceof CloudAuthError) {
@@ -206,6 +225,24 @@ class CloudConnection {
                     else {
                         attempts.push({ flow: "login", host: this.baseUrl, ok: false, message: errorMessage(err) });
                     }
+                }
+            }
+            if (probeToken) {
+                this.token = probeToken;
+                try {
+                    const probeResult = await this._post(PROFILE_PROBE_PATH, { page: 1, page_size: 1 }, this.baseUrl);
+                    const accepted = probeResult.status === "0";
+                    attempts.push({
+                        flow: "probe",
+                        host: this.baseUrl,
+                        ok: true,
+                        status: probeResult.status,
+                        message: probeResult.message,
+                        profile: accepted ? "installer" : "home",
+                    });
+                }
+                catch (err) {
+                    attempts.push({ flow: "probe", host: this.baseUrl, ok: false, message: errorMessage(err) });
                 }
             }
         }

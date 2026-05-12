@@ -41,6 +41,7 @@ export const CLOUD_HOST_EU = "https://euapi.hoymiles.com";
 export const IAM_REGION_PATH = "/iam/pub/0/c/region_c";
 export const IAM_PRE_INSPECT_PATH = "/iam/pub/3/auth/pre-insp";
 export const IAM_LOGIN_V3_PATH = "/iam/pub/3/auth/login";
+export const PROFILE_PROBE_PATH = "/pvm/api/0/station/select_by_page";
 export const APP_USER_AGENT_PREFIX = "sma/ad";
 export const APP_VERSION = "2.9.0";
 export const APP_TID = 159;

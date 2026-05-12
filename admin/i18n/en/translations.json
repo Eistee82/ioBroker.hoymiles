@@ -26,5 +26,5 @@
     "cloudPasswordRequired": "Password is required",
     "cloudInfo": "Uses the same account as the Hoymiles S-Miles app. Your password is stored encrypted. The cloud provides data that is not available locally, such as monthly/yearly energy totals and per-inverter power when not connected locally.",
     "testCloudLoginButton": "Test cloud login",
-    "testCloudLoginHelp": "Runs all three login phases (region_c, pre-insp, login) and reports which account profile the server assigned (installer / home), whether a salt is present, and whether the login produced a token. The result is shown in a popup and also written to the adapter log — useful for forum bug reports."
+    "testCloudLoginHelp": "Runs all four login phases (region_c, pre-insp, login, probe) and reports the v / salt from pre-inspect, whether the login produced a token, and which profile the probe assigned (installer / home). The result is shown in a popup and also written to the adapter log — useful for forum bug reports."
 }

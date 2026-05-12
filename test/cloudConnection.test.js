@@ -293,6 +293,9 @@ describe("cloudConnection – region_c discovery", function () {
 			if (apiPath === "/iam/pub/3/auth/login") {
 				return { status: "0", data: { token: "tok-eu" } };
 			}
+			if (apiPath === "/pvm/api/0/station/select_by_page") {
+				return { status: "0", data: { list: [] } };
+			}
 			return { status: "1", message: "unexpected" };
 		};
 		const cloud = new CloudConnection("eu@x", "pw");
@@ -334,6 +337,9 @@ describe("cloudConnection – region_c discovery", function () {
 			if (apiPath === "/iam/pub/3/auth/login") {
 				return { status: "0", data: { token: "tok-default" } };
 			}
+			if (apiPath === "/pvm/api/0/station/select_by_page") {
+				return { status: "0", data: { list: [] } };
+			}
 			return { status: "1", message: "unexpected" };
 		};
 		const cloud = new CloudConnection("u@x", "pw", m => log.push(m));
@@ -348,9 +354,9 @@ describe("cloudConnection – region_c discovery", function () {
 });
 
 // ============================================================
-// cloudConnection – v3 login (single flow, profile detection from pre-insp.v)
+// cloudConnection – v3 login + post-login probe (profile decision)
 // ============================================================
-describe("cloudConnection – v3 login + profile detection", function () {
+describe("cloudConnection – v3 login + profile probe", function () {
 	let originalPost;
 
 	beforeEach(function () {
@@ -361,7 +367,7 @@ describe("cloudConnection – v3 login + profile detection", function () {
 		CloudConnection.prototype._post = originalPost;
 	});
 
-	it("legacy v=2 (no salt) → installer profile, classic challenge", async function () {
+	it("legacy v=2 (no salt) + probe accepts → installer profile, classic challenge", async function () {
 		const calls = [];
 		const bodies = [];
 		CloudConnection.prototype._post = async function (apiPath, body) {
@@ -376,6 +382,9 @@ describe("cloudConnection – v3 login + profile detection", function () {
 			if (apiPath === "/iam/pub/3/auth/login") {
 				return { status: "0", data: { token: "tok-installer" } };
 			}
+			if (apiPath === "/pvm/api/0/station/select_by_page") {
+				return { status: "0", data: { list: [] } };
+			}
 			throw new Error(`unexpected ${apiPath}`);
 		};
 		const cloud = new CloudConnection("u@x", "pw");
@@ -384,6 +393,8 @@ describe("cloudConnection – v3 login + profile detection", function () {
 		assert.strictEqual(cloud.getProfile(), "installer");
 		// v0 endpoint must never be called.
 		assert.ok(!calls.includes("/iam/pub/0/c/login_c"), "v0 must not be called");
+		// Probe must be called after login, against the regional host.
+		assert.ok(calls.includes("/pvm/api/0/station/select_by_page"), "probe must be called");
 		// Login body uses the legacy md5.sha256base64 challenge (single dotted string).
 		const loginBody = bodies[calls.indexOf("/iam/pub/3/auth/login")];
 		assert.strictEqual(typeof loginBody.ch, "string");
@@ -391,7 +402,7 @@ describe("cloudConnection – v3 login + profile detection", function () {
 		assert.strictEqual(loginBody.n, "nonce-legacy");
 	});
 
-	it("v=3 (with salt) → home profile, Argon2id hex hash", async function () {
+	it("v=3 + Argon2 + probe accepts → installer profile (2026 cloud: even Web/Installer get v=3)", async function () {
 		const calls = [];
 		const bodies = [];
 		CloudConnection.prototype._post = async function (apiPath, body) {
@@ -401,14 +412,41 @@ describe("cloudConnection – v3 login + profile detection", function () {
 				return { status: "0", data: { login_url: "https://euapi.hoymiles.com", dc: 1 } };
 			}
 			if (apiPath === "/iam/pub/3/auth/pre-insp") {
-				// 16-byte salt expressed as 32-char hex string — what the home pre-insp returns live.
-				return {
-					status: "0",
-					data: { n: "nonce-home", a: "46530f67d9c6768975e9ce7edd412df8", v: 3, dc: 1 },
-				};
+				return { status: "0", data: { n: "nonce", a: "46530f67d9c6768975e9ce7edd412df8", v: 3, dc: 1 } };
+			}
+			if (apiPath === "/iam/pub/3/auth/login") {
+				return { status: "0", data: { token: "tok-installer-v3" } };
+			}
+			if (apiPath === "/pvm/api/0/station/select_by_page") {
+				return { status: "0", data: { list: [{ id: 123, name: "Balcony" }] } };
+			}
+			throw new Error(`unexpected ${apiPath}`);
+		};
+		const cloud = new CloudConnection("installer@x", "pw");
+		const token = await cloud.login();
+		assert.strictEqual(token, "tok-installer-v3");
+		assert.strictEqual(cloud.getProfile(), "installer", "probe acceptance must override v=3 Argon2 hint");
+		const loginBody = bodies[calls.indexOf("/iam/pub/3/auth/login")];
+		assert.match(loginBody.ch, /^[a-f0-9]{64}$/, "Argon2 hex hash regardless of profile");
+	});
+
+	it("v=3 + Argon2 + probe rejected → home profile (the real S-Miles Home case)", async function () {
+		const calls = [];
+		const bodies = [];
+		CloudConnection.prototype._post = async function (apiPath, body) {
+			calls.push(apiPath);
+			bodies.push(body);
+			if (apiPath === "/iam/pub/0/c/region_c") {
+				return { status: "0", data: { login_url: "https://euapi.hoymiles.com", dc: 1 } };
+			}
+			if (apiPath === "/iam/pub/3/auth/pre-insp") {
+				return { status: "0", data: { n: "nonce-home", a: "46530f67d9c6768975e9ce7edd412df8", v: 3, dc: 1 } };
 			}
 			if (apiPath === "/iam/pub/3/auth/login") {
 				return { status: "0", data: { token: "tok-home" } };
+			}
+			if (apiPath === "/pvm/api/0/station/select_by_page") {
+				return { status: "100", message: "can only be used for logging in to the S-Miles Home app" };
 			}
 			throw new Error(`unexpected ${apiPath}`);
 		};
@@ -422,8 +460,33 @@ describe("cloudConnection – v3 login + profile detection", function () {
 		assert.strictEqual(loginBody.n, "nonce-home");
 	});
 
-	it("pre-insp rejected → CloudAuthError, profile stays null", async function () {
+	it("probe throws (network error) → login rejects and token state is rolled back", async function () {
 		CloudConnection.prototype._post = async function (apiPath) {
+			if (apiPath === "/iam/pub/0/c/region_c") {
+				return { status: "0", data: { login_url: "https://neapi.hoymiles.com", dc: 0 } };
+			}
+			if (apiPath === "/iam/pub/3/auth/pre-insp") {
+				return { status: "0", data: { n: "nonce", v: 2 } };
+			}
+			if (apiPath === "/iam/pub/3/auth/login") {
+				return { status: "0", data: { token: "tok" } };
+			}
+			if (apiPath === "/pvm/api/0/station/select_by_page") {
+				throw new Error("ETIMEDOUT probe");
+			}
+			throw new Error(`unexpected ${apiPath}`);
+		};
+		const cloud = new CloudConnection("u@x", "pw");
+		await assert.rejects(() => cloud.login(), /ETIMEDOUT probe/);
+		assert.strictEqual(cloud.token, null, "token must be rolled back on probe failure");
+		assert.strictEqual(cloud.tokenTime, 0, "tokenTime must be reset on probe failure");
+		assert.strictEqual(cloud.getProfile(), null, "profile must stay null on probe failure");
+	});
+
+	it("pre-insp rejected → CloudAuthError, profile stays null, no probe call", async function () {
+		const calls = [];
+		CloudConnection.prototype._post = async function (apiPath) {
+			calls.push(apiPath);
 			if (apiPath === "/iam/pub/0/c/region_c") {
 				return { status: "0", data: { login_url: "https://neapi.hoymiles.com", dc: 0 } };
 			}
@@ -438,10 +501,13 @@ describe("cloudConnection – v3 login + profile detection", function () {
 			err => err instanceof CloudAuthError && err.message === "user not found",
 		);
 		assert.strictEqual(cloud.getProfile(), null);
+		assert.ok(!calls.includes("/pvm/api/0/station/select_by_page"), "probe must not run when login fails");
 	});
 
-	it("login rejected (after pre-insp success) → CloudAuthError", async function () {
+	it("login rejected (after pre-insp success) → CloudAuthError, no probe call", async function () {
+		const calls = [];
 		CloudConnection.prototype._post = async function (apiPath) {
+			calls.push(apiPath);
 			if (apiPath === "/iam/pub/0/c/region_c") {
 				return { status: "0", data: { login_url: "https://neapi.hoymiles.com", dc: 0 } };
 			}
@@ -458,9 +524,10 @@ describe("cloudConnection – v3 login + profile detection", function () {
 			() => cloud.login(),
 			err => err instanceof CloudAuthError && /check your account/.test(err.message),
 		);
+		assert.ok(!calls.includes("/pvm/api/0/station/select_by_page"), "probe must not run when login fails");
 	});
 
-	it("does exactly 3 _post calls on a successful login (region + pre-insp + login)", async function () {
+	it("does exactly 4 _post calls on a successful login (region + pre-insp + login + probe)", async function () {
 		let postCalls = 0;
 		CloudConnection.prototype._post = async function (apiPath) {
 			postCalls++;
@@ -473,12 +540,19 @@ describe("cloudConnection – v3 login + profile detection", function () {
 			if (apiPath === "/iam/pub/3/auth/login") {
 				return { status: "0", data: { token: "tok" } };
 			}
+			if (apiPath === "/pvm/api/0/station/select_by_page") {
+				return { status: "0", data: { list: [] } };
+			}
 			throw new Error(`unexpected ${apiPath}`);
 		};
 		const cloud = new CloudConnection("u@x", "pw");
 		const token = await cloud.login();
 		assert.strictEqual(token, "tok");
-		assert.strictEqual(postCalls, 3, `expected 3 _post calls (region + pre-insp + login), got ${postCalls}`);
+		assert.strictEqual(
+			postCalls,
+			4,
+			`expected 4 _post calls (region + pre-insp + login + probe), got ${postCalls}`,
+		);
 	});
 });
 
@@ -496,7 +570,7 @@ describe("cloudConnection – loginDiagnostics", function () {
 		CloudConnection.prototype._post = originalPost;
 	});
 
-	it("returns one result per phase (region, preInsp, login) without mutating state", async function () {
+	it("returns one result per phase (region, preInsp, login, probe) without mutating state", async function () {
 		CloudConnection.prototype._post = async function (apiPath) {
 			if (apiPath === "/iam/pub/0/c/region_c") {
 				return { status: "0", data: { login_url: "https://neapi.hoymiles.com", dc: 0 } };
@@ -507,6 +581,9 @@ describe("cloudConnection – loginDiagnostics", function () {
 			if (apiPath === "/iam/pub/3/auth/login") {
 				return { status: "0", data: { token: "tok-installer" } };
 			}
+			if (apiPath === "/pvm/api/0/station/select_by_page") {
+				return { status: "0", data: { list: [] } };
+			}
 			throw new Error(`unexpected ${apiPath}`);
 		};
 		const cloud = new CloudConnection("u@x", "pw");
@@ -515,7 +592,7 @@ describe("cloudConnection – loginDiagnostics", function () {
 		cloud.tokenTime = 12345;
 
 		const results = await cloud.loginDiagnostics();
-		assert.strictEqual(results.length, 3, "should report 3 attempts (region, preInsp, login)");
+		assert.strictEqual(results.length, 4, "should report 4 attempts (region, preInsp, login, probe)");
 		assert.strictEqual(results[0].flow, "region");
 		assert.strictEqual(results[0].ok, true);
 		assert.strictEqual(results[0].dc, 0);
@@ -523,10 +600,13 @@ describe("cloudConnection – loginDiagnostics", function () {
 		assert.strictEqual(results[1].ok, true);
 		assert.strictEqual(results[1].v, 2);
 		assert.strictEqual(results[1].saltPresent, false);
-		assert.strictEqual(results[1].profile, "installer");
+		assert.strictEqual(results[1].profile, undefined, "preInsp must no longer report profile");
 		assert.strictEqual(results[2].flow, "login");
 		assert.strictEqual(results[2].ok, true);
 		assert.strictEqual(results[2].hasToken, true);
+		assert.strictEqual(results[3].flow, "probe");
+		assert.strictEqual(results[3].ok, true);
+		assert.strictEqual(results[3].profile, "installer");
 
 		// State must NOT be mutated.
 		assert.strictEqual(cloud.token, "preexisting");
@@ -534,7 +614,7 @@ describe("cloudConnection – loginDiagnostics", function () {
 		assert.strictEqual(cloud.getProfile(), null);
 	});
 
-	it("pre-insp rejection short-circuits the login phase", async function () {
+	it("pre-insp rejection short-circuits the login + probe phases", async function () {
 		CloudConnection.prototype._post = async function (apiPath) {
 			if (apiPath === "/iam/pub/0/c/region_c") {
 				return { status: "0", data: { login_url: "https://neapi.hoymiles.com", dc: 0 } };
@@ -546,7 +626,7 @@ describe("cloudConnection – loginDiagnostics", function () {
 		};
 		const cloud = new CloudConnection("locked@x", "pw");
 		const results = await cloud.loginDiagnostics();
-		// Only region + preInsp — no login attempt because pre-insp failed.
+		// Only region + preInsp — no login/probe attempt because pre-insp failed.
 		assert.strictEqual(results.length, 2);
 		assert.strictEqual(results[0].flow, "region");
 		assert.strictEqual(results[1].flow, "preInsp");
@@ -554,7 +634,7 @@ describe("cloudConnection – loginDiagnostics", function () {
 		assert.strictEqual(results[1].message, "Account locked.");
 	});
 
-	it("v=3 + salt reports profile=home and saltPresent=true", async function () {
+	it("v=3 + salt + probe rejection → profile=home reported by probe phase, not preInsp", async function () {
 		CloudConnection.prototype._post = async function (apiPath) {
 			if (apiPath === "/iam/pub/0/c/region_c") {
 				return { status: "0", data: { login_url: "https://euapi.hoymiles.com", dc: 1 } };
@@ -565,17 +645,46 @@ describe("cloudConnection – loginDiagnostics", function () {
 			if (apiPath === "/iam/pub/3/auth/login") {
 				return { status: "0", data: { token: "tok-home" } };
 			}
+			if (apiPath === "/pvm/api/0/station/select_by_page") {
+				return { status: "100", message: "can only be used for logging in to the S-Miles Home app" };
+			}
 			throw new Error(`unexpected ${apiPath}`);
 		};
 		const cloud = new CloudConnection("home@x", "pw");
 		const results = await cloud.loginDiagnostics();
-		assert.strictEqual(results.length, 3);
+		assert.strictEqual(results.length, 4);
 		assert.strictEqual(results[1].flow, "preInsp");
 		assert.strictEqual(results[1].v, 3);
 		assert.strictEqual(results[1].saltPresent, true);
-		assert.strictEqual(results[1].profile, "home");
+		assert.strictEqual(results[1].profile, undefined);
 		assert.strictEqual(results[2].flow, "login");
 		assert.strictEqual(results[2].ok, true);
+		assert.strictEqual(results[3].flow, "probe");
+		assert.strictEqual(results[3].profile, "home");
+	});
+
+	it("login rejection skips the probe", async function () {
+		const calls = [];
+		CloudConnection.prototype._post = async function (apiPath) {
+			calls.push(apiPath);
+			if (apiPath === "/iam/pub/0/c/region_c") {
+				return { status: "0", data: { login_url: "https://neapi.hoymiles.com", dc: 0 } };
+			}
+			if (apiPath === "/iam/pub/3/auth/pre-insp") {
+				return { status: "0", data: { n: "nonce", v: 3, a: "46530f67d9c6768975e9ce7edd412df8" } };
+			}
+			if (apiPath === "/iam/pub/3/auth/login") {
+				return { status: "1", message: "Invalid password" };
+			}
+			throw new Error(`unexpected ${apiPath}`);
+		};
+		const cloud = new CloudConnection("u@x", "wrong");
+		const results = await cloud.loginDiagnostics();
+		// region + preInsp + login (failed) — no probe.
+		assert.strictEqual(results.length, 3);
+		assert.strictEqual(results[2].flow, "login");
+		assert.strictEqual(results[2].ok, false);
+		assert.ok(!calls.includes("/pvm/api/0/station/select_by_page"), "probe must not run when login fails");
 	});
 });
 

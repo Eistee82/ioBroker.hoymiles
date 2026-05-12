@@ -25,6 +25,6 @@
     "tabCloud": "云端 (S-Miles)",
     "tabLocal": "本地连接",
     "testCloudLoginButton": "测试云端登录",
-    "testCloudLoginHelp": "依次运行三个登录阶段（region_c、pre-insp、login），并报告服务器分配的账户配置文件（installer / home）、是否存在 salt 以及登录是否生成了 token。结果会在弹窗中显示，并同时写入适配器日志 — 适合用于论坛错误报告。",
+    "testCloudLoginHelp": "依次运行四个登录阶段（region_c、pre-insp、login、probe），并报告 pre-insp 的 v 和 salt 是否存在、登录是否生成 token 以及探测分配的配置文件（installer / home）。结果会在弹窗中显示，并同时写入适配器日志 — 适合用于论坛错误报告。",
     "testConnectionButton": "测试连接"
 }

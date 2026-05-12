@@ -8,6 +8,7 @@ import {
 	IAM_PRE_INSPECT_PATH,
 	IAM_LOGIN_V3_PATH,
 	IAM_REGION_PATH,
+	PROFILE_PROBE_PATH,
 	APP_USER_AGENT_PREFIX,
 	APP_VERSION,
 	APP_TID,
@@ -15,17 +16,18 @@ import {
 import { errorMessage, withTimeout, buildCredentialChallenges, buildArgon2Challenge } from "./utils.js";
 
 /**
- * Cloud profile inferred from pre-insp `v`. Determines which API surface the adapter talks to.
+ * Cloud profile, determined by an authoritative probe against `/pvm/.../select_by_page`
+ * AFTER a successful login. Pre-insp's `v` cannot be used as the profile signal — Hoymiles
+ * unified all accounts onto Argon2id (`v=3`) in 2026, so the auth variant no longer maps
+ * 1:1 to the data-API surface a given account is allowed on.
  *
- * - `"installer"`: server returned `v=2` (no salt). These are S-Miles Installer and S-Miles
- *   Enduser accounts — the same ones that can sign into the `global.hoymiles.com` web portal.
- *   Login uses the legacy md5/sha challenge; data calls use the `/pvm/...` web API surface
- *   (no regression for setups already on this profile).
- * - `"home"`: server returned `v=3` with an Argon2 salt. These are S-Miles Home accounts
- *   from the `com.hm.balcony` app and are restricted to that ecosystem by the server
- *   ("can only be used for logging in to the S-Miles Home app" on `/pvm/...`). Login uses
- *   Argon2id; data calls use the `/pvmc/.../*_c` API surface, which is also reachable from
- *   installer accounts but is the only surface available to home accounts.
+ * - `"installer"`: probe returned `status=0`. The account works on `global.hoymiles.com`
+ *   and reaches the full `/pvm/...` data API (latitude/longitude/address, FW version
+ *   strings, weather, …). Includes the S-Miles Installer and Cloud-Web Enduser cohorts.
+ * - `"home"`: probe was rejected (server response "can only be used for logging in to the
+ *   S-Miles Home app"). These accounts are restricted by the server to `/pvmc/.../*_c`,
+ *   which delivers a leaner record (no coordinates, no FW strings) but adds reflux /
+ *   self-consumption / electricity-price fields.
  */
 export type CloudProfile = "installer" | "home";
 
@@ -103,8 +105,8 @@ interface RegionData {
  * what each phase of the auth flow said, without leaking the token.
  */
 export interface LoginAttemptResult {
-	/** Which phase this attempt represents: region_c discovery, pre-inspect, or login. */
-	flow: "region" | "preInsp" | "login";
+	/** Which phase this attempt represents: region_c discovery, pre-inspect, login, or profile probe. */
+	flow: "region" | "preInsp" | "login" | "probe";
 	/** Base URL the attempt was made against. */
 	host: string;
 	/** True if the server accepted the request. */
@@ -119,7 +121,7 @@ export interface LoginAttemptResult {
 	v?: number;
 	/** Whether pre-insp returned a salt — i.e. an Argon2 challenge would be used. */
 	saltPresent?: boolean;
-	/** Cloud profile derived from `v` (home if v=3, else installer). */
+	/** Cloud profile decided by the probe (probe attempts only). */
 	profile?: CloudProfile;
 	/** True if the login phase produced a session token. */
 	hasToken?: boolean;
@@ -241,7 +243,7 @@ class CloudConnection {
 	 * once region_c maps the user's account to a different regional host.
 	 */
 	private baseUrl: string;
-	/** Cloud profile from the most recent pre-insp (v=3 → home, else installer). null = not yet logged in. */
+	/** Cloud profile decided by the post-login `/pvm/.../select_by_page` probe. null = not yet logged in. */
 	private profile: CloudProfile | null;
 	/** Last data-center returned by region_c (null = not yet queried, -1 = account unknown). */
 	private lastDc: number | null;
@@ -277,10 +279,12 @@ class CloudConnection {
 	}
 
 	/**
-	 * Cloud profile produced by the most recent login:
-	 * - `"installer"`: S-Miles Installer / Cloud-Web Enduser account (`pre-insp.v == 2`, legacy md5/sha challenge). Data API surface is `/pvm/...`.
-	 * - `"home"`:      S-Miles Home account (`pre-insp.v == 3`, Argon2 salt). Data API surface is `/pvmc/.../_c`.
-	 * - `null`:        not yet logged in.
+	 * Cloud profile produced by the most recent login, decided by a probe against
+	 * `/pvm/.../select_by_page` AFTER the v3 login obtained a token.
+	 *
+	 * - `"installer"`: probe accepted → S-Miles Installer / Cloud-Web Enduser account. Data API is `/pvm/...`.
+	 * - `"home"`:      probe rejected → S-Miles Home account. Data API is `/pvmc/.../_c`.
+	 * - `null`:        not yet logged in (or login failed before the probe).
 	 */
 	getProfile(): CloudProfile | null {
 		return this.profile;
@@ -301,7 +305,8 @@ class CloudConnection {
 	 * The host data-API requests go to. For `home` profile, all `_c` endpoints live on the
 	 * default host (`neapi.hoymiles.com`) regardless of which regional host region_c picked
 	 * for the auth phase — verified live: euapi/pvmc/... returns 404, neapi/pvmc/... returns 200.
-	 * `installer` profile keeps using `baseUrl` so existing Cloud-Web setups are unaffected.
+	 * `installer` profile (and the brief null window before the post-login profile probe)
+	 * keeps using `baseUrl`, so /pvm/ web-API calls and the probe itself stay on the regional host.
 	 */
 	private getDataHost(): string {
 		return this.profile === "home" ? CLOUD_HOST_DEFAULT : this.baseUrl;
@@ -312,16 +317,18 @@ class CloudConnection {
 	/**
 	 * Authenticate with the Hoymiles cloud and obtain a session token.
 	 *
-	 * Flow: region_c → pre-insp → login (v3). region_c first because it returns
-	 * the user's regional host AND the `dc` marker that goes into the User-Agent.
-	 * pre-insp returns `v` which decides the challenge type:
-	 *   v=3 + salt → Argon2id (S-Miles Home accounts on com.hm.balcony)
-	 *   v=2 (no salt) → legacy md5/sha (S-Miles Cloud Web / Installer accounts)
+	 * Flow: region_c → pre-insp → login (v3) → profile probe.
 	 *
-	 * Previously this method also attempted the v0 (`/iam/pub/0/c/login_c`) flow
-	 * as a fallback. The Hoymiles cloud has since locked v0 down with a generic
-	 * "Your app version is low" rejection for Home accounts, while Web accounts
-	 * succeed through v3 already. v0 is dead code in 2026 and was removed.
+	 * - region_c: returns the user's regional host AND the `dc` marker that goes into
+	 *   the User-Agent. Non-fatal on failure — we fall back to the default host.
+	 * - pre-insp + login (v3): Argon2id when the server returns a salt, legacy md5/sha
+	 *   otherwise. Throws `CloudAuthError` on hard reject (wrong password, account locked).
+	 * - profile probe: a single call to `/pvm/.../select_by_page` decides whether this
+	 *   account is `installer` (probe accepted → full web API) or `home` (probe rejected
+	 *   → `/pvmc/.../*_c` API only). Profile cannot be derived from `pre-insp.v` any
+	 *   longer because Hoymiles migrated all accounts to Argon2id (v=3) in 2026.
+	 *
+	 * v0 fallback was removed in 2026 — server uniformly rejects it as "app version is low".
 	 */
 	async login(): Promise<string> {
 		this.log(`Cloud login start (host=${this.baseUrl}, user=${this.user})`);
@@ -337,13 +344,25 @@ class CloudConnection {
 		}
 		this.token = token;
 		this.tokenTime = Date.now();
+
+		// Phase 3: profile probe — needs a valid token. If it throws (network error) we
+		// roll back the token assignment so callers see a consistent "not logged in"
+		// state and cloudManager's retry loop can reschedule.
+		try {
+			this.profile = await this.probeDataProfile();
+		} catch (err) {
+			this.token = null;
+			this.tokenTime = 0;
+			throw err;
+		}
 		this.log(`Cloud login success: profile=${this.profile} dc=${this.lastDc ?? "n/a"} host=${this.baseUrl}`);
 		return token;
 	}
 
 	/**
 	 * v3 flow: pre-inspect to fetch nonce+salt+v, then login with the appropriate
-	 * challenge. Sets `this.profile` based on `pre-insp.v`.
+	 * challenge. Profile is NOT set here — `probeDataProfile()` does that after we
+	 * have a token, because pre-insp.v no longer maps 1:1 to the data-API surface.
 	 *
 	 * @returns Session token on success, or null if status=0 but data.token is empty
 	 * @throws CloudAuthError on permanent server-side rejection (wrong password, account locked)
@@ -360,15 +379,9 @@ class CloudConnection {
 		const preData = assertData<PreInspectData>(preInsp.data, "Pre-inspect");
 		const { n: nonce, a: salt, v } = preData;
 
-		// `v=3` is the marker for S-Miles Home accounts (Argon2-only). Anything
-		// else — currently v=2 in the wild — is a legacy Installer/Cloud-Web account.
-		this.profile = v === 3 ? "home" : "installer";
-
 		const ch = salt ? await buildArgon2Challenge(this.credentialInput, salt) : this.credentials[0]; // Legacy md5/sha — same body the web portal sends.
 
-		this.log(
-			`Cloud pre-insp: v=${v ?? "?"} saltPresent=${!!salt} profile=${this.profile} dc=${preData.dc ?? "n/a"}`,
-		);
+		this.log(`Cloud pre-insp: v=${v ?? "?"} saltPresent=${!!salt} dc=${preData.dc ?? "n/a"}`);
 
 		const result = await this._post<{ token?: string }>(
 			IAM_LOGIN_V3_PATH,
@@ -381,6 +394,31 @@ class CloudConnection {
 		}
 
 		return result.data?.token ?? null;
+	}
+
+	/**
+	 * Probe which data-API surface the account is allowed on. Hits `/pvm/.../select_by_page`
+	 * against `this.baseUrl` (regional host) — Web/Installer accounts get status=0, home
+	 * accounts get rejected by the server ("can only be used for logging in to the S-Miles
+	 * Home app" or similar). This replaces the pre-insp.v profile inference, which broke
+	 * after Hoymiles unified all accounts onto Argon2id in 2026.
+	 *
+	 * Must run AFTER token assignment — the endpoint requires authentication.
+	 *
+	 * @throws on transport/network errors. Caller must roll back token state.
+	 */
+	private async probeDataProfile(): Promise<CloudProfile> {
+		const result = await this._post<{ list?: unknown[] }>(
+			PROFILE_PROBE_PATH,
+			{ page: 1, page_size: 1 },
+			this.baseUrl,
+		);
+		if (result.status === "0") {
+			this.log(`Cloud profile probe: /pvm accepted → installer`);
+			return "installer";
+		}
+		this.log(`Cloud profile probe: /pvm rejected (status=${result.status} msg="${result.message ?? ""}") → home`);
+		return "home";
 	}
 
 	/**
@@ -414,10 +452,12 @@ class CloudConnection {
 	}
 
 	/**
-	 * Run a non-destructive diagnostic of the configured credentials: region_c → pre-insp → login.
-	 * Returns what each phase reported so the admin UI can show exactly where the auth flow
-	 * fell over for a forum bug report. Restores all mutable state on exit — neither token,
-	 * profile, baseUrl nor dc reflect this run.
+	 * Run a non-destructive diagnostic of the configured credentials:
+	 * region_c → pre-insp → login → profile probe.
+	 *
+	 * Returns what each phase reported so the admin UI can show exactly where the auth
+	 * flow fell over for a forum bug report. Restores all mutable state on exit —
+	 * neither token, profile, baseUrl nor dc reflect this run.
 	 */
 	async loginDiagnostics(): Promise<LoginAttemptResult[]> {
 		const attempts: LoginAttemptResult[] = [];
@@ -448,23 +488,22 @@ class CloudConnection {
 				attempts.push({ flow: "region", host: startBase, ok: false, message: errorMessage(err) });
 			}
 
-			// 2. pre-insp — reports v / saltPresent / inferred profile before login is even tried.
+			// 2. pre-insp — reports v / saltPresent before login is even tried. Profile is
+			// no longer inferred here (see probe phase below).
 			let preInspOk = false;
 			let preData: PreInspectData | undefined;
 			try {
 				const preInsp = await this._post<PreInspectData>(IAM_PRE_INSPECT_PATH, { u: this.user }, this.baseUrl);
 				preInspOk = preInsp.status === "0" && preInsp.data != null;
 				preData = preInsp.data;
-				const v = preData?.v;
 				attempts.push({
 					flow: "preInsp",
 					host: this.baseUrl,
 					ok: preInspOk,
 					status: preInsp.status,
 					message: preInsp.message,
-					v,
+					v: preData?.v,
 					saltPresent: !!preData?.a,
-					profile: preInspOk && v != null ? (v === 3 ? "home" : "installer") : undefined,
 				});
 			} catch (err) {
 				attempts.push({ flow: "preInsp", host: this.baseUrl, ok: false, message: errorMessage(err) });
@@ -472,6 +511,7 @@ class CloudConnection {
 
 			// 3. login — only attempted if pre-insp succeeded (otherwise we'd just send garbage to
 			// the server with no chance of success and no diagnostic benefit).
+			let probeToken: string | null = null;
 			if (preInspOk && preData?.n) {
 				try {
 					const ch = preData.a
@@ -482,14 +522,18 @@ class CloudConnection {
 						{ u: this.user, ch, n: preData.n },
 						this.baseUrl,
 					);
+					const ok = result.status === "0" && !!result.data?.token;
 					attempts.push({
 						flow: "login",
 						host: this.baseUrl,
-						ok: result.status === "0" && !!result.data?.token,
+						ok,
 						status: result.status,
 						message: result.message,
 						hasToken: !!result.data?.token,
 					});
+					if (ok) {
+						probeToken = result.data?.token ?? null;
+					}
 				} catch (err) {
 					if (err instanceof CloudAuthError) {
 						attempts.push({
@@ -502,6 +546,30 @@ class CloudConnection {
 					} else {
 						attempts.push({ flow: "login", host: this.baseUrl, ok: false, message: errorMessage(err) });
 					}
+				}
+			}
+
+			// 4. profile probe — only attempted if login produced a token. Temporarily writes
+			// `this.token` so _post sends the auth header; the outer `finally` restores it.
+			if (probeToken) {
+				this.token = probeToken;
+				try {
+					const probeResult = await this._post<{ list?: unknown[] }>(
+						PROFILE_PROBE_PATH,
+						{ page: 1, page_size: 1 },
+						this.baseUrl,
+					);
+					const accepted = probeResult.status === "0";
+					attempts.push({
+						flow: "probe",
+						host: this.baseUrl,
+						ok: true,
+						status: probeResult.status,
+						message: probeResult.message,
+						profile: accepted ? "installer" : "home",
+					});
+				} catch (err) {
+					attempts.push({ flow: "probe", host: this.baseUrl, ok: false, message: errorMessage(err) });
 				}
 			}
 		} finally {

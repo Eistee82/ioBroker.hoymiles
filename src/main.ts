@@ -467,8 +467,13 @@ class Hoymiles extends utils.Adapter {
 					}
 					if (r.flow === "preInsp") {
 						return r.ok
-							? `${head}: ok (v=${r.v ?? "?"} profile=${r.profile ?? "?"} salt=${r.saltPresent ? "yes" : "no"})`
+							? `${head}: ok (v=${r.v ?? "?"} salt=${r.saltPresent ? "yes" : "no"})`
 							: `${head}: failed${r.status ? ` status=${r.status}` : ""}${r.message ? ` "${r.message}"` : ""}`;
+					}
+					if (r.flow === "probe") {
+						return r.ok
+							? `${head}: profile=${r.profile ?? "?"}${r.status ? ` (status=${r.status})` : ""}`
+							: `${head}: probe failed${r.message ? ` "${r.message}"` : ""}`;
 					}
 					return r.ok
 						? `${head}: ACCEPTED (token received)`

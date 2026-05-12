@@ -25,6 +25,6 @@
     "tabCloud": "Chmura (S-Miles)",
     "tabLocal": "Połączenie lokalne",
     "testCloudLoginButton": "Testuj logowanie do chmury",
-    "testCloudLoginHelp": "Uruchamia wszystkie trzy fazy logowania (region_c, pre-insp, login) i informuje, jaki profil konta przypisał serwer (installer / home), czy występuje salt i czy logowanie wygenerowało token. Wynik wyświetla się w okienku i zapisywany jest w logu adaptera — przydatne do zgłaszania błędów na forum.",
+    "testCloudLoginHelp": "Uruchamia wszystkie cztery fazy logowania (region_c, pre-insp, login, probe) i podaje v oraz obecność salt z pre-insp, czy logowanie wygenerowało token oraz jaki profil przypisała sonda (installer / home). Wynik wyświetla się w okienku i zapisywany jest w logu adaptera — przydatne do zgłaszania błędów na forum.",
     "testConnectionButton": "Testuj połączenie"
 }

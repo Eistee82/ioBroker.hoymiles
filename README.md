@@ -144,6 +144,8 @@ Cloud stations create aggregated device nodes (e.g. `hoymiles.0.station-12345.*`
 - (@Eistee82) Create cloud-station states on demand instead of up-front, so accounts that don't provide a field (e.g. home-profile accounts lack `latitude`/`longitude`/`address`/firmware version strings) no longer get empty placeholder states in the object tree
 - (@Eistee82) Drop the (now-rejected) v0 fallback auth path; remaining diagnostic button reports `region_c → pre-insp → login` per-phase with profile, salt presence and token status
 - (@Eistee82) Add `scripts/test-cloud-login.mjs` standalone smoke script for the same diagnostic from the command line
+- (@Eistee82) Decide cloud profile (installer vs. home) via a post-login probe against `/pvm/.../select_by_page` instead of inferring from `pre-insp.v` — Hoymiles unified all accounts onto Argon2id (`v=3`) in 2026, so Installer/Cloud-Web accounts were being misclassified as home and routed to the leaner `_c` data API, losing `latitude`/`longitude`/`address`/firmware version strings and weather data
+- (@Eistee82) Add `probe` phase to the Test cloud login diagnostic, reporting which data API surface the account is allowed on
 
 ### 0.3.4 (2026-04-08)
 - (@Eistee82) Fix disabled property type in jsonConfig table items (string, not boolean)

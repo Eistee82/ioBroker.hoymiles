@@ -46,18 +46,18 @@ Der Adapter akzeptiert Accounts aus allen drei offiziellen Hoymiles-Apps:
 - **S-Miles Enduser** (`com.hm.hemaiClient1`)
 - **S-Miles Home** (`com.hm.balcony`)
 
-Login ist ein einzelner v3-Flow (`region_c → pre-insp → login`). Der Pre-Inspect-Schritt zeigt dem Adapter, welchen Konto-Typ er vor sich hat:
+Login ist ein einzelner v3-Flow plus anschließender Profil-Probe (`region_c → pre-insp → login → probe`):
 
-- **`v=3`** (mit Salt) → **S-Miles-Home-Konto**. Adapter wechselt ins *home*-Profil und nutzt die `/pvmc/.../*_c`-Daten-API. Login per Argon2id mit den Parametern aus der S-Miles-Home-Android-App (`t=3, m=32 MiB, p=1, hashLen=32, V13`).
-- **`v=2`** (ohne Salt) → **S-Miles-Installer- / Cloud-Web-Endkunden-Konto** — dieselben Konten, mit denen man sich auf `global.hoymiles.com` einloggen kann. Adapter bleibt im *installer*-Profil und nutzt die bisherige `/pvm/...`-Daten-API. Login per klassischer `md5hex(password).sha256base64(password)`-Challenge.
-
-Beide Profile können die `/pvmc/.../*_c`-Endpoints aufrufen; nur Home-Konten sind darauf beschränkt (die `/pvm/...`-Web-API antwortet mit HTTP 403 auf Home-Token). Die home-Profil-API liefert pro Anlage weniger Felder als die installer-Profil-API (kein `latitude`/`longitude`/`address`/`local_time`/`status`/`warn_data`/Firmware-Versionsstring), deshalb legt der Adapter für Home-Konten die entsprechenden States **nicht** an — sie erscheinen nur, wenn die jeweilige Antwort den Wert tatsächlich enthält.
+- **pre-insp + login** entscheiden die Auth-Variante. Hoymiles hat 2026 alle Konten auf Argon2id (`v=3 + Salt`) vereinheitlicht — Installer-, Enduser- und Home-Konten nutzen heute dieselbe Argon2id-Challenge (Parameter aus der S-Miles-Home-Android-App: `t=3, m=32 MiB, p=1, hashLen=32, V13`). `v` ist damit kein Profil-Signal mehr. Die klassische `md5hex(password).sha256base64(password)`-Challenge bleibt als Fallback für Regionen, die noch `v=2` ausliefern.
+- **probe** (`/pvm/.../select_by_page`) entscheidet anschließend, welche Daten-API der Server für dieses Konto freigibt:
+  - probe akzeptiert → **installer**-Profil — das Konto funktioniert auf `global.hoymiles.com` und nutzt die volle `/pvm/...`-Web-API inkl. `latitude`/`longitude`/`address`/`local_time`/`status`/`warn_data` und Firmware-Versionsstrings.
+  - probe abgelehnt (Server: *„can only be used for logging in to the S-Miles Home app"*) → **home**-Profil — vom Server auf `/pvmc/.../*_c` beschränkt. Diese Surface liefert die obigen Felder nicht, dafür aber Rückspeise-/Eigenverbrauchs-Energie und Strom-Tarif. Für die fehlenden Felder legt der Adapter **keine** States an — sie erscheinen nur, wenn die jeweilige Antwort den Wert tatsächlich enthält.
 
 > **Hinweis:** `dataeu.hoymiles.com:10081` ist der EU-Cloud-Relay-Server, an den DTUs ihre Daten pushen — **kein** User-Login-Server. Der Adapter regelt das Cloud-Relay automatisch (siehe *Cloud-Relay*).
 
 #### Cloud-Login testen
 
-Wenn unsicher: Knopf **Cloud-Login testen** neben dem Passwortfeld klicken. Er läuft die drei Login-Phasen einmal mit den aktuellen Zugangsdaten durch (`region_c`, `pre-insp`, `login`) und meldet, welches Profil der Server vergibt (`installer` / `home`), ob ein Salt geliefert wurde und ob der Login einen Token produziert hat. Das Ergebnis steht im Adapter-Log — gut für Forum-Bug-Reports. Der Test speichert keinen Token und ändert keinen Adapter-Zustand.
+Wenn unsicher: Knopf **Cloud-Login testen** neben dem Passwortfeld klicken. Er läuft die vier Phasen einmal mit den aktuellen Zugangsdaten durch (`region_c`, `pre-insp`, `login`, `probe`) und meldet `v` und Salt-Vorhandensein aus pre-insp, ob der Login einen Token produziert hat und welches Profil die Probe zuweist (`installer` / `home`). Das Ergebnis steht im Adapter-Log — gut für Forum-Bug-Reports. Der Test speichert keinen Token und ändert keinen Adapter-Zustand.
 
 ## Verbindungsmodi
 
