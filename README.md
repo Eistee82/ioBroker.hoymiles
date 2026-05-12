@@ -139,13 +139,11 @@ Cloud stations create aggregated device nodes (e.g. `hoymiles.0.station-12345.*`
 - (@Eistee82) Stop retry loop on permanent cloud auth errors to prevent Hoymiles account lockout
 - (@Eistee82) Add `info.cloudLastError` state and raise an ioBroker alert notification with reset instructions on permanent cloud auth errors
 - (@Eistee82) Bump axios to 1.15.0 and protobufjs to 8.0.1
-- (@Eistee82) Add S-Miles Home account support: pre-inspect-driven profile detection (`v=3` + Argon2id with the parameters from the S-Miles Home Android app vs. `v=2` legacy md5/sha) and an app-style `User-Agent`, so accounts that previously failed with "all authentication strategies rejected" or "The account can only be used for logging in to the S-Miles Home app" can sign in
-- (@Eistee82) Switch data API for home-profile accounts to the `/pvmc/.../*_c` endpoints (Installer/Cloud-Web accounts keep the existing `/pvm/...` paths so no regression), including station list, station details, device tree, realtime, micro/module charts and firmware compare
-- (@Eistee82) Create cloud-station states on demand instead of up-front, so accounts that don't provide a field (e.g. home-profile accounts lack `latitude`/`longitude`/`address`/firmware version strings) no longer get empty placeholder states in the object tree
-- (@Eistee82) Drop the (now-rejected) v0 fallback auth path; remaining diagnostic button reports `region_c → pre-insp → login` per-phase with profile, salt presence and token status
-- (@Eistee82) Add `scripts/test-cloud-login.mjs` standalone smoke script for the same diagnostic from the command line
-- (@Eistee82) Decide cloud profile (installer vs. home) via a post-login probe against `/pvm/.../select_by_page` instead of inferring from `pre-insp.v` — Hoymiles unified all accounts onto Argon2id (`v=3`) in 2026, so Installer/Cloud-Web accounts were being misclassified as home and routed to the leaner `_c` data API, losing `latitude`/`longitude`/`address`/firmware version strings and weather data
-- (@Eistee82) Add `probe` phase to the Test cloud login diagnostic, reporting which data API surface the account is allowed on
+- (@Eistee82) Add S-Miles Home account support (Argon2id login + `/pvmc/.../*_c` data API)
+- (@Eistee82) Decide cloud profile (installer / home) via a post-login probe against `/pvm/.../select_by_page` instead of `pre-insp.v` — Hoymiles unified all accounts onto Argon2id in 2026
+- (@Eistee82) Drop the dead v0 auth fallback
+- (@Eistee82) Skip cloud-station states for fields the home-profile API doesn't provide (no empty placeholders for `latitude`/`longitude`/firmware version strings)
+- (@Eistee82) Add a "Test cloud login" diagnostic button to the admin UI with per-phase results (`region_c`, `pre-insp`, `login`, `probe`) for forum bug reports
 
 ### 0.3.4 (2026-04-08)
 - (@Eistee82) Fix disabled property type in jsonConfig table items (string, not boolean)
