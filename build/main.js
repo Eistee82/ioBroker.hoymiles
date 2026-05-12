@@ -1,6 +1,7 @@
 import * as utils from "@iobroker/adapter-core";
 import { fileURLToPath } from "node:url";
 import CloudManager from "./lib/cloudManager.js";
+import CloudConnection from "./lib/cloudConnection.js";
 import DeviceContext from "./lib/deviceContext.js";
 import { ProtobufHandler } from "./lib/protobufHandler.js";
 import { discoverDtus, probeHost } from "./lib/networkDiscovery.js";
@@ -193,6 +194,9 @@ class Hoymiles extends utils.Adapter {
             else if (obj.command === "testConnections") {
                 void this.handleTestConnections(obj).catch(err => this.log.error(`TestConnections failed: ${errorMessage(err)}`));
             }
+            else if (obj.command === "testCloudLogin") {
+                void this.handleTestCloudLogin(obj).catch(err => this.log.error(`TestCloudLogin failed: ${errorMessage(err)}`));
+            }
             else {
                 this.log.debug(`Unknown message command: ${obj.command}`);
                 this.reply(obj, { error: `Unknown command: ${obj.command}` });
@@ -291,6 +295,60 @@ class Hoymiles extends utils.Adapter {
         }
         catch (err) {
             this.log.error(`Connection test failed: ${errorMessage(err)}`);
+            this.reply(obj, { error: errorMessage(err) });
+        }
+    }
+    async handleTestCloudLogin(obj) {
+        try {
+            const msg = (obj.message || {});
+            const cfg = this.config;
+            const user = (msg.user ?? cfg.cloudUser ?? "").trim();
+            const password = msg.password ?? cfg.cloudPassword ?? "";
+            if (!user || !password) {
+                this.reply(obj, {
+                    error: { en: "Email and password required", de: "E-Mail und Passwort erforderlich" },
+                });
+                return;
+            }
+            this.log.info(`[testCloudLogin] starting diagnostics for ${user}`);
+            const cloud = new CloudConnection(user, password, m => this.log.debug(`[testCloudLogin] ${m}`));
+            const results = await cloud.loginDiagnostics();
+            const summary = results
+                .map(r => {
+                const head = `${r.flow}@${new URL(r.host).host}`;
+                if (r.flow === "region") {
+                    return r.ok
+                        ? `${head}: ok (dc=${r.dc ?? "n/a"})`
+                        : `${head}: failed${r.status ? ` status=${r.status}` : ""}${r.message ? ` "${r.message}"` : ""}`;
+                }
+                if (r.flow === "preInsp") {
+                    return r.ok
+                        ? `${head}: ok (v=${r.v ?? "?"} salt=${r.saltPresent ? "yes" : "no"})`
+                        : `${head}: failed${r.status ? ` status=${r.status}` : ""}${r.message ? ` "${r.message}"` : ""}`;
+                }
+                if (r.flow === "probe") {
+                    return r.ok
+                        ? `${head}: profile=${r.profile ?? "?"}${r.status ? ` (status=${r.status})` : ""}`
+                        : `${head}: probe failed${r.message ? ` "${r.message}"` : ""}`;
+                }
+                return r.ok
+                    ? `${head}: ACCEPTED (token received)`
+                    : `${head}: rejected${r.status ? ` status=${r.status}` : ""}${r.message ? ` "${r.message}"` : ""}`;
+            })
+                .join(" | ");
+            this.log.info(`[testCloudLogin] result for ${user}: ${summary}`);
+            const anyAccepted = results.some(r => r.flow === "login" && r.ok);
+            this.reply(obj, {
+                result: {
+                    ok: anyAccepted,
+                    user,
+                    summary,
+                    attempts: results,
+                },
+            });
+        }
+        catch (err) {
+            this.log.error(`[testCloudLogin] unexpected error: ${errorMessage(err)}`);
             this.reply(obj, { error: errorMessage(err) });
         }
     }

@@ -61,12 +61,13 @@ export async function buildArgon2Challenge(input, salt) {
     const argon2 = await import("argon2");
     const hash = await argon2.hash(input, {
         type: argon2.argon2id,
-        salt: Buffer.from(salt),
-        timeCost: 2,
-        memoryCost: 65536,
+        salt: Buffer.from(salt, "hex"),
+        timeCost: 3,
+        memoryCost: 32768,
         parallelism: 1,
         hashLength: 32,
         raw: true,
+        version: 0x13,
     });
     return hash.toString("hex");
 }

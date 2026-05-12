@@ -24,5 +24,7 @@
     "slowPollFactorHelp": "Los datos de configuración y alarmas cambian raramente. Solo se consultan cada N ciclos de datos para reducir la carga. Por defecto: 6 (= cada 30 segundos con intervalo de 5s).",
     "tabCloud": "Nube (S-Miles)",
     "tabLocal": "Conexión local",
+    "testCloudLoginButton": "Probar login en la nube",
+    "testCloudLoginHelp": "Ejecuta las cuatro fases del login (region_c, pre-insp, login, probe) e informa v y presencia de salt de pre-insp, si el login produjo un token y qué perfil asigna la sonda (installer / home). El resultado se muestra en una ventana emergente y también se escribe en el log del adaptador — útil para informes de errores en el foro.",
     "testConnectionButton": "Probar conexión"
 }

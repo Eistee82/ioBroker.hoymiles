@@ -213,5 +213,18 @@ const stationStates = [
     n("weather.sunrise", "Sunrise", "Sonnenaufgang", "date.sunrise", ""),
     n("weather.sunset", "Sunset", "Sonnenuntergang", "date.sunset", ""),
 ];
-export { channels, states, stationChannels, stationStates };
+const stationStateMap = new Map(stationStates.map(d => [d.id, d]));
+function buildStateCommon(def) {
+    return {
+        name: def.name,
+        type: def.type,
+        role: def.role,
+        unit: def.unit || "",
+        read: true,
+        write: !!def.write,
+        def: def.type === "boolean" ? false : def.type === "number" ? 0 : "",
+        states: def.states,
+    };
+}
+export { channels, states, stationChannels, stationStates, stationStateMap, buildStateCommon };
 //# sourceMappingURL=stateDefinitions.js.map

@@ -139,6 +139,11 @@ Cloud stations create aggregated device nodes (e.g. `hoymiles.0.station-12345.*`
 - (@Eistee82) Stop retry loop on permanent cloud auth errors to prevent Hoymiles account lockout
 - (@Eistee82) Add `info.cloudLastError` state and raise an ioBroker alert notification with reset instructions on permanent cloud auth errors
 - (@Eistee82) Bump axios to 1.15.0 and protobufjs to 8.0.1
+- (@Eistee82) Add S-Miles Home account support (Argon2id login + `/pvmc/.../*_c` data API)
+- (@Eistee82) Decide cloud profile (installer / home) via a post-login probe against `/pvm/.../select_by_page` instead of `pre-insp.v` — Hoymiles unified all accounts onto Argon2id in 2026
+- (@Eistee82) Drop the dead v0 auth fallback
+- (@Eistee82) Skip cloud-station states for fields the home-profile API doesn't provide (no empty placeholders for `latitude`/`longitude`/firmware version strings)
+- (@Eistee82) Add a "Test cloud login" diagnostic button to the admin UI with per-phase results (`region_c`, `pre-insp`, `login`, `probe`) for forum bug reports
 
 ### 0.3.4 (2026-04-08)
 - (@Eistee82) Fix disabled property type in jsonConfig table items (string, not boolean)

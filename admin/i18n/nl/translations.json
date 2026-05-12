@@ -24,5 +24,7 @@
     "slowPollFactorHelp": "Configuratie- en alarmgegevens veranderen zelden. Ze worden slechts elke Nde datacyclus opgevraagd om de belasting te verminderen. Standaard: 6 (= elke 30 seconden bij een interval van 5s).",
     "tabCloud": "Cloud (S-Miles)",
     "tabLocal": "Lokale verbinding",
+    "testCloudLoginButton": "Cloud-login testen",
+    "testCloudLoginHelp": "Voert alle vier login-fasen uit (region_c, pre-insp, login, probe) en meldt v en de aanwezigheid van een salt uit pre-insp, of de login een token heeft opgeleverd en welk profiel de probe toewijst (installer / home). Het resultaat verschijnt in een popup en wordt ook naar het adapterlog geschreven — handig voor forum-bugrapporten.",
     "testConnectionButton": "Verbinding testen"
 }

@@ -3,6 +3,7 @@ import { toKwh } from "./convert.js";
 import type DeviceContext from "./deviceContext.js";
 import { CLOUD_POLL_CONCURRENCY, DEFAULT_POLL_MS, MIN_POLL_MS, RELAY_POLL_DELAY_MS } from "./constants.js";
 import { errorMessage, logOnError, mapLimit } from "./utils.js";
+import { stationStateMap, buildStateCommon } from "./stateDefinitions.js";
 
 /**
  * Parse a string to number, returning 0 for NaN/undefined.
@@ -79,6 +80,8 @@ class CloudPoller {
 	private readonly boundSetState: ioBroker.Adapter["setStateAsync"];
 	/** Cached last cloudConnected value to avoid redundant state writes. */
 	private lastCloudConnected: boolean | undefined;
+	/** State-objects already created via `writeStationState`. Avoids re-issuing extendObjectAsync per poll. */
+	private readonly stationStateObjects: Set<string> = new Set();
 
 	/**
 	 * @param options - Cloud poller configuration
@@ -101,6 +104,42 @@ class CloudPoller {
 		this.initialFetchDone = false;
 		this.pollInProgress = false;
 		this.boundSetState = this.adapter.setStateAsync.bind(this.adapter);
+	}
+
+	/**
+	 * Write a cloud-station state, creating the underlying object on demand.
+	 *
+	 * Skips entirely when `value` is null/undefined/empty-string — the Home API surface
+	 * delivers a leaner record than the Web API (no `latitude`/`longitude`/`address`/etc.),
+	 * and we don't want to populate the object tree with zero/empty placeholders for those
+	 * accounts. Once an object has been created for a given full id, the existence check
+	 * is cached so subsequent polls are a plain `setStateAsync`.
+	 *
+	 * @param deviceId - Station device id, e.g. `station-10022030`.
+	 * @param suffix - State suffix matching a key in `stationStateMap`, e.g. `info.address`.
+	 * @param value - Value to write. Null/undefined/empty string → skipped.
+	 */
+	private async writeStationState(
+		deviceId: string,
+		suffix: string,
+		value: string | number | boolean | null | undefined,
+	): Promise<void> {
+		if (value === null || value === undefined || value === "") {
+			return;
+		}
+		const fullId = `${deviceId}.${suffix}`;
+		if (!this.stationStateObjects.has(fullId)) {
+			const def = stationStateMap.get(suffix);
+			if (def) {
+				await this.adapter.extendObjectAsync(fullId, {
+					type: "state",
+					common: buildStateCommon(def),
+					native: {},
+				});
+			}
+			this.stationStateObjects.add(fullId);
+		}
+		await this.boundSetState(fullId, value, true);
 	}
 
 	/**
@@ -349,24 +388,22 @@ class CloudPoller {
 		deviceId: string,
 		data: Awaited<ReturnType<CloudConnection["getStationRealtime"]>>,
 	): Promise<void> {
-		const s = this.boundSetState;
+		const w = (suffix: string, value: string | number | boolean | null | undefined): Promise<void> =>
+			this.writeStationState(deviceId, suffix, value);
 		const lastDataStr = data.last_data_time || "";
 		await Promise.all([
-			s(`${deviceId}.grid.power`, num(data.real_power), true),
-			s(`${deviceId}.grid.dailyEnergy`, toKwh(data.today_eq), true),
-			s(`${deviceId}.grid.monthEnergy`, toKwh(data.month_eq), true),
-			s(`${deviceId}.grid.yearEnergy`, toKwh(data.year_eq), true),
-			s(`${deviceId}.grid.totalEnergy`, toKwh(data.total_eq), true),
-			s(`${deviceId}.grid.co2Saved`, Math.round(num(data.co2_emission_reduction) / 10) / 100, true),
-			s(`${deviceId}.grid.treesPlanted`, num(data.plant_tree), true),
-			s(`${deviceId}.grid.isBalance`, !!data.is_balance, true),
-			s(`${deviceId}.grid.isReflux`, !!data.is_reflux, true),
-			s(
-				`${deviceId}.info.lastCloudUpdate`,
-				data.data_time ? new Date(`${data.data_time} UTC`).getTime() : 0,
-				true,
-			),
-			s(`${deviceId}.info.lastDataTime`, lastDataStr ? new Date(`${lastDataStr} UTC`).getTime() : 0, true),
+			w("grid.power", num(data.real_power)),
+			w("grid.dailyEnergy", toKwh(data.today_eq)),
+			w("grid.monthEnergy", toKwh(data.month_eq)),
+			w("grid.yearEnergy", toKwh(data.year_eq)),
+			w("grid.totalEnergy", toKwh(data.total_eq)),
+			w("grid.co2Saved", Math.round(num(data.co2_emission_reduction) / 10) / 100),
+			w("grid.treesPlanted", num(data.plant_tree)),
+			// is_balance / is_reflux: server sends number (0/1) on Home and boolean on Web — both coerce cleanly via !!.
+			w("grid.isBalance", !!data.is_balance),
+			w("grid.isReflux", !!data.is_reflux),
+			w("info.lastCloudUpdate", data.data_time ? new Date(`${data.data_time} UTC`).getTime() : null),
+			w("info.lastDataTime", lastDataStr ? new Date(`${lastDataStr} UTC`).getTime() : null),
 		]);
 	}
 
@@ -377,32 +414,32 @@ class CloudPoller {
 	): Promise<void> {
 		try {
 			const details = await this.cloud.getStationDetails(stationId);
-			const s = this.boundSetState;
-			const lat = num(details.latitude);
-			const lon = num(details.longitude);
+			const w = (suffix: string, value: string | number | boolean | null | undefined): Promise<void> =>
+				this.writeStationState(deviceId, suffix, value);
+			// Home accounts (find_c) lack latitude/longitude/address/status/timezone.offset — the
+			// helper skips empty/undefined values so those states never get created on the home side.
+			const lat = details.latitude != null ? num(details.latitude) : null;
+			const lon = details.longitude != null ? num(details.longitude) : null;
 			const tzOffsetS = details.timezone?.offset ?? 0;
-			if (lat !== 0 || lon !== 0) {
+			if (lat != null && lon != null && (lat !== 0 || lon !== 0)) {
 				this.stationCoords.set(stationId, { lat, lon, tzOffsetS });
 			}
-			const price = details.electricity_price || 0;
+			const price = details.electricity_price ?? null;
 			await Promise.all([
-				s(`${deviceId}.info.stationName`, details.name || "", true),
-				s(`${deviceId}.info.stationId`, stationId, true),
-				s(`${deviceId}.info.systemCapacity`, num(details.capacitor), true),
-				s(`${deviceId}.info.address`, details.address || "", true),
-				s(`${deviceId}.info.latitude`, lat, true),
-				s(`${deviceId}.info.longitude`, lon, true),
-				s(`${deviceId}.info.stationStatus`, details.status || 0, true),
-				s(
-					`${deviceId}.info.installedAt`,
-					details.create_at ? new Date(`${details.create_at} UTC`).getTime() : 0,
-					true,
-				),
-				s(`${deviceId}.info.timezone`, details.timezone?.tz_name || "", true),
-				s(`${deviceId}.grid.electricityPrice`, price, true),
-				s(`${deviceId}.grid.currency`, details.money_unit || "EUR", true),
-				s(`${deviceId}.grid.todayIncome`, Math.round(toKwh(realtimeData.today_eq) * price * 100) / 100, true),
-				s(`${deviceId}.grid.totalIncome`, Math.round(toKwh(realtimeData.total_eq) * price * 100) / 100, true),
+				w("info.stationName", details.name || null),
+				w("info.stationId", stationId),
+				w("info.systemCapacity", details.capacitor != null ? num(details.capacitor) : null),
+				w("info.address", details.address || null),
+				w("info.latitude", lat),
+				w("info.longitude", lon),
+				w("info.stationStatus", details.status ?? null),
+				w("info.installedAt", details.create_at ? new Date(`${details.create_at} UTC`).getTime() : null),
+				w("info.timezone", details.timezone?.tz_name || null),
+				w("grid.electricityPrice", price),
+				w("grid.currency", details.money_unit || null),
+				// Income calculations require a price > 0; otherwise skip so we don't create a meaningless 0-state.
+				w("grid.todayIncome", price ? Math.round(toKwh(realtimeData.today_eq) * price * 100) / 100 : null),
+				w("grid.totalIncome", price ? Math.round(toKwh(realtimeData.total_eq) * price * 100) / 100 : null),
 			]);
 		} catch (err) {
 			this.adapter.log.debug(`Cloud station details failed for ${stationId}: ${errorMessage(err)}`);
@@ -660,13 +697,16 @@ class CloudPoller {
 		}
 		try {
 			const weather = await this.cloud.getWeather(coords.lat, coords.lon);
-			const s = this.boundSetState;
-			await s(`${deviceId}.weather.icon`, weather.icon || "", true);
+			const w = (suffix: string, value: string | number | boolean | null | undefined): Promise<void> =>
+				this.writeStationState(deviceId, suffix, value);
 			const desc = WEATHER_DESCRIPTIONS[weather.icon];
-			await s(`${deviceId}.weather.description`, desc?.en || weather.icon || "", true);
-			await s(`${deviceId}.weather.temperature`, weather.temp ?? 0, true);
-			await s(`${deviceId}.weather.sunrise`, (weather.sunrise || 0) * 1000, true);
-			await s(`${deviceId}.weather.sunset`, (weather.sunset || 0) * 1000, true);
+			await Promise.all([
+				w("weather.icon", weather.icon || null),
+				w("weather.description", desc?.en || weather.icon || null),
+				w("weather.temperature", weather.temp ?? null),
+				w("weather.sunrise", weather.sunrise ? weather.sunrise * 1000 : null),
+				w("weather.sunset", weather.sunset ? weather.sunset * 1000 : null),
+			]);
 		} catch (err) {
 			this.adapter.log.debug(`Weather data failed for station ${stationId}: ${errorMessage(err)}`);
 		}

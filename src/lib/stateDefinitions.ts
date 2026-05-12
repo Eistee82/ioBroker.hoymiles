@@ -271,5 +271,31 @@ const stationStates: StateDefinition[] = [
 	n("weather.sunset", "Sunset", "Sonnenuntergang", "date.sunset", ""),
 ];
 
+/**
+ * Lookup map (suffix → definition) for cloud-station states. Used by the poller's
+ * `writeStationState` helper to create state objects on demand.
+ */
+const stationStateMap: Map<string, StateDefinition> = new Map(stationStates.map(d => [d.id, d]));
+
+/**
+ * Build the ioBroker `common` block from a state definition. Mirrors the prior
+ * inline construction in `_createStationDevice` so the on-demand path produces
+ * the same object shape.
+ *
+ * @param def - Definition entry from `states` / `stationStates`.
+ */
+function buildStateCommon(def: StateDefinition): ioBroker.StateCommon {
+	return {
+		name: def.name,
+		type: def.type,
+		role: def.role,
+		unit: def.unit || "",
+		read: true,
+		write: !!def.write,
+		def: def.type === "boolean" ? false : def.type === "number" ? 0 : "",
+		states: def.states,
+	} as ioBroker.StateCommon;
+}
+
 export type { ChannelDefinition, StateDefinition };
-export { channels, states, stationChannels, stationStates };
+export { channels, states, stationChannels, stationStates, stationStateMap, buildStateCommon };

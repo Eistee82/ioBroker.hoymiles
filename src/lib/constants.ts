@@ -55,3 +55,31 @@ export const CLOUD_DISCOVER_CONCURRENCY = 5;
 // Command validation bounds
 export const POWER_LIMIT_MIN = 2;
 export const POWER_LIMIT_MAX = 100;
+
+// Cloud API hosts and auth paths
+export const CLOUD_HOST_DEFAULT = "https://neapi.hoymiles.com";
+export const CLOUD_HOST_EU = "https://euapi.hoymiles.com";
+// v3 auth — region_c first to get the regional host + dc, then pre-insp + login.
+// pre-insp returns a nonce, optional salt (`a`), and `v`. Until 2026 we used `v` as
+// the profile signal (v=3 ⇒ home, v=2 ⇒ installer), but Hoymiles since unified all
+// accounts onto Argon2id (v=3 + salt), so `v` no longer maps to the data-API surface.
+// The authoritative profile decision now happens AFTER login via a probe against
+// PROFILE_PROBE_PATH; see CloudProfile in cloudConnection.ts. v0 fallback was dropped
+// for the same reason — the server now uniformly rejects it with "app version is low".
+export const IAM_REGION_PATH = "/iam/pub/0/c/region_c";
+export const IAM_PRE_INSPECT_PATH = "/iam/pub/3/auth/pre-insp";
+export const IAM_LOGIN_V3_PATH = "/iam/pub/3/auth/login";
+// Profile probe — reuses the same /pvm/...select_by_page that the installer data
+// surface would call. Installer/Cloud-Web accounts get status=0 with the station list;
+// home accounts are rejected by the server ("can only be used for logging in to the
+// S-Miles Home app" or similar). Cheapest endpoint that gives a definitive answer.
+export const PROFILE_PROBE_PATH = "/pvm/api/0/station/select_by_page";
+
+// User-Agent identifies the request as coming from the S-Miles Home Android app
+// (com.hm.balcony). Format from HttpUtils.m() in the decompiled APK 2.9.0:
+//   sma/ad/<appVersion>/<aboutUsTid>/<dc>
+// where <aboutUsTid>=159 (HOYMILES_COM). v3 endpoints reject requests without a
+// valid app-style UA; `_c` endpoints accept tokens from any account type.
+export const APP_USER_AGENT_PREFIX = "sma/ad";
+export const APP_VERSION = "2.9.0";
+export const APP_TID = 159;

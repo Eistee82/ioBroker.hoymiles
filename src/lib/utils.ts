@@ -115,20 +115,26 @@ export function buildCredentialChallenges(input: Buffer): string[] {
  * Compute an Argon2id credential challenge for the Hoymiles cloud API.
  * Used when the pre-inspect response includes a salt value.
  *
+ * Parameters match the S-Miles Home app (com.hm.balcony) exactly — see
+ * Argon2IDUtil.kt: ARGON2_ID, V13, t=3, m=32 MiB, p=1, hashLen=32, salt as
+ * hex-decoded bytes, password as UTF-8 bytes. Diverging from any of these
+ * yields a different hash and the server rejects the login.
+ *
  * @param input - Raw credential input
- * @param salt - Salt from the pre-inspect response
+ * @param salt - Salt from the pre-inspect response (hex string)
  * @returns Argon2id hash as hex string
  */
 export async function buildArgon2Challenge(input: Buffer, salt: string): Promise<string> {
 	const argon2 = await import("argon2");
 	const hash = await argon2.hash(input, {
 		type: argon2.argon2id,
-		salt: Buffer.from(salt),
-		timeCost: 2,
-		memoryCost: 65536,
+		salt: Buffer.from(salt, "hex"),
+		timeCost: 3,
+		memoryCost: 32768,
 		parallelism: 1,
 		hashLength: 32,
 		raw: true,
+		version: 0x13,
 	});
 	return hash.toString("hex");
 }

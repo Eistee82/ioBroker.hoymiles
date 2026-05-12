@@ -1,7 +1,7 @@
 import CloudConnection, { CloudAuthError } from "./cloudConnection.js";
 import CloudPoller from "./cloudPoller.js";
 import DeviceContext from "./deviceContext.js";
-import { stationChannels, stationStates } from "./stateDefinitions.js";
+import { stationChannels } from "./stateDefinitions.js";
 import { CLOUD_DISCOVER_CONCURRENCY, CLOUD_RETRY_INITIAL_MS, CLOUD_RETRY_MAX_MS } from "./constants.js";
 import { errorMessage, mapLimit } from "./utils.js";
 class CloudManager {
@@ -289,23 +289,6 @@ class CloudManager {
             common: { name: ch.name },
             native: {},
         })));
-        await Promise.all(stationStates.map(def => {
-            const common = {
-                name: def.name,
-                type: def.type,
-                role: def.role,
-                unit: def.unit || "",
-                read: true,
-                write: false,
-                def: def.type === "boolean" ? false : def.type === "number" ? 0 : "",
-                states: def.states,
-            };
-            return this.adapter.extendObjectAsync(`${deviceId}.${def.id}`, {
-                type: "state",
-                common: common,
-                native: {},
-            });
-        }));
         this.stationDevices.add(stationId);
         this.adapter.log.info(`Station device created: ${stationName} (${deviceId})`);
     }

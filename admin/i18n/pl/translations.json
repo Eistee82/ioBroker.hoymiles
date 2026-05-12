@@ -24,5 +24,7 @@
     "slowPollFactorHelp": "Dane konfiguracji i alarmów zmieniają się rzadko. Są odpytywane tylko co N-ty cykl danych, aby zmniejszyć obciążenie. Domyślnie: 6 (= co 30 sekund przy interwale 5s).",
     "tabCloud": "Chmura (S-Miles)",
     "tabLocal": "Połączenie lokalne",
+    "testCloudLoginButton": "Testuj logowanie do chmury",
+    "testCloudLoginHelp": "Uruchamia wszystkie cztery fazy logowania (region_c, pre-insp, login, probe) i podaje v oraz obecność salt z pre-insp, czy logowanie wygenerowało token oraz jaki profil przypisała sonda (installer / home). Wynik wyświetla się w okienku i zapisywany jest w logu adaptera — przydatne do zgłaszania błędów na forum.",
     "testConnectionButton": "Testuj połączenie"
 }

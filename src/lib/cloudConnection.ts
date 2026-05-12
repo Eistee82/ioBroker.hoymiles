@@ -1,10 +1,37 @@
 import { postJson, postBinary } from "./httpClient.js";
 import { parseChartResponse } from "./chartParser.js";
-import { TOKEN_MAX_AGE_MS, ENSURE_TOKEN_TIMEOUT_MS } from "./constants.js";
+import {
+	TOKEN_MAX_AGE_MS,
+	ENSURE_TOKEN_TIMEOUT_MS,
+	CLOUD_HOST_DEFAULT,
+	CLOUD_HOST_EU,
+	IAM_PRE_INSPECT_PATH,
+	IAM_LOGIN_V3_PATH,
+	IAM_REGION_PATH,
+	PROFILE_PROBE_PATH,
+	APP_USER_AGENT_PREFIX,
+	APP_VERSION,
+	APP_TID,
+} from "./constants.js";
 import { errorMessage, withTimeout, buildCredentialChallenges, buildArgon2Challenge } from "./utils.js";
 
-const BASE_URL = "https://neapi.hoymiles.com";
-const EU_WEATHER_URL = "https://euapi.hoymiles.com/tpa/api/0/weather/get";
+/**
+ * Cloud profile, determined by an authoritative probe against `/pvm/.../select_by_page`
+ * AFTER a successful login. Pre-insp's `v` cannot be used as the profile signal — Hoymiles
+ * unified all accounts onto Argon2id (`v=3`) in 2026, so the auth variant no longer maps
+ * 1:1 to the data-API surface a given account is allowed on.
+ *
+ * - `"installer"`: probe returned `status=0`. The account works on `global.hoymiles.com`
+ *   and reaches the full `/pvm/...` data API (latitude/longitude/address, FW version
+ *   strings, weather, …). Includes the S-Miles Installer and Cloud-Web Enduser cohorts.
+ * - `"home"`: probe was rejected (server response "can only be used for logging in to the
+ *   S-Miles Home app"). These accounts are restricted by the server to `/pvmc/.../*_c`,
+ *   which delivers a leaner record (no coordinates, no FW strings) but adds reflux /
+ *   self-consumption / electricity-price fields.
+ */
+export type CloudProfile = "installer" | "home";
+
+const EU_WEATHER_URL = `${CLOUD_HOST_EU}/tpa/api/0/weather/get`;
 
 /**
  * Validate that API response data is a non-null object.
@@ -19,6 +46,32 @@ function assertData<T>(data: unknown, label: string): T {
 	return data as T;
 }
 
+/**
+ * Map a Home-API tree node (`devices[]`, no soft_ver/hard_ver/model_no) onto the
+ * web-style `CloudDeviceNode` shape (with `children[]`). Fields the Home API does not
+ * deliver remain `undefined` — callers must already tolerate missing version strings.
+ *
+ * @param raw - Raw node object from a `/pvmc/.../select_device_c` response.
+ */
+function normalizeHomeTreeNode(raw: unknown): CloudDeviceNode {
+	const n = (raw && typeof raw === "object" ? raw : {}) as Record<string, unknown>;
+	const children = Array.isArray(n.devices) ? (n.devices as unknown[]).map(normalizeHomeTreeNode) : [];
+	return {
+		sn: typeof n.sn === "string" ? n.sn : "",
+		id: typeof n.id === "number" ? n.id : 0,
+		dtu_sn: typeof n.dtu_sn === "string" ? n.dtu_sn : "",
+		type: typeof n.type === "number" ? n.type : 0,
+		// soft_ver/hard_ver/model_no are absent in _c responses; expose as empty strings so
+		// `state.value = ""` consumers don't blow up — the on-demand state writer skips empty.
+		model_no: "",
+		soft_ver: "",
+		hard_ver: "",
+		warn_data: (n.warn_data as CloudDeviceNode["warn_data"]) ?? { connect: false, warn: false },
+		children,
+		...n,
+	};
+}
+
 interface CloudApiResponse<T = Record<string, unknown>> {
 	status: string;
 	message?: string;
@@ -26,8 +79,52 @@ interface CloudApiResponse<T = Record<string, unknown>> {
 }
 
 interface PreInspectData {
+	/** Server-generated nonce, echoed back in the login request. */
 	n: string;
+	/** Argon2id salt as hex string. Absent for legacy v=2 accounts (no Argon2 required). */
 	a?: string;
+	/** Auth protocol version. 3 = Argon2 mandatory (S-Miles Home accounts); 2 = legacy md5/sha (Web/Installer). */
+	v?: number;
+	/** Data-center marker echoed from region_c. */
+	dc?: number;
+	/** Account-state flag (0 = normal, 1 = password expired, 2 = email-add required). Adapter currently honors only 0. */
+	f?: number;
+	/** Site/tenant id (159 = HOYMILES). */
+	t?: number;
+}
+
+interface RegionData {
+	/** Regional API base URL the user's account lives on. Empty string when unknown. */
+	login_url: string;
+	/** Data-center marker. -1 = account not found, 0+ = a real region. */
+	dc: number;
+}
+
+/**
+ * Outcome of one login-diagnostic step — used by `loginDiagnostics()` to report
+ * what each phase of the auth flow said, without leaking the token.
+ */
+export interface LoginAttemptResult {
+	/** Which phase this attempt represents: region_c discovery, pre-inspect, login, or profile probe. */
+	flow: "region" | "preInsp" | "login" | "probe";
+	/** Base URL the attempt was made against. */
+	host: string;
+	/** True if the server accepted the request. */
+	ok: boolean;
+	/** Server-reported status code, if the request reached the server. */
+	status?: string;
+	/** Server-reported or transport error message, when not ok. */
+	message?: string;
+	/** Data-center marker from region_c response (region attempts only). */
+	dc?: number;
+	/** Auth protocol version reported by pre-insp (preInsp attempts only). */
+	v?: number;
+	/** Whether pre-insp returned a salt — i.e. an Argon2 challenge would be used. */
+	saltPresent?: boolean;
+	/** Cloud profile decided by the probe (probe attempts only). */
+	profile?: CloudProfile;
+	/** True if the login phase produced a session token. */
+	hasToken?: boolean;
 }
 
 interface CloudStation {
@@ -141,6 +238,15 @@ class CloudConnection {
 	private readonly log: (msg: string) => void;
 	private tokenTime: number;
 	private tokenRefreshPromise: Promise<void> | null;
+	/**
+	 * Active API base URL. Starts at CLOUD_HOST_DEFAULT and may be replaced
+	 * once region_c maps the user's account to a different regional host.
+	 */
+	private baseUrl: string;
+	/** Cloud profile decided by the post-login `/pvm/.../select_by_page` probe. null = not yet logged in. */
+	private profile: CloudProfile | null;
+	/** Last data-center returned by region_c (null = not yet queried, -1 = account unknown). */
+	private lastDc: number | null;
 
 	private assertStationId(stationId: number): void {
 		if (!stationId || stationId <= 0) {
@@ -162,67 +268,320 @@ class CloudConnection {
 		this.token = null;
 		this.tokenTime = 0;
 		this.tokenRefreshPromise = null;
+		this.baseUrl = CLOUD_HOST_DEFAULT;
+		this.profile = null;
+		this.lastDc = null;
+	}
+
+	/** Currently active API base URL (changes if region_c redirects to a regional host). */
+	getBaseUrl(): string {
+		return this.baseUrl;
+	}
+
+	/**
+	 * Cloud profile produced by the most recent login, decided by a probe against
+	 * `/pvm/.../select_by_page` AFTER the v3 login obtained a token.
+	 *
+	 * - `"installer"`: probe accepted → S-Miles Installer / Cloud-Web Enduser account. Data API is `/pvm/...`.
+	 * - `"home"`:      probe rejected → S-Miles Home account. Data API is `/pvmc/.../_c`.
+	 * - `null`:        not yet logged in (or login failed before the probe).
+	 */
+	getProfile(): CloudProfile | null {
+		return this.profile;
+	}
+
+	/** Last data-center marker from region_c. -1 = account unknown to that region; null = region_c not yet called. */
+	getLastDc(): number | null {
+		return this.lastDc;
+	}
+
+	/** Build the S-Miles-Home-app-style User-Agent for the current data-center marker. */
+	private getUserAgent(): string {
+		const dc = this.lastDc ?? 0;
+		return `${APP_USER_AGENT_PREFIX}/${APP_VERSION}/${APP_TID}/${dc}`;
+	}
+
+	/**
+	 * The host data-API requests go to. For `home` profile, all `_c` endpoints live on the
+	 * default host (`neapi.hoymiles.com`) regardless of which regional host region_c picked
+	 * for the auth phase — verified live: euapi/pvmc/... returns 404, neapi/pvmc/... returns 200.
+	 * `installer` profile (and the brief null window before the post-login profile probe)
+	 * keeps using `baseUrl`, so /pvm/ web-API calls and the probe itself stay on the regional host.
+	 */
+	private getDataHost(): string {
+		return this.profile === "home" ? CLOUD_HOST_DEFAULT : this.baseUrl;
 	}
 
 	// --- Auth ---
 
-	/** Authenticate with the Hoymiles cloud and obtain a session token. */
+	/**
+	 * Authenticate with the Hoymiles cloud and obtain a session token.
+	 *
+	 * Flow: region_c → pre-insp → login (v3) → profile probe.
+	 *
+	 * - region_c: returns the user's regional host AND the `dc` marker that goes into
+	 *   the User-Agent. Non-fatal on failure — we fall back to the default host.
+	 * - pre-insp + login (v3): Argon2id when the server returns a salt, legacy md5/sha
+	 *   otherwise. Throws `CloudAuthError` on hard reject (wrong password, account locked).
+	 * - profile probe: a single call to `/pvm/.../select_by_page` decides whether this
+	 *   account is `installer` (probe accepted → full web API) or `home` (probe rejected
+	 *   → `/pvmc/.../*_c` API only). Profile cannot be derived from `pre-insp.v` any
+	 *   longer because Hoymiles migrated all accounts to Argon2id (v=3) in 2026.
+	 *
+	 * v0 fallback was removed in 2026 — server uniformly rejects it as "app version is low".
+	 */
 	async login(): Promise<string> {
-		let lastTechError: unknown;
-		for (const challenge of this.credentials) {
-			try {
-				const token = await this.tryLogin(challenge);
-				if (token) {
-					this.token = token;
-					this.tokenTime = Date.now();
-					return this.token;
-				}
-			} catch (err) {
-				// Permanent auth errors bubble up immediately — no further strategies.
-				if (err instanceof CloudAuthError) {
-					throw err;
-				}
-				// Transient error (network/5xx): remember and try next strategy.
-				lastTechError = err;
-			}
-		}
+		this.log(`Cloud login start (host=${this.baseUrl}, user=${this.user})`);
 
-		if (lastTechError instanceof Error) {
-			throw lastTechError;
+		// Phase 1: region_c — sets baseUrl + dc. Non-fatal on failure (we still try
+		// v3 against the default host; dc=0 in the UA is a safe default).
+		await this.discoverRegion();
+
+		// Phase 2: v3 (pre-insp → login). Throws CloudAuthError on hard reject.
+		const token = await this.tryLoginV3();
+		if (!token) {
+			throw new Error("Login failed: server accepted credentials but returned no token");
 		}
-		throw new Error("Login failed: all authentication strategies rejected");
+		this.token = token;
+		this.tokenTime = Date.now();
+
+		// Phase 3: profile probe — needs a valid token. If it throws (network error) we
+		// roll back the token assignment so callers see a consistent "not logged in"
+		// state and cloudManager's retry loop can reschedule.
+		try {
+			this.profile = await this.probeDataProfile();
+		} catch (err) {
+			this.token = null;
+			this.tokenTime = 0;
+			throw err;
+		}
+		this.log(`Cloud login success: profile=${this.profile} dc=${this.lastDc ?? "n/a"} host=${this.baseUrl}`);
+		return token;
 	}
 
 	/**
-	 * Attempt a single login flow: pre-inspect to get nonce, then login with the given credential hash.
+	 * v3 flow: pre-inspect to fetch nonce+salt+v, then login with the appropriate
+	 * challenge. Profile is NOT set here — `probeDataProfile()` does that after we
+	 * have a token, because pre-insp.v no longer maps 1:1 to the data-API surface.
 	 *
-	 * @param challenge - The credential hash to use for authentication
-	 * @returns The session token on success, or null if the server accepted the request but returned no token
-	 * @throws CloudAuthError when the server reports a permanent auth failure (wrong credentials, locked account)
+	 * @returns Session token on success, or null if status=0 but data.token is empty
+	 * @throws CloudAuthError on permanent server-side rejection (wrong password, account locked)
 	 */
-	private async tryLogin(challenge: string): Promise<string | null> {
-		const preInsp = await this._post<PreInspectData>("/iam/pub/3/auth/pre-insp", { u: this.user });
+	private async tryLoginV3(): Promise<string | null> {
+		// Auth endpoints stay on the regional login host (this.baseUrl), separate from the
+		// data-API host which for home profile is forced to neapi.
+		const preInsp = await this._post<PreInspectData>(IAM_PRE_INSPECT_PATH, { u: this.user }, this.baseUrl);
 
 		if (preInsp.status !== "0") {
 			throw new CloudAuthError(preInsp.message || "Pre-inspect failed", preInsp.status);
 		}
 
 		const preData = assertData<PreInspectData>(preInsp.data, "Pre-inspect");
-		const { n: nonce, a: salt } = preData;
+		const { n: nonce, a: salt, v } = preData;
 
-		const ch = salt ? await buildArgon2Challenge(this.credentialInput, salt) : challenge;
+		const ch = salt ? await buildArgon2Challenge(this.credentialInput, salt) : this.credentials[0]; // Legacy md5/sha — same body the web portal sends.
 
-		const result = await this._post<{ token?: string }>("/iam/pub/3/auth/login", {
-			u: this.user,
-			ch,
-			n: nonce,
-		});
+		this.log(`Cloud pre-insp: v=${v ?? "?"} saltPresent=${!!salt} dc=${preData.dc ?? "n/a"}`);
+
+		const result = await this._post<{ token?: string }>(
+			IAM_LOGIN_V3_PATH,
+			{ u: this.user, ch, n: nonce },
+			this.baseUrl,
+		);
 
 		if (result.status !== "0") {
 			throw new CloudAuthError(result.message || "Login rejected", result.status);
 		}
 
 		return result.data?.token ?? null;
+	}
+
+	/**
+	 * Probe which data-API surface the account is allowed on. Hits `/pvm/.../select_by_page`
+	 * against `this.baseUrl` (regional host) — Web/Installer accounts get status=0, home
+	 * accounts get rejected by the server ("can only be used for logging in to the S-Miles
+	 * Home app" or similar). This replaces the pre-insp.v profile inference, which broke
+	 * after Hoymiles unified all accounts onto Argon2id in 2026.
+	 *
+	 * Must run AFTER token assignment — the endpoint requires authentication.
+	 *
+	 * @throws on transport/network errors. Caller must roll back token state.
+	 */
+	private async probeDataProfile(): Promise<CloudProfile> {
+		const result = await this._post<{ list?: unknown[] }>(
+			PROFILE_PROBE_PATH,
+			{ page: 1, page_size: 1 },
+			this.baseUrl,
+		);
+		if (result.status === "0") {
+			this.log(`Cloud profile probe: /pvm accepted → installer`);
+			return "installer";
+		}
+		this.log(`Cloud profile probe: /pvm rejected (status=${result.status} msg="${result.message ?? ""}") → home`);
+		return "home";
+	}
+
+	/**
+	 * Resolve the regional API host for the configured user via region_c.
+	 * On success, updates this.baseUrl and this.lastDc so all subsequent v3 + data-API
+	 * requests land on the right region with the correct User-Agent. Failure is
+	 * logged but non-fatal — we proceed against the default host with dc=0.
+	 */
+	private async discoverRegion(): Promise<void> {
+		try {
+			const result = await this._post<RegionData>(IAM_REGION_PATH, { email: this.user }, this.baseUrl);
+			if (result.status !== "0" || !result.data) {
+				this.log(
+					`Cloud region_c: status=${result.status} message="${result.message ?? ""}" — keeping host ${this.baseUrl}`,
+				);
+				return;
+			}
+			const { login_url, dc } = result.data;
+			this.lastDc = typeof dc === "number" ? dc : null;
+			if (login_url && login_url !== this.baseUrl) {
+				this.log(`Cloud region_c: switching base URL ${this.baseUrl} → ${login_url} (dc=${dc})`);
+				this.baseUrl = login_url;
+			} else if (login_url) {
+				this.log(`Cloud region_c: confirmed host ${this.baseUrl} (dc=${dc})`);
+			} else {
+				this.log(`Cloud region_c: empty login_url, dc=${dc} — keeping host ${this.baseUrl}`);
+			}
+		} catch (err) {
+			this.log(`Cloud region_c: ${errorMessage(err)} — keeping host ${this.baseUrl}`);
+		}
+	}
+
+	/**
+	 * Run a non-destructive diagnostic of the configured credentials:
+	 * region_c → pre-insp → login → profile probe.
+	 *
+	 * Returns what each phase reported so the admin UI can show exactly where the auth
+	 * flow fell over for a forum bug report. Restores all mutable state on exit —
+	 * neither token, profile, baseUrl nor dc reflect this run.
+	 */
+	async loginDiagnostics(): Promise<LoginAttemptResult[]> {
+		const attempts: LoginAttemptResult[] = [];
+		const startBase = this.baseUrl;
+		const savedToken = this.token;
+		const savedTokenTime = this.tokenTime;
+		const savedProfile = this.profile;
+		const savedLastDc = this.lastDc;
+
+		try {
+			// 1. region_c
+			try {
+				const regionResult = await this._post<RegionData>(IAM_REGION_PATH, { email: this.user }, this.baseUrl);
+				const ok = regionResult.status === "0" && !!regionResult.data?.login_url;
+				attempts.push({
+					flow: "region",
+					host: startBase,
+					ok,
+					status: regionResult.status,
+					message: regionResult.message,
+					dc: regionResult.data?.dc,
+				});
+				if (ok && regionResult.data) {
+					this.baseUrl = regionResult.data.login_url;
+					this.lastDc = typeof regionResult.data.dc === "number" ? regionResult.data.dc : null;
+				}
+			} catch (err) {
+				attempts.push({ flow: "region", host: startBase, ok: false, message: errorMessage(err) });
+			}
+
+			// 2. pre-insp — reports v / saltPresent before login is even tried. Profile is
+			// no longer inferred here (see probe phase below).
+			let preInspOk = false;
+			let preData: PreInspectData | undefined;
+			try {
+				const preInsp = await this._post<PreInspectData>(IAM_PRE_INSPECT_PATH, { u: this.user }, this.baseUrl);
+				preInspOk = preInsp.status === "0" && preInsp.data != null;
+				preData = preInsp.data;
+				attempts.push({
+					flow: "preInsp",
+					host: this.baseUrl,
+					ok: preInspOk,
+					status: preInsp.status,
+					message: preInsp.message,
+					v: preData?.v,
+					saltPresent: !!preData?.a,
+				});
+			} catch (err) {
+				attempts.push({ flow: "preInsp", host: this.baseUrl, ok: false, message: errorMessage(err) });
+			}
+
+			// 3. login — only attempted if pre-insp succeeded (otherwise we'd just send garbage to
+			// the server with no chance of success and no diagnostic benefit).
+			let probeToken: string | null = null;
+			if (preInspOk && preData?.n) {
+				try {
+					const ch = preData.a
+						? await buildArgon2Challenge(this.credentialInput, preData.a)
+						: this.credentials[0];
+					const result = await this._post<{ token?: string }>(
+						IAM_LOGIN_V3_PATH,
+						{ u: this.user, ch, n: preData.n },
+						this.baseUrl,
+					);
+					const ok = result.status === "0" && !!result.data?.token;
+					attempts.push({
+						flow: "login",
+						host: this.baseUrl,
+						ok,
+						status: result.status,
+						message: result.message,
+						hasToken: !!result.data?.token,
+					});
+					if (ok) {
+						probeToken = result.data?.token ?? null;
+					}
+				} catch (err) {
+					if (err instanceof CloudAuthError) {
+						attempts.push({
+							flow: "login",
+							host: this.baseUrl,
+							ok: false,
+							status: err.code,
+							message: err.message,
+						});
+					} else {
+						attempts.push({ flow: "login", host: this.baseUrl, ok: false, message: errorMessage(err) });
+					}
+				}
+			}
+
+			// 4. profile probe — only attempted if login produced a token. Temporarily writes
+			// `this.token` so _post sends the auth header; the outer `finally` restores it.
+			if (probeToken) {
+				this.token = probeToken;
+				try {
+					const probeResult = await this._post<{ list?: unknown[] }>(
+						PROFILE_PROBE_PATH,
+						{ page: 1, page_size: 1 },
+						this.baseUrl,
+					);
+					const accepted = probeResult.status === "0";
+					attempts.push({
+						flow: "probe",
+						host: this.baseUrl,
+						ok: true,
+						status: probeResult.status,
+						message: probeResult.message,
+						profile: accepted ? "installer" : "home",
+					});
+				} catch (err) {
+					attempts.push({ flow: "probe", host: this.baseUrl, ok: false, message: errorMessage(err) });
+				}
+			}
+		} finally {
+			// Restore state — diagnostics must not interfere with a real login.
+			this.baseUrl = startBase;
+			this.token = savedToken;
+			this.tokenTime = savedTokenTime;
+			this.profile = savedProfile;
+			this.lastDc = savedLastDc;
+		}
+
+		return attempts;
 	}
 
 	/** Re-login if the current token is older than 1 hour. */
@@ -247,45 +606,78 @@ class CloudConnection {
 	/** Clear the current session token. */
 	disconnect(): void {
 		this.token = null;
+		this.profile = null;
 	}
 
 	// --- Data endpoints ---
 
-	/** Fetch the list of stations (plants) for this account. */
+	/**
+	 * Fetch the list of stations (plants) for this account. Home accounts get the
+	 * same data over `/pvmc/.../select_by_page_c` but the station id arrives as
+	 * `sid` instead of `id` — normalized to `id` here so callers don't care.
+	 */
 	async getStationList(): Promise<CloudStation[]> {
 		await this.ensureToken();
-		const result = await this._post<{ list?: CloudStation[] }>("/pvm/api/0/station/select_by_page", {
+		const path =
+			this.profile === "home" ? "/pvmc/api/0/station/select_by_page_c" : "/pvm/api/0/station/select_by_page";
+		const result = await this._post<{ list?: Record<string, unknown>[] }>(path, {
 			page: 1,
 			page_size: 100,
 		});
 		if (result.status !== "0") {
 			throw new Error(`Station list failed: ${result.message}`);
 		}
-		return result.data?.list || [];
+		const rawList = result.data?.list ?? [];
+		return rawList.map(entry => {
+			// home: id arrives as `sid`. Preserve everything else so future fields stay accessible.
+			const id = typeof entry.id === "number" ? entry.id : typeof entry.sid === "number" ? entry.sid : 0;
+			return { ...entry, id, name: typeof entry.name === "string" ? entry.name : "" } as CloudStation;
+		});
 	}
 
-	/** @param stationId - Station ID to query */
+	/**
+	 * Get station details. Home accounts receive a leaner record via `/pvmc/.../find_c`:
+	 * `latitude`, `longitude`, `address`, `status`, `local_time`, `warn_data` are NOT present.
+	 * Callers must treat those fields as optional (already is `[key: string]: unknown` typed).
+	 *
+	 * @param stationId - Station ID to query
+	 */
 	async getStationDetails(stationId: number): Promise<CloudStationDetails> {
 		this.assertStationId(stationId);
 		await this.ensureToken();
-		const result = await this._post("/pvm/api/0/station/find", { id: stationId });
+		// Web wants `{id}`, home wants `{sid}` — verified live; `{id}` against find_c gives a DTO error.
+		const isHome = this.profile === "home";
+		const path = isHome ? "/pvmc/api/0/station/find_c" : "/pvm/api/0/station/find";
+		const body = isHome ? { sid: stationId } : { id: stationId };
+		const result = await this._post(path, body);
 		if (result.status !== "0") {
 			throw new Error(`Station details failed: ${result.message}`);
 		}
 		return assertData<CloudStationDetails>(result.data, "Station details");
 	}
 
-	/** @param stationId - Station ID to query */
+	/**
+	 * Get the device tree (DTU + inverters) for a station. The two API surfaces use
+	 * different field names: web returns `children[]` with `soft_ver`/`hard_ver`/`model_no`
+	 * strings; home returns `devices[]` with compact `extend_data.soft_num` integers and no
+	 * model name. The wrapper normalizes the tree shape (devices → children) so the rest of
+	 * the adapter can iterate without branching, but fields not delivered by `_c` remain
+	 * undefined (callers must already tolerate that and skip the corresponding states).
+	 *
+	 * @param stationId - Station ID to query
+	 */
 	async getDeviceTree(stationId: number): Promise<CloudDeviceNode[]> {
 		this.assertStationId(stationId);
 		await this.ensureToken();
-		const result = await this._post("/pvm/api/0/station/select_device_of_tree", {
-			id: stationId,
-		});
+		const isHome = this.profile === "home";
+		const path = isHome ? "/pvmc/api/0/station/select_device_c" : "/pvm/api/0/station/select_device_of_tree";
+		const body = isHome ? { sid: stationId } : { id: stationId };
+		const result = await this._post(path, body);
 		if (result.status !== "0") {
 			throw new Error(`Device tree failed: ${result.message}`);
 		}
-		return assertData<CloudDeviceNode[]>(result.data ?? [], "Device tree");
+		const raw = assertData<unknown[]>(result.data ?? [], "Device tree");
+		return isHome ? raw.map(node => normalizeHomeTreeNode(node)) : (raw as CloudDeviceNode[]);
 	}
 
 	/**
@@ -308,8 +700,12 @@ class CloudConnection {
 	): Promise<Record<string, number> | null> {
 		this.assertStationId(stationId);
 		await this.ensureToken();
+		const path =
+			this.profile === "home"
+				? "/pvmc/api/0/micro_data/count_by_day_c"
+				: "/pvm-data/api/0/micro/data/count_by_day";
 		try {
-			const rawBuf = await this._postBinary("/pvm-data/api/0/micro/data/count_by_day", {
+			const rawBuf = await this._postBinary(path, {
 				sid: stationId,
 				date,
 				mi_list: microIds,
@@ -323,7 +719,10 @@ class CloudConnection {
 	}
 
 	private _postBinary(apiPath: string, body: Record<string, unknown>): Promise<Buffer> {
-		return postBinary(new URL(apiPath, BASE_URL).href, body, { token: this.token });
+		return postBinary(new URL(apiPath, this.getDataHost()).href, body, {
+			token: this.token,
+			userAgent: this.getUserAgent(),
+		});
 	}
 
 	/**
@@ -347,8 +746,12 @@ class CloudConnection {
 	): Promise<Record<string, number> | null> {
 		this.assertStationId(stationId);
 		await this.ensureToken();
+		const path =
+			this.profile === "home"
+				? "/pvmc/api/0/module_data/count_by_day_c"
+				: "/pvm-data/api/0/module/data/count_by_day";
 		try {
-			const rawBuf = await this._postBinary("/pvm-data/api/0/module/data/count_by_day", {
+			const rawBuf = await this._postBinary(path, {
 				sid: stationId,
 				date,
 				mi_list: [{ id: microId, port }],
@@ -361,13 +764,23 @@ class CloudConnection {
 		}
 	}
 
-	/** @param stationId - Station ID to query */
+	/**
+	 * Get station-wide realtime energy/power. Both API surfaces produce the same
+	 * 15 core fields (today_eq, real_power, …); the home variant additionally returns
+	 * `reflux_station_data`, `efl_*`, `local_time`, `warn_data`, and `electricity_price`
+	 * — see `project_c_api_new_fields.md` for the full inventory we want to surface
+	 * in phase 2.
+	 *
+	 * @param stationId - Station ID to query
+	 */
 	async getStationRealtime(stationId: number): Promise<CloudRealtimeData> {
 		this.assertStationId(stationId);
 		await this.ensureToken();
-		const result = await this._post<CloudRealtimeData>("/pvm-data/api/0/station/data/count_station_real_data", {
-			sid: stationId,
-		});
+		const path =
+			this.profile === "home"
+				? "/pvmc/api/0/station_data/count_station_real_data_c"
+				: "/pvm-data/api/0/station/data/count_station_real_data";
+		const result = await this._post<CloudRealtimeData>(path, { sid: stationId });
 		if (result.status !== "0") {
 			throw new Error(`Realtime data failed: ${result.message}`);
 		}
@@ -387,6 +800,7 @@ class CloudConnection {
 			{ lat, lon },
 			{
 				token: this.token,
+				userAgent: this.getUserAgent(),
 			},
 		);
 		if (result.status !== "0") {
@@ -407,23 +821,49 @@ class CloudConnection {
 			throw new Error("Invalid dtuSn");
 		}
 		await this.ensureToken();
-		const result = await this._post("/pvm/api/0/upgrade/compare", {
-			sid: stationId,
-			dtu_sn: dtuSn,
-		});
+		const isHome = this.profile === "home";
+		const path = isHome ? "/pvmc/api/0/station/upgrade_compare_c" : "/pvm/api/0/upgrade/compare";
+		const result = await this._post<{
+			tid?: string;
+			// web shape:
+			upgrade?: number;
+			done?: number;
+			// home shape:
+			list?: Array<{ sn?: string; is_upgrade?: number; target_ver?: number; current_ver?: number }>;
+		}>(path, { sid: stationId, dtu_sn: dtuSn });
 		if (result.status !== "0") {
 			throw new Error(`Firmware check failed: ${result.message}`);
 		}
-		return assertData<FirmwareStatus>(result.data ?? { upgrade: 0, done: 0, tid: "" }, "Firmware status");
+		const data = result.data;
+		if (isHome) {
+			// _c shape: per-device list. "upgrade" = ANY device on this DTU has is_upgrade>0.
+			const anyUpgrade = (data?.list ?? []).some(e => (e?.is_upgrade ?? 0) > 0);
+			return { upgrade: anyUpgrade ? 1 : 0, done: 0, tid: data?.tid ?? "" };
+		}
+		return assertData<FirmwareStatus>(data ?? { upgrade: 0, done: 0, tid: "" }, "Firmware status");
 	}
 
 	// --- HTTP helpers ---
 
+	/**
+	 * POST to a data endpoint. Default host comes from `getDataHost()` so `home` profile
+	 * data calls automatically land on `neapi`. Auth endpoints pass `hostOverride=this.baseUrl`
+	 * because they must use the regional login host.
+	 *
+	 * @param apiPath - Endpoint path relative to the base URL (e.g. `/pvmc/api/0/station/find_c`).
+	 * @param body - JSON body to POST.
+	 * @param hostOverride - Force this host instead of the profile-dependent default (used for auth endpoints).
+	 */
 	private _post<T = Record<string, unknown>>(
 		apiPath: string,
 		body: Record<string, unknown>,
+		hostOverride?: string,
 	): Promise<CloudApiResponse<T>> {
-		return postJson<CloudApiResponse<T>>(new URL(apiPath, BASE_URL).href, body, { token: this.token });
+		const url = new URL(apiPath, hostOverride ?? this.getDataHost()).href;
+		return postJson<CloudApiResponse<T>>(url, body, {
+			token: this.token,
+			userAgent: this.getUserAgent(),
+		});
 	}
 }
 

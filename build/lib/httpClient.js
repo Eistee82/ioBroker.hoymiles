@@ -33,20 +33,24 @@ function request(url, body, options, responseType) {
         };
         const data = JSON.stringify(body);
         const parsed = new URL(url);
+        const headers = {
+            "Content-Type": "application/json",
+            "Content-Length": Buffer.byteLength(data),
+        };
+        if (options?.token) {
+            headers.Authorization = options.token;
+        }
+        if (options?.userAgent) {
+            headers["User-Agent"] = options.userAgent;
+        }
         const reqOptions = {
             hostname: parsed.hostname,
             port: parsed.port || 443,
             path: parsed.pathname,
             method: "POST",
             agent,
-            headers: {
-                "Content-Type": "application/json",
-                "Content-Length": Buffer.byteLength(data),
-            },
+            headers,
         };
-        if (options?.token) {
-            reqOptions.headers.Authorization = options.token;
-        }
         const req = https.request(reqOptions, res => {
             const chunks = [];
             res.on("data", (chunk) => chunks.push(chunk));

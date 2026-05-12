@@ -38,6 +38,27 @@ Alle Wechselrichter im Cloud-Account werden automatisch erkannt. Keine manuelle 
 
 Beide Verbindungen können gleichzeitig aktiv sein. Lokale Daten haben Vorrang — Cloud-Daten werden eingetragen wenn die DTU offline ist (z.B. nachts).
 
+#### Account-Typen — S-Miles Installer / Enduser / Home
+
+Der Adapter akzeptiert Accounts aus allen drei offiziellen Hoymiles-Apps:
+
+- **S-Miles Installer** (`com.hm.hemaiInstall1`)
+- **S-Miles Enduser** (`com.hm.hemaiClient1`)
+- **S-Miles Home** (`com.hm.balcony`)
+
+Login ist ein einzelner v3-Flow plus anschließender Profil-Probe (`region_c → pre-insp → login → probe`):
+
+- **pre-insp + login** entscheiden die Auth-Variante. Hoymiles hat 2026 alle Konten auf Argon2id (`v=3 + Salt`) vereinheitlicht — Installer-, Enduser- und Home-Konten nutzen heute dieselbe Argon2id-Challenge (Parameter aus der S-Miles-Home-Android-App: `t=3, m=32 MiB, p=1, hashLen=32, V13`). `v` ist damit kein Profil-Signal mehr. Die klassische `md5hex(password).sha256base64(password)`-Challenge bleibt als Fallback für Regionen, die noch `v=2` ausliefern.
+- **probe** (`/pvm/.../select_by_page`) entscheidet anschließend, welche Daten-API der Server für dieses Konto freigibt:
+  - probe akzeptiert → **installer**-Profil — das Konto funktioniert auf `global.hoymiles.com` und nutzt die volle `/pvm/...`-Web-API inkl. `latitude`/`longitude`/`address`/`local_time`/`status`/`warn_data` und Firmware-Versionsstrings.
+  - probe abgelehnt (Server: *„can only be used for logging in to the S-Miles Home app"*) → **home**-Profil — vom Server auf `/pvmc/.../*_c` beschränkt. Diese Surface liefert die obigen Felder nicht, dafür aber Rückspeise-/Eigenverbrauchs-Energie und Strom-Tarif. Für die fehlenden Felder legt der Adapter **keine** States an — sie erscheinen nur, wenn die jeweilige Antwort den Wert tatsächlich enthält.
+
+> **Hinweis:** `dataeu.hoymiles.com:10081` ist der EU-Cloud-Relay-Server, an den DTUs ihre Daten pushen — **kein** User-Login-Server. Der Adapter regelt das Cloud-Relay automatisch (siehe *Cloud-Relay*).
+
+#### Cloud-Login testen
+
+Wenn unsicher: Knopf **Cloud-Login testen** neben dem Passwortfeld klicken. Er läuft die vier Phasen einmal mit den aktuellen Zugangsdaten durch (`region_c`, `pre-insp`, `login`, `probe`) und meldet `v` und Salt-Vorhandensein aus pre-insp, ob der Login einen Token produziert hat und welches Profil die Probe zuweist (`installer` / `home`). Das Ergebnis steht im Adapter-Log — gut für Forum-Bug-Reports. Der Test speichert keinen Token und ändert keinen Adapter-Zustand.
+
 ## Verbindungsmodi
 
 Der Adapter unterstützt verschiedene Verbindungsmodi je nach Konfiguration:

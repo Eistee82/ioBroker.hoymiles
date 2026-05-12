@@ -1,6 +1,7 @@
 import * as utils from "@iobroker/adapter-core";
 import { fileURLToPath } from "node:url";
 import CloudManager from "./lib/cloudManager.js";
+import CloudConnection from "./lib/cloudConnection.js";
 import DeviceContext from "./lib/deviceContext.js";
 import { ProtobufHandler } from "./lib/protobufHandler.js";
 import { discoverDtus, probeHost } from "./lib/networkDiscovery.js";
@@ -302,6 +303,10 @@ class Hoymiles extends utils.Adapter {
 				void this.handleTestConnections(obj).catch(err =>
 					this.log.error(`TestConnections failed: ${errorMessage(err)}`),
 				);
+			} else if (obj.command === "testCloudLogin") {
+				void this.handleTestCloudLogin(obj).catch(err =>
+					this.log.error(`TestCloudLogin failed: ${errorMessage(err)}`),
+				);
 			} else {
 				this.log.debug(`Unknown message command: ${obj.command}`);
 				this.reply(obj, { error: `Unknown command: ${obj.command}` });
@@ -421,6 +426,74 @@ class Hoymiles extends utils.Adapter {
 			this.reply(obj, { native: { devices: updated } });
 		} catch (err) {
 			this.log.error(`Connection test failed: ${errorMessage(err)}`);
+			this.reply(obj, { error: errorMessage(err) });
+		}
+	}
+
+	/**
+	 * Diagnose the configured Hoymiles cloud credentials by trying both auth flows
+	 * (region_c discovery + v3 + v0) without storing a token. Reports back to the
+	 * admin UI which flow accepts the account — invaluable when a user reports
+	 * "Login failed: all authentication strategies rejected" in the forum.
+	 *
+	 * @param obj - The message object from admin
+	 */
+	private async handleTestCloudLogin(obj: ioBroker.Message): Promise<void> {
+		try {
+			const msg = (obj.message || {}) as { user?: string; password?: string };
+			const cfg = this.config as HoymilesConfig;
+			const user = (msg.user ?? cfg.cloudUser ?? "").trim();
+			const password = msg.password ?? cfg.cloudPassword ?? "";
+			if (!user || !password) {
+				this.reply(obj, {
+					error: { en: "Email and password required", de: "E-Mail und Passwort erforderlich" },
+				});
+				return;
+			}
+
+			this.log.info(`[testCloudLogin] starting diagnostics for ${user}`);
+			const cloud = new CloudConnection(user, password, m => this.log.debug(`[testCloudLogin] ${m}`));
+			const results = await cloud.loginDiagnostics();
+
+			// Compose human-readable summary, log it (so forum users can copy from logs),
+			// and return raw results to the UI.
+			const summary = results
+				.map(r => {
+					const head = `${r.flow}@${new URL(r.host).host}`;
+					if (r.flow === "region") {
+						return r.ok
+							? `${head}: ok (dc=${r.dc ?? "n/a"})`
+							: `${head}: failed${r.status ? ` status=${r.status}` : ""}${r.message ? ` "${r.message}"` : ""}`;
+					}
+					if (r.flow === "preInsp") {
+						return r.ok
+							? `${head}: ok (v=${r.v ?? "?"} salt=${r.saltPresent ? "yes" : "no"})`
+							: `${head}: failed${r.status ? ` status=${r.status}` : ""}${r.message ? ` "${r.message}"` : ""}`;
+					}
+					if (r.flow === "probe") {
+						return r.ok
+							? `${head}: profile=${r.profile ?? "?"}${r.status ? ` (status=${r.status})` : ""}`
+							: `${head}: probe failed${r.message ? ` "${r.message}"` : ""}`;
+					}
+					return r.ok
+						? `${head}: ACCEPTED (token received)`
+						: `${head}: rejected${r.status ? ` status=${r.status}` : ""}${r.message ? ` "${r.message}"` : ""}`;
+				})
+				.join(" | ");
+
+			this.log.info(`[testCloudLogin] result for ${user}: ${summary}`);
+
+			const anyAccepted = results.some(r => r.flow === "login" && r.ok);
+			this.reply(obj, {
+				result: {
+					ok: anyAccepted,
+					user,
+					summary,
+					attempts: results,
+				},
+			});
+		} catch (err) {
+			this.log.error(`[testCloudLogin] unexpected error: ${errorMessage(err)}`);
 			this.reply(obj, { error: errorMessage(err) });
 		}
 	}

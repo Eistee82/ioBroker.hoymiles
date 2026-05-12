@@ -8,6 +8,9 @@ function makeMockAdapter() {
 	return {
 		log: { info: () => {}, warn: () => {}, debug: () => {}, error: () => {} },
 		setStateAsync: async () => {},
+		// CloudPoller's writeStationState creates state objects on demand. Tests don't care about
+		// the object, only the resulting setStateAsync call, so this is a no-op stub.
+		extendObjectAsync: async () => {},
 		setTimeout: (fn, ms) => globalThis.setTimeout(fn, ms),
 		clearTimeout: id => globalThis.clearTimeout(id),
 	};

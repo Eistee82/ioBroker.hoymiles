@@ -22,6 +22,8 @@ function initAgent(options?: { maxSockets?: number }): void {
 
 interface HttpPostOptions {
 	token?: string | null;
+	/** Optional User-Agent header. Hoymiles v3 / `_c` endpoints require an app-style UA (`sma/ad/<ver>/<tid>/<dc>`) to accept requests. */
+	userAgent?: string;
 }
 
 /**
@@ -29,7 +31,7 @@ interface HttpPostOptions {
  *
  * @param url - Full URL to POST to
  * @param body - JSON request body
- * @param options - Optional token for Authorization header
+ * @param options - Optional token / user agent
  */
 function postJson<T>(url: string, body: Record<string, unknown>, options?: HttpPostOptions): Promise<T> {
 	return request(url, body, options, "json") as Promise<T>;
@@ -40,7 +42,7 @@ function postJson<T>(url: string, body: Record<string, unknown>, options?: HttpP
  *
  * @param url - Full URL to POST to
  * @param body - JSON request body
- * @param options - Optional token for Authorization header
+ * @param options - Optional token / user agent
  */
 function postBinary(url: string, body: Record<string, unknown>, options?: HttpPostOptions): Promise<Buffer> {
 	return request(url, body, options, "binary") as Promise<Buffer>;
@@ -70,21 +72,25 @@ function request(
 		const data = JSON.stringify(body);
 		const parsed = new URL(url);
 
+		const headers: Record<string, string | number> = {
+			"Content-Type": "application/json",
+			"Content-Length": Buffer.byteLength(data),
+		};
+		if (options?.token) {
+			headers.Authorization = options.token;
+		}
+		if (options?.userAgent) {
+			headers["User-Agent"] = options.userAgent;
+		}
+
 		const reqOptions: https.RequestOptions = {
 			hostname: parsed.hostname,
 			port: parsed.port || 443,
 			path: parsed.pathname,
 			method: "POST",
 			agent,
-			headers: {
-				"Content-Type": "application/json",
-				"Content-Length": Buffer.byteLength(data),
-			},
+			headers,
 		};
-
-		if (options?.token) {
-			(reqOptions.headers as Record<string, string | number>).Authorization = options.token;
-		}
 
 		const req = https.request(reqOptions, res => {
 			const chunks: Buffer[] = [];

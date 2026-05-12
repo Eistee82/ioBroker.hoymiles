@@ -216,6 +216,24 @@
             "validator": "!data.enableCloud || data.cloudPassword !== ''",
             "validatorErrorText": "cloudPasswordRequired"
         },
+        "_testCloudLogin": {
+            "type": "sendTo",
+            "command": "testCloudLogin",
+            "jsonData": "{\"user\": \"${data.cloudUser}\", \"password\": \"${data.cloudPassword}\"}",
+            "label": "testCloudLoginButton",
+            "icon": "send",
+            "variant": "contained",
+            "color": "primary",
+            "useNative": true,
+            "showProcess": true,
+            "disabled": "!data.enableCloud || !data.cloudUser || !data.cloudPassword",
+            "help": "testCloudLoginHelp",
+            "xs": 12,
+            "sm": 6,
+            "md": 6,
+            "lg": 6,
+            "xl": 6
+        },
         "_cloudInfo": {
             "type": "staticText",
             "text": "cloudInfo",
