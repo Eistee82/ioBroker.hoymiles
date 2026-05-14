@@ -1,6 +1,6 @@
 import { postJson, postBinary } from "./httpClient.js";
 import { parseChartResponse } from "./chartParser.js";
-import { TOKEN_MAX_AGE_MS, ENSURE_TOKEN_TIMEOUT_MS, CLOUD_HOST_DEFAULT, CLOUD_HOST_EU, IAM_PRE_INSPECT_PATH, IAM_LOGIN_V3_PATH, IAM_REGION_PATH, PROFILE_PROBE_PATH, APP_USER_AGENT_PREFIX, APP_VERSION, APP_TID, } from "./constants.js";
+import { TOKEN_MAX_AGE_MS, ENSURE_TOKEN_TIMEOUT_MS, CLOUD_HOST_DEFAULT, CLOUD_HOST_EU, CLOUD_DC_HOSTS, IAM_PRE_INSPECT_PATH, IAM_LOGIN_V3_PATH, IAM_REGION_PATH, PROFILE_PROBE_PATH, STATION_AK_FIND_PATH, APP_USER_AGENT_PREFIX, APP_VERSION, APP_TID, } from "./constants.js";
 import { errorMessage, withTimeout, buildCredentialChallenges, buildArgon2Challenge } from "./utils.js";
 const EU_WEATHER_URL = `${CLOUD_HOST_EU}/tpa/api/0/weather/get`;
 function assertData(data, label) {
@@ -44,6 +44,8 @@ class CloudConnection {
     baseUrl;
     profile;
     lastDc;
+    stationDcMap;
+    stationAkMap;
     assertStationId(stationId) {
         if (!stationId || stationId <= 0) {
             throw new Error("Invalid stationId");
@@ -61,6 +63,8 @@ class CloudConnection {
         this.baseUrl = CLOUD_HOST_DEFAULT;
         this.profile = null;
         this.lastDc = null;
+        this.stationDcMap = new Map();
+        this.stationAkMap = new Map();
     }
     getBaseUrl() {
         return this.baseUrl;
@@ -77,6 +81,16 @@ class CloudConnection {
     }
     getDataHost() {
         return this.profile === "home" ? CLOUD_HOST_DEFAULT : this.baseUrl;
+    }
+    getStationHost(stationId) {
+        const dc = this.stationDcMap.get(stationId);
+        if (dc != null && CLOUD_DC_HOSTS[dc]) {
+            return CLOUD_DC_HOSTS[dc];
+        }
+        return this.getDataHost();
+    }
+    getStationAk(stationId) {
+        return this.stationAkMap.get(stationId);
     }
     async login() {
         this.log(`Cloud login start (host=${this.baseUrl}, user=${this.user})`);
@@ -275,6 +289,8 @@ class CloudConnection {
     disconnect() {
         this.token = null;
         this.profile = null;
+        this.stationDcMap.clear();
+        this.stationAkMap.clear();
     }
     async getStationList() {
         await this.ensureToken();
@@ -287,8 +303,16 @@ class CloudConnection {
             throw new Error(`Station list failed: ${result.message}`);
         }
         const rawList = result.data?.list ?? [];
+        this.stationDcMap.clear();
+        this.stationAkMap.clear();
         return rawList.map(entry => {
             const id = typeof entry.id === "number" ? entry.id : typeof entry.sid === "number" ? entry.sid : 0;
+            if (id && typeof entry.dc === "number") {
+                this.stationDcMap.set(id, entry.dc);
+            }
+            if (id && typeof entry.ak === "string" && entry.ak) {
+                this.stationAkMap.set(id, entry.ak);
+            }
             return { ...entry, id, name: typeof entry.name === "string" ? entry.name : "" };
         });
     }
@@ -303,6 +327,33 @@ class CloudConnection {
             throw new Error(`Station details failed: ${result.message}`);
         }
         return assertData(result.data, "Station details");
+    }
+    async getStationExtInfo(stationId) {
+        this.assertStationId(stationId);
+        const ak = this.stationAkMap.get(stationId);
+        if (!ak) {
+            return null;
+        }
+        await this.ensureToken();
+        const body = { sid: stationId, ak };
+        const stationHost = this.getStationHost(stationId);
+        const accountHost = this.getDataHost();
+        const hosts = stationHost === accountHost ? [stationHost] : [stationHost, accountHost];
+        let lastError = null;
+        for (const host of hosts) {
+            try {
+                const result = await this._post(STATION_AK_FIND_PATH, body, host);
+                if (result.status !== "0") {
+                    throw new Error(`Station ext-info failed: ${result.message}`);
+                }
+                return assertData(result.data, "Station ext-info");
+            }
+            catch (err) {
+                lastError = err instanceof Error ? err : new Error(String(err));
+                this.log(`Station ext-info on ${host} failed: ${lastError.message}`);
+            }
+        }
+        throw lastError ?? new Error("Station ext-info failed");
     }
     async getDeviceTree(stationId) {
         this.assertStationId(stationId);

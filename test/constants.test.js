@@ -25,6 +25,15 @@ describe("constants – all exports", function () {
 				} else if (name.startsWith("IAM_") && name.endsWith("_PATH")) {
 					assert.match(value, /^\/[\w/-]+$/, `${name} should be an absolute path`);
 				}
+			} else if (value && typeof value === "object") {
+				// e.g. CLOUD_DC_HOSTS — a Record<number, host>. Validate shape generically.
+				const objEntries = Object.entries(value);
+				assert.ok(objEntries.length > 0, `${name} should not be empty`);
+				for (const [k, v] of objEntries) {
+					assert.match(k, /^\d+$/, `${name} key "${k}" should be numeric`);
+					assert.strictEqual(typeof v, "string", `${name}[${k}] should be a string`);
+					assert.match(v, /^https:\/\/[^/]+$/, `${name}[${k}] should be a bare HTTPS host URL`);
+				}
 			} else {
 				assert.strictEqual(typeof value, "number", `${name} should be a number, got ${typeof value}`);
 				assert.ok(value > 0, `${name} should be > 0, got ${value}`);
