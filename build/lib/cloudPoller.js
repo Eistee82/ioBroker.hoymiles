@@ -270,9 +270,27 @@ class CloudPoller {
         try {
             const details = await this.cloud.getStationDetails(stationId);
             const w = (suffix, value) => this.writeStationState(deviceId, suffix, value);
-            const lat = details.latitude != null ? num(details.latitude) : null;
-            const lon = details.longitude != null ? num(details.longitude) : null;
+            let lat = details.latitude != null ? num(details.latitude) : null;
+            let lon = details.longitude != null ? num(details.longitude) : null;
+            let address = details.address ?? null;
             const tzOffsetS = details.timezone?.offset ?? 0;
+            if (lat == null || lon == null || (lat === 0 && lon === 0)) {
+                try {
+                    const ext = await this.cloud.getStationExtInfo(stationId);
+                    if (ext) {
+                        const extLat = ext.latitude != null ? num(ext.latitude) : null;
+                        const extLon = ext.longitude != null ? num(ext.longitude) : null;
+                        if (extLat != null && extLon != null && (extLat !== 0 || extLon !== 0)) {
+                            lat = extLat;
+                            lon = extLon;
+                            address = ext.address ?? address;
+                        }
+                    }
+                }
+                catch (err) {
+                    this.adapter.log.debug(`Station ext-info failed for ${stationId}: ${errorMessage(err)}`);
+                }
+            }
             if (lat != null && lon != null && (lat !== 0 || lon !== 0)) {
                 this.stationCoords.set(stationId, { lat, lon, tzOffsetS });
             }
@@ -281,7 +299,7 @@ class CloudPoller {
                 w("info.stationName", details.name || null),
                 w("info.stationId", stationId),
                 w("info.systemCapacity", details.capacitor != null ? num(details.capacitor) : null),
-                w("info.address", details.address || null),
+                w("info.address", address || null),
                 w("info.latitude", lat),
                 w("info.longitude", lon),
                 w("info.stationStatus", details.status ?? null),

@@ -134,6 +134,10 @@ Each DTU creates a device node using its serial number as ID (e.g. `hoymiles.0.4
 Cloud stations create aggregated device nodes (e.g. `hoymiles.0.station-12345.*`).
 
 ## Changelog
+### **WORK IN PROGRESS**
+- (@Eistee82) Route per-station cloud calls via the station's data-center: `select_by_page` now caches each station's `dc` and `ak`, and `getStationDetails` / `getStationExtInfo` use the resolved DC host so that stations in a region other than the account's no longer return placeholder `latitude="0.0"` / `longitude="0.0"`
+- (@Eistee82) Add Home-profile supplementary `pvm-ext/api/0/station-ak/find` call to recover `latitude` / `longitude` / `address` when `find_c` omits them — restores the weather poll for S-Miles Home accounts
+
 ### 0.3.5 (2026-05-13)
 - (copilot) Adapter requires node.js >= 22 now
 - (@Eistee82) Stop retry loop on permanent cloud auth errors to prevent Hoymiles account lockout

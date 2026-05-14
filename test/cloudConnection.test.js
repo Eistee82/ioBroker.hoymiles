@@ -66,6 +66,41 @@ describe("cloudConnection – getDeviceTree validation", function () {
 	});
 });
 
+describe("cloudConnection – getStationExtInfo", function () {
+	it("throws 'Invalid stationId' for 0", async function () {
+		const cloud = new CloudConnection("u", "p");
+		await assert.rejects(() => cloud.getStationExtInfo(0), {
+			message: "Invalid stationId",
+		});
+	});
+
+	it("returns null when no ak is cached for the station (no network call)", async function () {
+		const cloud = new CloudConnection("u", "p");
+		// Token set so ensureToken doesn't fire a login; map is empty so we never hit the network.
+		cloud.token = "fake-token";
+		cloud.tokenTime = Date.now();
+		const result = await cloud.getStationExtInfo(12345);
+		assert.strictEqual(result, null);
+	});
+});
+
+describe("cloudConnection – stationDcMap / stationAkMap", function () {
+	it("getStationAk returns undefined when nothing cached", function () {
+		const cloud = new CloudConnection("u", "p");
+		assert.strictEqual(cloud.getStationAk(99), undefined);
+	});
+
+	it("disconnect clears stationDcMap and stationAkMap", function () {
+		const cloud = new CloudConnection("u", "p");
+		cloud.stationDcMap.set(1, 1);
+		cloud.stationAkMap.set(1, "AK-1");
+		cloud.disconnect();
+		assert.strictEqual(cloud.stationDcMap.size, 0);
+		assert.strictEqual(cloud.stationAkMap.size, 0);
+		assert.strictEqual(cloud.getStationAk(1), undefined);
+	});
+});
+
 describe("cloudConnection – checkFirmwareUpdate validation", function () {
 	it("throws 'Invalid stationId' for 0", async function () {
 		const cloud = new CloudConnection("u", "p");

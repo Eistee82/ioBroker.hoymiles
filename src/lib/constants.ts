@@ -59,6 +59,20 @@ export const POWER_LIMIT_MAX = 100;
 // Cloud API hosts and auth paths
 export const CLOUD_HOST_DEFAULT = "https://neapi.hoymiles.com";
 export const CLOUD_HOST_EU = "https://euapi.hoymiles.com";
+/**
+ * Station-level data-center → host map. `select_by_page` returns a `dc` field per
+ * station which decides where its real lat/lon/address (and a few other fields)
+ * live — these are NOT automatically mirrored to the account host. Verified live:
+ * an account with region_c.dc=0 owning a `dc=1` station gets `latitude="0.0"` from
+ * neapi but the actual coordinates from euapi for the same /pvm/.../find call.
+ * The Hoymiles app does the same DC routing via DCManager + per-station `dc`.
+ */
+export const CLOUD_DC_HOSTS: Record<number, string> = {
+	0: CLOUD_HOST_DEFAULT,
+	1: CLOUD_HOST_EU,
+};
+/** Home-account station info (incl. lat/lon/address) — not delivered by `find_c`. */
+export const STATION_AK_FIND_PATH = "/pvm-ext/api/0/station-ak/find";
 // v3 auth — region_c first to get the regional host + dc, then pre-insp + login.
 // pre-insp returns a nonce, optional salt (`a`), and `v`. Until 2026 we used `v` as
 // the profile signal (v=3 ⇒ home, v=2 ⇒ installer), but Hoymiles since unified all

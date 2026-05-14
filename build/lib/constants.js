@@ -38,6 +38,11 @@ export const POWER_LIMIT_MIN = 2;
 export const POWER_LIMIT_MAX = 100;
 export const CLOUD_HOST_DEFAULT = "https://neapi.hoymiles.com";
 export const CLOUD_HOST_EU = "https://euapi.hoymiles.com";
+export const CLOUD_DC_HOSTS = {
+    0: CLOUD_HOST_DEFAULT,
+    1: CLOUD_HOST_EU,
+};
+export const STATION_AK_FIND_PATH = "/pvm-ext/api/0/station-ak/find";
 export const IAM_REGION_PATH = "/iam/pub/0/c/region_c";
 export const IAM_PRE_INSPECT_PATH = "/iam/pub/3/auth/pre-insp";
 export const IAM_LOGIN_V3_PATH = "/iam/pub/3/auth/login";

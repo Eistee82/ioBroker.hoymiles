@@ -5,10 +5,12 @@ import {
 	ENSURE_TOKEN_TIMEOUT_MS,
 	CLOUD_HOST_DEFAULT,
 	CLOUD_HOST_EU,
+	CLOUD_DC_HOSTS,
 	IAM_PRE_INSPECT_PATH,
 	IAM_LOGIN_V3_PATH,
 	IAM_REGION_PATH,
 	PROFILE_PROBE_PATH,
+	STATION_AK_FIND_PATH,
 	APP_USER_AGENT_PREFIX,
 	APP_VERSION,
 	APP_TID,
@@ -200,6 +202,19 @@ interface WeatherData {
 	sunset: number;
 }
 
+/**
+ * Response shape of `/pvm-ext/api/0/station-ak/find` — the supplementary endpoint
+ * the S-Miles Home app uses to fetch lat/lon/address for a station whose `find_c`
+ * record does not carry these fields. Verified against the balcony APK's `WeatherHelper`.
+ */
+interface CloudStationExtInfo {
+	id?: number;
+	latitude?: string;
+	longitude?: string;
+	address?: string;
+	[key: string]: unknown;
+}
+
 interface FirmwareStatus {
 	upgrade: number;
 	done: number;
@@ -247,6 +262,18 @@ class CloudConnection {
 	private profile: CloudProfile | null;
 	/** Last data-center returned by region_c (null = not yet queried, -1 = account unknown). */
 	private lastDc: number | null;
+	/**
+	 * Per-station data-center, populated by `getStationList()` from the `dc` field
+	 * each list entry carries. Drives `getStationHost()` so that station-scoped calls
+	 * (`find`, `select_device_of_tree`, realtime, firmware) route to the station's home
+	 * region — required because account-region replication is not guaranteed.
+	 */
+	private stationDcMap: Map<number, number>;
+	/**
+	 * Per-station access key from `select_by_page`. Required by the
+	 * `pvm-ext/station-ak/find` endpoint (Home-profile lat/lon/address).
+	 */
+	private stationAkMap: Map<number, string>;
 
 	private assertStationId(stationId: number): void {
 		if (!stationId || stationId <= 0) {
@@ -271,6 +298,8 @@ class CloudConnection {
 		this.baseUrl = CLOUD_HOST_DEFAULT;
 		this.profile = null;
 		this.lastDc = null;
+		this.stationDcMap = new Map();
+		this.stationAkMap = new Map();
 	}
 
 	/** Currently active API base URL (changes if region_c redirects to a regional host). */
@@ -310,6 +339,30 @@ class CloudConnection {
 	 */
 	private getDataHost(): string {
 		return this.profile === "home" ? CLOUD_HOST_DEFAULT : this.baseUrl;
+	}
+
+	/**
+	 * Resolve the host for a station-scoped call. Falls back to the account-default
+	 * host when the station's `dc` is unknown or unmapped — so legacy code paths that
+	 * call station endpoints before `getStationList()` still work.
+	 *
+	 * @param stationId - Cloud station ID
+	 */
+	private getStationHost(stationId: number): string {
+		const dc = this.stationDcMap.get(stationId);
+		if (dc != null && CLOUD_DC_HOSTS[dc]) {
+			return CLOUD_DC_HOSTS[dc];
+		}
+		return this.getDataHost();
+	}
+
+	/**
+	 * Access key cached from the station listing; needed for `pvm-ext/station-ak/find`.
+	 *
+	 * @param stationId - Cloud station ID
+	 */
+	getStationAk(stationId: number): string | undefined {
+		return this.stationAkMap.get(stationId);
 	}
 
 	// --- Auth ---
@@ -607,6 +660,8 @@ class CloudConnection {
 	disconnect(): void {
 		this.token = null;
 		this.profile = null;
+		this.stationDcMap.clear();
+		this.stationAkMap.clear();
 	}
 
 	// --- Data endpoints ---
@@ -628,9 +683,17 @@ class CloudConnection {
 			throw new Error(`Station list failed: ${result.message}`);
 		}
 		const rawList = result.data?.list ?? [];
+		this.stationDcMap.clear();
+		this.stationAkMap.clear();
 		return rawList.map(entry => {
 			// home: id arrives as `sid`. Preserve everything else so future fields stay accessible.
 			const id = typeof entry.id === "number" ? entry.id : typeof entry.sid === "number" ? entry.sid : 0;
+			if (id && typeof entry.dc === "number") {
+				this.stationDcMap.set(id, entry.dc);
+			}
+			if (id && typeof entry.ak === "string" && entry.ak) {
+				this.stationAkMap.set(id, entry.ak);
+			}
 			return { ...entry, id, name: typeof entry.name === "string" ? entry.name : "" } as CloudStation;
 		});
 	}
@@ -654,6 +717,48 @@ class CloudConnection {
 			throw new Error(`Station details failed: ${result.message}`);
 		}
 		return assertData<CloudStationDetails>(result.data, "Station details");
+	}
+
+	/**
+	 * Fetch supplementary station info (lat/lon/address) via the `pvm-ext` endpoint
+	 * the Home app uses. Required for Home-profile accounts because `find_c` does
+	 * not include coordinates, which leaves the weather pipeline empty.
+	 *
+	 * Needs the station's `ak` from `getStationList()`; returns `null` if `ak` is
+	 * not cached. Routes via the station's DC host like other station-scoped calls.
+	 *
+	 * @param stationId - Station ID
+	 */
+	async getStationExtInfo(stationId: number): Promise<CloudStationExtInfo | null> {
+		this.assertStationId(stationId);
+		const ak = this.stationAkMap.get(stationId);
+		if (!ak) {
+			return null;
+		}
+		await this.ensureToken();
+		const body = { sid: stationId, ak };
+		// The S-Miles app routes this call via the station's `dc` host (DCManager in the
+		// decompiled APK). We try the station-DC host first because that's where the real
+		// per-station lat/lon lives. If the token isn't accepted there (HTTP 4xx — account
+		// doesn't span regions), fall back to the account host so we don't break installs
+		// where region replication actually works.
+		const stationHost = this.getStationHost(stationId);
+		const accountHost = this.getDataHost();
+		const hosts = stationHost === accountHost ? [stationHost] : [stationHost, accountHost];
+		let lastError: Error | null = null;
+		for (const host of hosts) {
+			try {
+				const result = await this._post<CloudStationExtInfo>(STATION_AK_FIND_PATH, body, host);
+				if (result.status !== "0") {
+					throw new Error(`Station ext-info failed: ${result.message}`);
+				}
+				return assertData<CloudStationExtInfo>(result.data, "Station ext-info");
+			} catch (err) {
+				lastError = err instanceof Error ? err : new Error(String(err));
+				this.log(`Station ext-info on ${host} failed: ${lastError.message}`);
+			}
+		}
+		throw lastError ?? new Error("Station ext-info failed");
 	}
 
 	/**
