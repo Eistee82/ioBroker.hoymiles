@@ -216,10 +216,10 @@ const stationStates = [
     b("warn.stationOffline", "Station offline", "Anlage offline", "indicator.alarm"),
     b("warn.gridUnstable", "Grid voltage unstable", "Netzspannung instabil", "indicator.alarm"),
     b("warn.gridFault", "Grid fault", "Netzfehler", "indicator.alarm"),
-    b("warn.alarmActive", "Alarm active", "Alarm aktiv", "indicator.alarm"),
-    b("warn.deviceIdError", "Device ID not registered", "Geräte-ID nicht registriert", "indicator.alarm"),
+    b("warn.deviceAlarm", "Device alarm", "Gerätealarm", "indicator.alarm"),
+    b("warn.deviceIdWarning", "Device ID warning", "Geräte-ID-Warnung", "indicator.alarm"),
     b("warn.meterFault", "Meter fault", "Zählerfehler", "indicator.alarm"),
-    b("warn.powerOutputOff", "Power output off", "Ausgangsleistung abgeschaltet", "indicator.alarm"),
+    b("warn.powerLimited", "Power output limited", "Leistungsreduktion aktiv", "indicator.alarm"),
 ];
 const stationStateMap = new Map(stationStates.map(d => [d.id, d]));
 function buildStateCommon(def) {

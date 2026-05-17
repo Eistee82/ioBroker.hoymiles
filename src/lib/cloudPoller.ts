@@ -430,8 +430,8 @@ class CloudPoller {
 			const details = await this.cloud.getStationDetails(stationId);
 			const w = (suffix: string, value: string | number | boolean | null | undefined): Promise<void> =>
 				this.writeStationState(deviceId, suffix, value);
-			// Home accounts (find_c) lack latitude/longitude/address/status/timezone.offset — the
-			// helper skips empty/undefined values so those states never get created on the home side.
+			// Home accounts (find_c) lack latitude/longitude/address/status — the helper skips
+			// empty/undefined values so those states never get created on the home side.
 			let lat = details.latitude != null ? num(details.latitude) : null;
 			let lon = details.longitude != null ? num(details.longitude) : null;
 			let address = details.address ?? null;
@@ -490,10 +490,10 @@ class CloudPoller {
 				w("warn.stationOffline", wd?.s_uoff),
 				w("warn.gridUnstable", wd?.s_ustable),
 				w("warn.gridFault", wd?.g_warn),
-				w("warn.alarmActive", wd?.l3_warn),
-				w("warn.deviceIdError", wd?.s_uid),
+				w("warn.deviceAlarm", wd?.l3_warn),
+				w("warn.deviceIdWarning", wd?.s_uid),
 				w("warn.meterFault", wd?.me_warn),
-				w("warn.powerOutputOff", wd?.pw_off),
+				w("warn.powerLimited", wd?.pw_off),
 			]);
 		} catch (err) {
 			this.adapter.log.debug(`Cloud station details failed for ${stationId}: ${errorMessage(err)}`);

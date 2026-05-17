@@ -1175,7 +1175,7 @@ describe("CloudPoller – station timezone & warnings", function () {
 		await poller.poll();
 
 		assert.strictEqual(stateWrites["station-1.warn.gridFault"], true);
-		assert.strictEqual(stateWrites["station-1.warn.alarmActive"], true);
+		assert.strictEqual(stateWrites["station-1.warn.deviceAlarm"], true);
 		assert.strictEqual(stateWrites["station-1.warn.stationOffline"], false);
 		assert.strictEqual(stateWrites["station-1.warn.meterFault"], false);
 		poller.stop();
