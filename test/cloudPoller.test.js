@@ -387,7 +387,7 @@ describe("CloudPoller – nightPoll", function () {
 		// Simulate station coords (normally set by pollStationDetails)
 		poller.stationCoords = new Map([[42, { lat: 48.1, lon: 11.5 }]]);
 		// Reset lastFirmwareCheckDay so firmware check runs
-		poller.lastFirmwareCheckDay = -1;
+		poller.lastFirmwareCheckDay = new Map();
 
 		// Manually invoke the scheduled nightPoll callback
 		assert.ok(nightPollTimerFn, "night poll timer function should exist");
@@ -510,8 +510,8 @@ describe("CloudPoller – nightPoll", function () {
 
 		await poller.onLocalDisconnected();
 
-		// Set lastFirmwareCheckDay to today so it skips
-		poller.lastFirmwareCheckDay = new Date().getDate();
+		// Mark station 1 as already firmware-checked today so it skips
+		poller.lastFirmwareCheckDay = new Map([[1, new Date().getDate()]]);
 		fwCalls.length = 0;
 
 		await nightPollTimerFn();
@@ -1027,6 +1027,181 @@ describe("CloudPoller – pollDevicesAndInverters", function () {
 });
 
 // ============================================================
+// CloudPoller – info.connected source discipline
+// ============================================================
+describe("CloudPoller – info.connected source discipline", function () {
+	function setup(deviceOverrides, deviceTree) {
+		const stateWrites = {};
+		const cloud = makeMockCloud();
+		cloud.ensureToken = async () => {};
+		cloud.getStationRealtime = async () => ({
+			real_power: "0",
+			today_eq: "0",
+			month_eq: "0",
+			year_eq: "0",
+			total_eq: "0",
+			co2_emission_reduction: "0",
+			plant_tree: "0",
+		});
+		cloud.getDeviceTree = async () => deviceTree;
+		cloud.getMicroRealtimeData = async () => ({});
+		cloud.getModuleRealtimeData = async () => null;
+
+		const adapter = makeMockAdapter();
+		adapter.setStateAsync = async (id, val) => {
+			stateWrites[id] = typeof val === "object" ? val.val : val;
+		};
+
+		const devices = new Map();
+		devices.set(deviceOverrides.dtuSerial, {
+			pvStatesCreated: true,
+			createPvStates: async () => {},
+			...deviceOverrides,
+		});
+
+		const poller = makePoller({ cloud, adapter, devices, stationDevices: new Set([1]), slowPollFactor: 1 });
+		return { poller, stateWrites };
+	}
+
+	it("does NOT write info.connected for a locally-configured DTU that is offline", async function () {
+		// connection != null (locally configured) but connected === false (sun is down).
+		// The cloud must leave info.connected alone — the local layer already set it false.
+		const { poller, stateWrites } = setup(
+			{ dtuSerial: "DTU_LOCAL_OFF", cloudStationId: 1, connection: { connected: false } },
+			[
+				{
+					sn: "DTU_LOCAL_OFF",
+					id: 10,
+					children: [{ sn: "INV1", id: 100, model_no: "HMS-400W-1T", warn_data: { connect: true } }],
+				},
+			],
+		);
+		await poller.poll();
+		assert.strictEqual(
+			stateWrites["DTU_LOCAL_OFF.info.connected"],
+			undefined,
+			"cloud poller must not touch info.connected of a locally-configured DTU",
+		);
+		poller.stop();
+	});
+
+	it("writes info.connected=false for a cloud-only DTU whose inverter is disconnected", async function () {
+		const { poller, stateWrites } = setup({ dtuSerial: "DTU_CLOUD_OFF", cloudStationId: 1, connection: null }, [
+			{
+				sn: "DTU_CLOUD_OFF",
+				id: 10,
+				children: [{ sn: "INV1", id: 100, model_no: "HMS-400W-1T", warn_data: { connect: false } }],
+			},
+		]);
+		await poller.poll();
+		assert.strictEqual(stateWrites["DTU_CLOUD_OFF.info.connected"], false);
+		poller.stop();
+	});
+
+	it("writes info.connected=true for a cloud-only DTU whose inverter is connected", async function () {
+		const { poller, stateWrites } = setup({ dtuSerial: "DTU_CLOUD_ON", cloudStationId: 1, connection: null }, [
+			{
+				sn: "DTU_CLOUD_ON",
+				id: 10,
+				children: [{ sn: "INV1", id: 100, model_no: "HMS-400W-1T", warn_data: { connect: true } }],
+			},
+		]);
+		await poller.poll();
+		assert.strictEqual(stateWrites["DTU_CLOUD_ON.info.connected"], true);
+		poller.stop();
+	});
+});
+
+// ============================================================
+// CloudPoller – station timezone & warnings
+// ============================================================
+describe("CloudPoller – station timezone & warnings", function () {
+	it("converts lastCloudUpdate from station-local time to a UTC epoch", async function () {
+		const stateWrites = {};
+		const cloud = makeMockCloud();
+		cloud.ensureToken = async () => {};
+		// Station reports a wall clock 2 hours ahead of real UTC → offset +2h.
+		const stationLocalNow = new Date(Date.now() + 2 * 3600000).toISOString().slice(0, 19).replace("T", " ");
+		cloud.getStationDetails = async () => ({ name: "TZ", local_time: stationLocalNow });
+		cloud.getStationRealtime = async () => ({
+			real_power: "0",
+			today_eq: "0",
+			month_eq: "0",
+			year_eq: "0",
+			total_eq: "0",
+			co2_emission_reduction: "0",
+			plant_tree: "0",
+			data_time: "2026-05-15 14:30:00",
+		});
+		cloud.getDeviceTree = async () => [];
+
+		const adapter = makeMockAdapter();
+		adapter.setStateAsync = async (id, val) => {
+			stateWrites[id] = typeof val === "object" ? val.val : val;
+		};
+
+		const poller = makePoller({ cloud, adapter, stationDevices: new Set([1]), slowPollFactor: 1 });
+		await poller.poll();
+
+		// 14:30 local in a UTC+2 zone is 12:30:00Z.
+		assert.strictEqual(stateWrites["station-1.info.lastCloudUpdate"], Date.parse("2026-05-15T12:30:00Z"));
+		poller.stop();
+	});
+
+	it("writes station warn states from the cloud warn_data block", async function () {
+		const stateWrites = {};
+		const cloud = makeMockCloud();
+		cloud.ensureToken = async () => {};
+		cloud.getStationDetails = async () => ({
+			name: "W",
+			warn_data: {
+				s_uoff: false,
+				s_ustable: false,
+				s_uid: false,
+				l3_warn: true,
+				g_warn: true,
+				me_warn: false,
+				pw_off: false,
+			},
+		});
+		cloud.getDeviceTree = async () => [];
+
+		const adapter = makeMockAdapter();
+		adapter.setStateAsync = async (id, val) => {
+			stateWrites[id] = typeof val === "object" ? val.val : val;
+		};
+
+		const poller = makePoller({ cloud, adapter, stationDevices: new Set([1]), slowPollFactor: 1 });
+		await poller.poll();
+
+		assert.strictEqual(stateWrites["station-1.warn.gridFault"], true);
+		assert.strictEqual(stateWrites["station-1.warn.alarmActive"], true);
+		assert.strictEqual(stateWrites["station-1.warn.stationOffline"], false);
+		assert.strictEqual(stateWrites["station-1.warn.meterFault"], false);
+		poller.stop();
+	});
+
+	it("creates no warn states when the cloud delivers no warn_data (home account)", async function () {
+		const stateWrites = {};
+		const cloud = makeMockCloud();
+		cloud.ensureToken = async () => {};
+		cloud.getStationDetails = async () => ({ name: "NoWarn" });
+		cloud.getDeviceTree = async () => [];
+
+		const adapter = makeMockAdapter();
+		adapter.setStateAsync = async (id, val) => {
+			stateWrites[id] = typeof val === "object" ? val.val : val;
+		};
+
+		const poller = makePoller({ cloud, adapter, stationDevices: new Set([1]), slowPollFactor: 1 });
+		await poller.poll();
+
+		assert.strictEqual(stateWrites["station-1.warn.gridFault"], undefined);
+		poller.stop();
+	});
+});
+
+// ============================================================
 // CloudPoller – pollWeather
 // ============================================================
 describe("CloudPoller – pollWeather", function () {
@@ -1162,7 +1337,7 @@ describe("CloudPoller – pollFirmwareStatus", function () {
 			slowPollFactor: 1,
 		});
 		// Ensure firmware check day differs from today
-		poller.lastFirmwareCheckDay = -1;
+		poller.lastFirmwareCheckDay = new Map();
 
 		await poller.poll();
 
@@ -1200,9 +1375,41 @@ describe("CloudPoller – pollFirmwareStatus", function () {
 			stationDevices: new Set([1]),
 			slowPollFactor: 1,
 		});
-		poller.lastFirmwareCheckDay = -1;
+		poller.lastFirmwareCheckDay = new Map();
 
 		await assert.doesNotReject(() => poller.poll(), "firmware error should be caught gracefully");
+		poller.stop();
+	});
+
+	it("checks firmware for every station, not just the first one polled", async function () {
+		const fwStations = [];
+		const cloud = makeMockCloud();
+		cloud.ensureToken = async () => {};
+		cloud.getStationRealtime = async () => ({
+			real_power: "0",
+			today_eq: "0",
+			month_eq: "0",
+			year_eq: "0",
+			total_eq: "0",
+			co2_emission_reduction: "0",
+			plant_tree: "0",
+		});
+		cloud.getStationDetails = async () => ({});
+		cloud.getDeviceTree = async () => [];
+		cloud.checkFirmwareUpdate = async sid => {
+			fwStations.push(sid);
+			return { upgrade: 0 };
+		};
+
+		const devices = new Map();
+		devices.set("DTU_A", { dtuSerial: "DTU_A", cloudStationId: 1, connection: null });
+		devices.set("DTU_B", { dtuSerial: "DTU_B", cloudStationId: 2, connection: null });
+
+		const poller = makePoller({ cloud, devices, stationDevices: new Set([1, 2]), slowPollFactor: 1 });
+		await poller.poll();
+
+		assert.ok(fwStations.includes(1), "station 1 firmware should be checked");
+		assert.ok(fwStations.includes(2), "station 2 firmware should be checked (per-station day tracking)");
 		poller.stop();
 	});
 });

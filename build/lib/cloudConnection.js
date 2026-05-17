@@ -1,4 +1,4 @@
-import { postJson, postBinary } from "./httpClient.js";
+import { postJson, postBinary, HttpError } from "./httpClient.js";
 import { parseChartResponse } from "./chartParser.js";
 import { TOKEN_MAX_AGE_MS, ENSURE_TOKEN_TIMEOUT_MS, CLOUD_HOST_DEFAULT, CLOUD_HOST_EU, CLOUD_DC_HOSTS, IAM_PRE_INSPECT_PATH, IAM_LOGIN_V3_PATH, IAM_REGION_PATH, PROFILE_PROBE_PATH, STATION_AK_FIND_PATH, APP_USER_AGENT_PREFIX, APP_VERSION, APP_TID, } from "./constants.js";
 import { errorMessage, withTimeout, buildCredentialChallenges, buildArgon2Challenge } from "./utils.js";
@@ -128,13 +128,22 @@ class CloudConnection {
         return result.data?.token ?? null;
     }
     async probeDataProfile() {
-        const result = await this._post(PROFILE_PROBE_PATH, { page: 1, page_size: 1 }, this.baseUrl);
-        if (result.status === "0") {
-            this.log(`Cloud profile probe: /pvm accepted → installer`);
-            return "installer";
+        try {
+            const result = await this._post(PROFILE_PROBE_PATH, { page: 1, page_size: 1 }, this.baseUrl);
+            if (result.status === "0") {
+                this.log(`Cloud profile probe: /pvm accepted → installer`);
+                return "installer";
+            }
+            this.log(`Cloud profile probe: /pvm rejected (status=${result.status} msg="${result.message ?? ""}") → home`);
+            return "home";
         }
-        this.log(`Cloud profile probe: /pvm rejected (status=${result.status} msg="${result.message ?? ""}") → home`);
-        return "home";
+        catch (err) {
+            if (err instanceof HttpError && err.statusCode === 403) {
+                this.log(`Cloud profile probe: /pvm returned HTTP 403 → home`);
+                return "home";
+            }
+            throw err;
+        }
     }
     async discoverRegion() {
         try {
@@ -256,7 +265,24 @@ class CloudConnection {
                     });
                 }
                 catch (err) {
-                    attempts.push({ flow: "probe", host: this.baseUrl, ok: false, message: errorMessage(err) });
+                    if (err instanceof HttpError && err.statusCode === 403) {
+                        attempts.push({
+                            flow: "probe",
+                            host: this.baseUrl,
+                            ok: true,
+                            status: "403",
+                            message: err.message,
+                            profile: "home",
+                        });
+                    }
+                    else {
+                        attempts.push({
+                            flow: "probe",
+                            host: this.baseUrl,
+                            ok: false,
+                            message: errorMessage(err),
+                        });
+                    }
                 }
             }
         }

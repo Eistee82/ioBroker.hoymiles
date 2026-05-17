@@ -2,6 +2,27 @@ import * as crypto from "node:crypto";
 export function unixSeconds() {
     return Math.floor(Date.now() / 1000);
 }
+function parseWallClockAsUtc(str) {
+    return Date.parse(`${str.trim().replace(" ", "T")}Z`);
+}
+export function deriveStationTzOffsetMs(localTime) {
+    if (!localTime) {
+        return null;
+    }
+    const asUtc = parseWallClockAsUtc(localTime);
+    if (Number.isNaN(asUtc)) {
+        return null;
+    }
+    const offsetMs = Math.round((asUtc - Date.now()) / 900000) * 900000;
+    return offsetMs === 0 ? 0 : offsetMs;
+}
+export function stationWallClockToEpoch(wallClock, offsetMs) {
+    if (!wallClock) {
+        return null;
+    }
+    const asUtc = parseWallClockAsUtc(wallClock);
+    return Number.isNaN(asUtc) ? null : asUtc - offsetMs;
+}
 export function errorMessage(err) {
     if (err instanceof Error) {
         return err.message;

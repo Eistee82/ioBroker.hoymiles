@@ -1,6 +1,6 @@
 import { toKwh } from "./convert.js";
 import { CLOUD_POLL_CONCURRENCY, DEFAULT_POLL_MS, MIN_POLL_MS, RELAY_POLL_DELAY_MS } from "./constants.js";
-import { errorMessage, logOnError, mapLimit } from "./utils.js";
+import { deriveStationTzOffsetMs, errorMessage, logOnError, mapLimit, stationWallClockToEpoch } from "./utils.js";
 import { stationStateMap, buildStateCommon } from "./stateDefinitions.js";
 const num = (v) => parseFloat(v) || 0;
 const WEATHER_DESCRIPTIONS = {
@@ -36,6 +36,7 @@ class CloudPoller {
     pollTimer;
     pollIntervalMs;
     stationCoords;
+    stationTzOffsetMs;
     lastFirmwareCheckDay;
     initialFetchDone;
     lastRealtimeFetch;
@@ -55,7 +56,8 @@ class CloudPoller {
         this.pollTimer = undefined;
         this.pollIntervalMs = DEFAULT_POLL_MS;
         this.stationCoords = new Map();
-        this.lastFirmwareCheckDay = -1;
+        this.stationTzOffsetMs = new Map();
+        this.lastFirmwareCheckDay = new Map();
         this.lastRealtimeFetch = new Map();
         this.initialFetchDone = false;
         this.pollInProgress = false;
@@ -220,9 +222,7 @@ class CloudPoller {
             await mapLimit([...this.stationDevices], CLOUD_POLL_CONCURRENCY, async (stationId) => {
                 const deviceId = `station-${stationId}`;
                 await this.pollWeather(stationId, deviceId);
-                const today = new Date().getDate();
-                if (today !== this.lastFirmwareCheckDay) {
-                    this.lastFirmwareCheckDay = today;
+                if (this.firmwareCheckDue(stationId)) {
                     await this.pollFirmwareStatus(stationId);
                 }
             });
@@ -236,22 +236,22 @@ class CloudPoller {
     async pollStation(stationId, isSlowPoll) {
         const deviceId = `station-${stationId}`;
         const data = await this.cloud.getStationRealtime(stationId);
-        await this.setStationRealtimeStates(deviceId, data);
         if (isSlowPoll) {
             await this.pollStationDetails(stationId, deviceId, data);
+        }
+        await this.setStationRealtimeStates(stationId, deviceId, data);
+        if (isSlowPoll) {
             await this.pollWeather(stationId, deviceId);
-            const today = new Date().getDate();
-            if (today !== this.lastFirmwareCheckDay) {
-                this.lastFirmwareCheckDay = today;
+            if (this.firmwareCheckDue(stationId)) {
                 await this.pollFirmwareStatus(stationId);
             }
         }
         await this.pollDevicesAndInverters(stationId, isSlowPoll);
         this.adapter.log.debug(`Cloud data (station ${stationId}): ${data.real_power}W, today=${toKwh(data.today_eq).toFixed(2)}kWh, total=${toKwh(data.total_eq).toFixed(2)}kWh`);
     }
-    async setStationRealtimeStates(deviceId, data) {
+    async setStationRealtimeStates(stationId, deviceId, data) {
         const w = (suffix, value) => this.writeStationState(deviceId, suffix, value);
-        const lastDataStr = data.last_data_time || "";
+        const offsetMs = this.stationTzOffsetMs.get(stationId) ?? 0;
         await Promise.all([
             w("grid.power", num(data.real_power)),
             w("grid.dailyEnergy", toKwh(data.today_eq)),
@@ -262,8 +262,8 @@ class CloudPoller {
             w("grid.treesPlanted", num(data.plant_tree)),
             w("grid.isBalance", !!data.is_balance),
             w("grid.isReflux", !!data.is_reflux),
-            w("info.lastCloudUpdate", data.data_time ? new Date(`${data.data_time} UTC`).getTime() : null),
-            w("info.lastDataTime", lastDataStr ? new Date(`${lastDataStr} UTC`).getTime() : null),
+            w("info.lastCloudUpdate", stationWallClockToEpoch(data.data_time, offsetMs)),
+            w("info.lastDataTime", stationWallClockToEpoch(data.last_data_time, offsetMs)),
         ]);
     }
     async pollStationDetails(stationId, deviceId, realtimeData) {
@@ -273,7 +273,12 @@ class CloudPoller {
             let lat = details.latitude != null ? num(details.latitude) : null;
             let lon = details.longitude != null ? num(details.longitude) : null;
             let address = details.address ?? null;
-            const tzOffsetS = details.timezone?.offset ?? 0;
+            const derivedOffsetMs = deriveStationTzOffsetMs(details.local_time);
+            if (derivedOffsetMs != null) {
+                this.stationTzOffsetMs.set(stationId, derivedOffsetMs);
+            }
+            const offsetMs = this.stationTzOffsetMs.get(stationId) ?? 0;
+            const tzOffsetS = Math.round(offsetMs / 1000);
             if (lat == null || lon == null || (lat === 0 && lon === 0)) {
                 try {
                     const ext = await this.cloud.getStationExtInfo(stationId);
@@ -295,6 +300,7 @@ class CloudPoller {
                 this.stationCoords.set(stationId, { lat, lon, tzOffsetS });
             }
             const price = details.electricity_price ?? null;
+            const wd = details.warn_data;
             await Promise.all([
                 w("info.stationName", details.name || null),
                 w("info.stationId", stationId),
@@ -303,12 +309,19 @@ class CloudPoller {
                 w("info.latitude", lat),
                 w("info.longitude", lon),
                 w("info.stationStatus", details.status ?? null),
-                w("info.installedAt", details.create_at ? new Date(`${details.create_at} UTC`).getTime() : null),
+                w("info.installedAt", stationWallClockToEpoch(details.create_at, offsetMs)),
                 w("info.timezone", details.timezone?.tz_name || null),
                 w("grid.electricityPrice", price),
                 w("grid.currency", details.money_unit || null),
                 w("grid.todayIncome", price ? Math.round(toKwh(realtimeData.today_eq) * price * 100) / 100 : null),
                 w("grid.totalIncome", price ? Math.round(toKwh(realtimeData.total_eq) * price * 100) / 100 : null),
+                w("warn.stationOffline", wd?.s_uoff),
+                w("warn.gridUnstable", wd?.s_ustable),
+                w("warn.gridFault", wd?.g_warn),
+                w("warn.alarmActive", wd?.l3_warn),
+                w("warn.deviceIdError", wd?.s_uid),
+                w("warn.meterFault", wd?.me_warn),
+                w("warn.powerOutputOff", wd?.pw_off),
             ]);
         }
         catch (err) {
@@ -332,10 +345,21 @@ class CloudPoller {
                 this.adapter.log.debug(`Cloud device tree failed for station ${stationId}: ${errorMessage(err)}`);
             }
         }
+        await this.updateCloudConnectedStates(deviceTree);
         if (isSlowPoll && deviceTree.length > 0) {
             await this.updateDeviceVersions(deviceTree);
         }
         await this.pollInverterRealtimeData(stationId, deviceTree);
+    }
+    async updateCloudConnectedStates(deviceTree) {
+        for (const dtu of deviceTree) {
+            const dtuDev = this.devices.get(dtu.sn);
+            if (!dtuDev?.dtuSerial || dtuDev.connection != null) {
+                continue;
+            }
+            const online = dtu.children?.some(inv => inv.warn_data?.connect) ?? false;
+            await this.boundSetState(`${dtuDev.dtuSerial}.info.connected`, online, true);
+        }
     }
     async updateDeviceVersions(deviceTree) {
         const s = this.boundSetState;
@@ -406,7 +430,7 @@ class CloudPoller {
                 if (!values) {
                     return;
                 }
-                const writes = [s(`${sn}.info.connected`, true, true).then(() => { })];
+                const writes = [];
                 if (values.MI_POWER !== undefined) {
                     writes.push(cs(`${sn}.grid.power`, values.MI_POWER));
                 }
@@ -473,6 +497,16 @@ class CloudPoller {
                 this.stationCoords.delete(sid);
             }
         }
+        for (const sid of this.stationTzOffsetMs.keys()) {
+            if (!this.stationDevices.has(sid)) {
+                this.stationTzOffsetMs.delete(sid);
+            }
+        }
+        for (const sid of this.lastFirmwareCheckDay.keys()) {
+            if (!this.stationDevices.has(sid)) {
+                this.lastFirmwareCheckDay.delete(sid);
+            }
+        }
     }
     async setPvStates(cs, sn, pvIndex, modValues) {
         if (!modValues) {
@@ -522,6 +556,14 @@ class CloudPoller {
             this.lastCloudConnected = connected;
             await this.adapter.setStateAsync("info.cloudConnected", connected, true);
         }
+    }
+    firmwareCheckDue(stationId) {
+        const today = new Date().getDate();
+        if (this.lastFirmwareCheckDay.get(stationId) === today) {
+            return false;
+        }
+        this.lastFirmwareCheckDay.set(stationId, today);
+        return true;
     }
     async pollFirmwareStatus(stationId) {
         try {

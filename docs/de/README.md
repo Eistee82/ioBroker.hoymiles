@@ -245,6 +245,20 @@ PV-Channels werden dynamisch basierend auf dem Wechselrichter-Modell erstellt (1
 
 > **Wetter-Icon-Codes:** Die Codes folgen der [OpenWeatherMap-Konvention](https://openweathermap.org/weather-conditions). Um das Icon als Bild anzuzeigen: `https://openweathermap.org/img/wn/{icon}@2x.png`
 
+### `station-<id>.warn.*` — Anlagen-Warnungen (Cloud)
+
+Netz- und Zähler-Warnflags aus dem Cloud-Datensatz `station/find`. Alle boolesch — `true` bedeutet, die Bedingung ist gerade aktiv. Diese States erscheinen erst, sobald die Cloud tatsächlich einen `warn_data`-Block liefert (ein Home-Konto liefert ihn ggf. nicht).
+
+| State | Typ | Beschreibung |
+|-------|-----|--------------|
+| `warn.stationOffline` | boolean | Anlage offline / Netzspannung weg |
+| `warn.gridUnstable` | boolean | Netzspannung instabil |
+| `warn.gridFault` | boolean | Netzfehler / Netz-Anomalie |
+| `warn.alarmActive` | boolean | Alarm an einem Gerät aktiv |
+| `warn.deviceIdError` | boolean | Geräte-ID nicht registriert |
+| `warn.meterFault` | boolean | Zählerfehler / Zähler-Warnung |
+| `warn.powerOutputOff` | boolean | Ausgangsleistung abgeschaltet (Limit aktiv) |
+
 ### `<dtuSerial>.alarms.*` — Alarmdaten (pro DTU, lokal)
 
 | Datenpunkt | Typ | Beschreibung |

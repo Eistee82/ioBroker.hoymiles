@@ -10,6 +10,14 @@ function initAgent(options) {
         timeout: HTTP_AGENT_TIMEOUT_MS,
     });
 }
+class HttpError extends Error {
+    statusCode;
+    constructor(statusCode, url) {
+        super(`HTTP ${statusCode} on ${url}`);
+        this.name = "HttpError";
+        this.statusCode = statusCode;
+    }
+}
 function postJson(url, body, options) {
     return request(url, body, options, "json");
 }
@@ -56,7 +64,7 @@ function request(url, body, options, responseType) {
             res.on("data", (chunk) => chunks.push(chunk));
             res.on("end", () => {
                 if (res.statusCode && res.statusCode >= 400) {
-                    fail(new Error(`HTTP ${res.statusCode} on ${url}`));
+                    fail(new HttpError(res.statusCode, url));
                     return;
                 }
                 const buf = Buffer.concat(chunks);
@@ -85,5 +93,5 @@ function request(url, body, options, responseType) {
 function destroyAgent() {
     agent.destroy();
 }
-export { postJson, postBinary, destroyAgent, initAgent };
+export { postJson, postBinary, destroyAgent, initAgent, HttpError };
 //# sourceMappingURL=httpClient.js.map

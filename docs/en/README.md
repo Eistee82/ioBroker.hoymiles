@@ -245,6 +245,20 @@ PV channels are created dynamically based on the inverter model (1T = 1 channel,
 
 > **Weather icon codes:** The icon codes follow the [OpenWeatherMap convention](https://openweathermap.org/weather-conditions). To display the icon as an image, use: `https://openweathermap.org/img/wn/{icon}@2x.png`
 
+### `station-<id>.warn.*` — Station Warnings (cloud)
+
+Grid- and meter-level warning flags from the cloud `station/find` record. All boolean — `true` means the condition is currently active. These states only appear once the cloud actually delivers a `warn_data` block (a home account may not).
+
+| State | Type | Description |
+|-------|------|-------------|
+| `warn.stationOffline` | boolean | Station offline / supply voltage off |
+| `warn.gridUnstable` | boolean | Grid voltage unstable |
+| `warn.gridFault` | boolean | Grid fault / grid abnormal |
+| `warn.alarmActive` | boolean | Alarm active on a device |
+| `warn.deviceIdError` | boolean | Device ID not registered |
+| `warn.meterFault` | boolean | Meter fault / meter warning |
+| `warn.powerOutputOff` | boolean | Power output switched off (limit active) |
+
 ### `<dtuSerial>.alarms.*` — Alarm Data (per DTU, local)
 
 | State | Type | Description |

@@ -1,4 +1,4 @@
-import { postJson, postBinary } from "./httpClient.js";
+import { postJson, postBinary, HttpError } from "./httpClient.js";
 import { parseChartResponse } from "./chartParser.js";
 import {
 	TOKEN_MAX_AGE_MS,
@@ -166,7 +166,8 @@ interface CloudStationDetails {
 		module_max_power: number;
 		[key: string]: unknown;
 	};
-	warn_data: {
+	/** Station-level grid/meter warning flags. Absent on the home `find_c` record. */
+	warn_data?: {
 		s_uoff: boolean;
 		s_ustable: boolean;
 		s_uid: boolean;
@@ -178,7 +179,8 @@ interface CloudStationDetails {
 	};
 	create_at: string;
 	timezone: { tz_name: string; offset: number };
-	local_time: string;
+	/** Station wall-clock time ("YYYY-MM-DD HH:mm:ss"), station-local zone. */
+	local_time?: string;
 	[key: string]: unknown;
 }
 
@@ -452,26 +454,42 @@ class CloudConnection {
 	/**
 	 * Probe which data-API surface the account is allowed on. Hits `/pvm/.../select_by_page`
 	 * against `this.baseUrl` (regional host) — Web/Installer accounts get status=0, home
-	 * accounts get rejected by the server ("can only be used for logging in to the S-Miles
-	 * Home app" or similar). This replaces the pre-insp.v profile inference, which broke
-	 * after Hoymiles unified all accounts onto Argon2id in 2026.
+	 * accounts get rejected by the server. This replaces the pre-insp.v profile inference,
+	 * which broke after Hoymiles unified all accounts onto Argon2id in 2026.
+	 *
+	 * The rejection arrives in one of two shapes, BOTH meaning "home":
+	 * - HTTP 200 with a non-zero JSON `status` ("can only be used for logging in to the
+	 *   S-Miles Home app" or similar), or
+	 * - an HTTP 403 — the live cloud forbids Home accounts on the `/pvm/` web API outright.
+	 *   This is NOT a transport error; it is the definitive profile signal and must not
+	 *   abort the login (that bug locked every S-Miles Home account out completely).
 	 *
 	 * Must run AFTER token assignment — the endpoint requires authentication.
 	 *
-	 * @throws on transport/network errors. Caller must roll back token state.
+	 * @throws on genuine transport/network errors (timeout, DNS, 5xx). Caller rolls back token state.
 	 */
 	private async probeDataProfile(): Promise<CloudProfile> {
-		const result = await this._post<{ list?: unknown[] }>(
-			PROFILE_PROBE_PATH,
-			{ page: 1, page_size: 1 },
-			this.baseUrl,
-		);
-		if (result.status === "0") {
-			this.log(`Cloud profile probe: /pvm accepted → installer`);
-			return "installer";
+		try {
+			const result = await this._post<{ list?: unknown[] }>(
+				PROFILE_PROBE_PATH,
+				{ page: 1, page_size: 1 },
+				this.baseUrl,
+			);
+			if (result.status === "0") {
+				this.log(`Cloud profile probe: /pvm accepted → installer`);
+				return "installer";
+			}
+			this.log(
+				`Cloud profile probe: /pvm rejected (status=${result.status} msg="${result.message ?? ""}") → home`,
+			);
+			return "home";
+		} catch (err) {
+			if (err instanceof HttpError && err.statusCode === 403) {
+				this.log(`Cloud profile probe: /pvm returned HTTP 403 → home`);
+				return "home";
+			}
+			throw err;
 		}
-		this.log(`Cloud profile probe: /pvm rejected (status=${result.status} msg="${result.message ?? ""}") → home`);
-		return "home";
 	}
 
 	/**
@@ -622,7 +640,24 @@ class CloudConnection {
 						profile: accepted ? "installer" : "home",
 					});
 				} catch (err) {
-					attempts.push({ flow: "probe", host: this.baseUrl, ok: false, message: errorMessage(err) });
+					// HTTP 403 is not a probe failure — it is the server's "home" verdict.
+					if (err instanceof HttpError && err.statusCode === 403) {
+						attempts.push({
+							flow: "probe",
+							host: this.baseUrl,
+							ok: true,
+							status: "403",
+							message: err.message,
+							profile: "home",
+						});
+					} else {
+						attempts.push({
+							flow: "probe",
+							host: this.baseUrl,
+							ok: false,
+							message: errorMessage(err),
+						});
+					}
 				}
 			}
 		} finally {

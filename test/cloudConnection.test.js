@@ -1,5 +1,6 @@
 import assert from "node:assert";
 import CloudConnection, { CloudAuthError } from "../build/lib/cloudConnection.js";
+import { HttpError } from "../build/lib/httpClient.js";
 
 // ============================================================
 // cloudConnection – constructor and input validation
@@ -592,6 +593,66 @@ describe("cloudConnection – v3 login + profile probe", function () {
 });
 
 // ============================================================
+// cloudConnection – probe HTTP 403 → home profile (S-Miles Home account)
+// ============================================================
+describe("cloudConnection – probe HTTP 403 handling", function () {
+	let originalPost;
+
+	beforeEach(function () {
+		originalPost = CloudConnection.prototype._post;
+	});
+
+	afterEach(function () {
+		CloudConnection.prototype._post = originalPost;
+	});
+
+	it("probe rejected with HTTP 403 → home profile, login succeeds", async function () {
+		CloudConnection.prototype._post = async function (apiPath) {
+			if (apiPath === "/iam/pub/0/c/region_c") {
+				return { status: "0", data: { login_url: "https://euapi.hoymiles.com", dc: 1 } };
+			}
+			if (apiPath === "/iam/pub/3/auth/pre-insp") {
+				return { status: "0", data: { n: "nonce-home", a: "46530f67d9c6768975e9ce7edd412df8", v: 3 } };
+			}
+			if (apiPath === "/iam/pub/3/auth/login") {
+				return { status: "0", data: { token: "tok-home-403" } };
+			}
+			if (apiPath === "/pvm/api/0/station/select_by_page") {
+				throw new HttpError(403, "https://euapi.hoymiles.com/pvm/api/0/station/select_by_page");
+			}
+			throw new Error(`unexpected ${apiPath}`);
+		};
+		const cloud = new CloudConnection("home@x", "pw");
+		const token = await cloud.login();
+		assert.strictEqual(token, "tok-home-403", "login must succeed despite the /pvm 403");
+		assert.strictEqual(cloud.getProfile(), "home", "HTTP 403 on /pvm must be classified as home");
+		assert.strictEqual(cloud.token, "tok-home-403", "token must be kept, not rolled back");
+	});
+
+	it("probe rejected with a non-403 HttpError (500) → login still rejects (transport error)", async function () {
+		CloudConnection.prototype._post = async function (apiPath) {
+			if (apiPath === "/iam/pub/0/c/region_c") {
+				return { status: "0", data: { login_url: "https://neapi.hoymiles.com", dc: 0 } };
+			}
+			if (apiPath === "/iam/pub/3/auth/pre-insp") {
+				return { status: "0", data: { n: "nonce", v: 2 } };
+			}
+			if (apiPath === "/iam/pub/3/auth/login") {
+				return { status: "0", data: { token: "tok" } };
+			}
+			if (apiPath === "/pvm/api/0/station/select_by_page") {
+				throw new HttpError(500, "https://neapi.hoymiles.com/pvm/api/0/station/select_by_page");
+			}
+			throw new Error(`unexpected ${apiPath}`);
+		};
+		const cloud = new CloudConnection("u@x", "pw");
+		await assert.rejects(() => cloud.login(), /HTTP 500/);
+		assert.strictEqual(cloud.token, null, "token must be rolled back on a genuine probe failure");
+		assert.strictEqual(cloud.getProfile(), null);
+	});
+});
+
+// ============================================================
 // cloudConnection – loginDiagnostics
 // ============================================================
 describe("cloudConnection – loginDiagnostics", function () {
@@ -720,6 +781,30 @@ describe("cloudConnection – loginDiagnostics", function () {
 		assert.strictEqual(results[2].flow, "login");
 		assert.strictEqual(results[2].ok, false);
 		assert.ok(!calls.includes("/pvm/api/0/station/select_by_page"), "probe must not run when login fails");
+	});
+
+	it("probe HTTP 403 → reported as ok with profile=home, not as a failure", async function () {
+		CloudConnection.prototype._post = async function (apiPath) {
+			if (apiPath === "/iam/pub/0/c/region_c") {
+				return { status: "0", data: { login_url: "https://euapi.hoymiles.com", dc: 1 } };
+			}
+			if (apiPath === "/iam/pub/3/auth/pre-insp") {
+				return { status: "0", data: { n: "nonce", a: "46530f67d9c6768975e9ce7edd412df8", v: 3 } };
+			}
+			if (apiPath === "/iam/pub/3/auth/login") {
+				return { status: "0", data: { token: "tok-home" } };
+			}
+			if (apiPath === "/pvm/api/0/station/select_by_page") {
+				throw new HttpError(403, "https://euapi.hoymiles.com/pvm/api/0/station/select_by_page");
+			}
+			throw new Error(`unexpected ${apiPath}`);
+		};
+		const cloud = new CloudConnection("home@x", "pw");
+		const results = await cloud.loginDiagnostics();
+		assert.strictEqual(results.length, 4);
+		assert.strictEqual(results[3].flow, "probe");
+		assert.strictEqual(results[3].ok, true, "a 403 probe is a definitive verdict, not a failure");
+		assert.strictEqual(results[3].profile, "home");
 	});
 });
 
