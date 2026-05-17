@@ -178,7 +178,9 @@ interface CloudStationDetails {
 		[key: string]: unknown;
 	};
 	create_at: string;
-	timezone: { tz_name: string; offset: number };
+	// `timezone` carries only a display name — the cloud exposes no machine-readable UTC
+	// offset anywhere in its station/realtime responses (verified against the S-Miles app).
+	timezone: { tz_name: string };
 	/** Station wall-clock time ("YYYY-MM-DD HH:mm:ss"), station-local zone. */
 	local_time?: string;
 	[key: string]: unknown;

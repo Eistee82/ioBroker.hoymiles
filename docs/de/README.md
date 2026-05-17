@@ -254,10 +254,10 @@ Netz- und Zähler-Warnflags aus dem Cloud-Datensatz `station/find`. Alle boolesc
 | `warn.stationOffline` | boolean | Anlage offline / Netzspannung weg |
 | `warn.gridUnstable` | boolean | Netzspannung instabil |
 | `warn.gridFault` | boolean | Netzfehler / Netz-Anomalie |
-| `warn.alarmActive` | boolean | Alarm an einem Gerät aktiv |
-| `warn.deviceIdError` | boolean | Geräte-ID nicht registriert |
+| `warn.deviceAlarm` | boolean | Gerätealarm — ein Wechselrichter hat eine aktive Störung |
+| `warn.deviceIdWarning` | boolean | Geräte-ID-Warnung (ID-Konflikt / Diebstahlschutz) |
 | `warn.meterFault` | boolean | Zählerfehler / Zähler-Warnung |
-| `warn.powerOutputOff` | boolean | Ausgangsleistung abgeschaltet (Limit aktiv) |
+| `warn.powerLimited` | boolean | Leistungsreduktion aktiv (Drosselung / Leistungslimit) |
 
 ### `<dtuSerial>.alarms.*` — Alarmdaten (pro DTU, lokal)
 

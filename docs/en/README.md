@@ -254,10 +254,10 @@ Grid- and meter-level warning flags from the cloud `station/find` record. All bo
 | `warn.stationOffline` | boolean | Station offline / supply voltage off |
 | `warn.gridUnstable` | boolean | Grid voltage unstable |
 | `warn.gridFault` | boolean | Grid fault / grid abnormal |
-| `warn.alarmActive` | boolean | Alarm active on a device |
-| `warn.deviceIdError` | boolean | Device ID not registered |
+| `warn.deviceAlarm` | boolean | Device alarm — an inverter has an active fault |
+| `warn.deviceIdWarning` | boolean | Device ID warning (ID mismatch / anti-theft) |
 | `warn.meterFault` | boolean | Meter fault / meter warning |
-| `warn.powerOutputOff` | boolean | Power output switched off (limit active) |
+| `warn.powerLimited` | boolean | Power output limited (curtailment / power limit active) |
 
 ### `<dtuSerial>.alarms.*` — Alarm Data (per DTU, local)
 

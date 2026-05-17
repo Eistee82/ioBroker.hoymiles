@@ -318,10 +318,10 @@ class CloudPoller {
                 w("warn.stationOffline", wd?.s_uoff),
                 w("warn.gridUnstable", wd?.s_ustable),
                 w("warn.gridFault", wd?.g_warn),
-                w("warn.alarmActive", wd?.l3_warn),
-                w("warn.deviceIdError", wd?.s_uid),
+                w("warn.deviceAlarm", wd?.l3_warn),
+                w("warn.deviceIdWarning", wd?.s_uid),
                 w("warn.meterFault", wd?.me_warn),
-                w("warn.powerOutputOff", wd?.pw_off),
+                w("warn.powerLimited", wd?.pw_off),
             ]);
         }
         catch (err) {
