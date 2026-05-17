@@ -1,11 +1,13 @@
 import assert from "node:assert";
 import {
+	anonymize,
 	clearTimer,
 	deriveStationTzOffsetMs,
 	errorMessage,
 	logOnError,
 	mapLimit,
 	safeJsonStringify,
+	sanitizeForLog,
 	stationWallClockToEpoch,
 	unixSeconds,
 	withTimeout,
@@ -385,5 +387,92 @@ describe("stationWallClockToEpoch", function () {
 		assert.strictEqual(stationWallClockToEpoch(undefined, 0), null);
 		assert.strictEqual(stationWallClockToEpoch(null, 0), null);
 		assert.strictEqual(stationWallClockToEpoch("garbage", 0), null);
+	});
+});
+
+// ============================================================
+// anonymize
+// ============================================================
+describe("anonymize", function () {
+	it("maps the same input to the same token (stable / correlatable)", function () {
+		assert.strictEqual(anonymize("DTU1234567890", "dtu"), anonymize("DTU1234567890", "dtu"));
+	});
+
+	it("maps different inputs to different tokens", function () {
+		assert.notStrictEqual(anonymize("DTU-A", "dtu"), anonymize("DTU-B", "dtu"));
+	});
+
+	it("never contains the original value", function () {
+		const serial = "112233445566";
+		const token = anonymize(serial, "sn");
+		assert.ok(!token.includes(serial), "token must not leak the original serial");
+	});
+
+	it("uses the given prefix and a short hex hash", function () {
+		assert.match(anonymize("user@example.com", "acct"), /^acct:[0-9a-f]{8}$/);
+	});
+
+	it("returns '<prefix>:none' for empty/nullish input", function () {
+		assert.strictEqual(anonymize("", "sn"), "sn:none");
+		assert.strictEqual(anonymize(undefined, "sn"), "sn:none");
+		assert.strictEqual(anonymize(null, "acct"), "acct:none");
+	});
+});
+
+// ============================================================
+// sanitizeForLog
+// ============================================================
+describe("sanitizeForLog", function () {
+	it("redacts address, name, token and phone but keeps the structure", function () {
+		const out = sanitizeForLog({
+			name: "Max Mustermann Balkon",
+			address: "Hauptstr. 1",
+			token: "secret-abc",
+			mobile: "+49 170 1234567",
+			status: "0",
+		});
+		assert.strictEqual(out.name, "<redacted>");
+		assert.strictEqual(out.address, "<redacted>");
+		assert.strictEqual(out.token, "<redacted>");
+		assert.strictEqual(out.mobile, "<redacted>");
+		assert.strictEqual(out.status, "0", "non-sensitive fields are kept verbatim");
+	});
+
+	it("anonymizes serial fields to a stable token", function () {
+		const a = sanitizeForLog({ sn: "INV-123", dtu_sn: "DTU-999" });
+		const b = sanitizeForLog({ sn: "INV-123", dtu_sn: "DTU-999" });
+		assert.strictEqual(a.sn, b.sn, "same serial → same token");
+		assert.ok(!String(a.sn).includes("INV-123"), "serial must not leak");
+		assert.notStrictEqual(a.sn, a.dtu_sn);
+	});
+
+	it("hides real coordinates but keeps a 0.0 placeholder (diagnostic)", function () {
+		assert.strictEqual(sanitizeForLog({ latitude: "48.137" }).latitude, "<geo>");
+		assert.strictEqual(sanitizeForLog({ longitude: 11.575 }).longitude, "<geo>");
+		assert.strictEqual(sanitizeForLog({ latitude: "0.0" }).latitude, "0.0", "0/0 placeholder stays visible");
+	});
+
+	it("keeps warn_data flags and timestamps verbatim", function () {
+		const out = sanitizeForLog({
+			data_time: "2026-05-15 14:30:00",
+			local_time: "2026-05-15 16:30:00",
+			warn_data: { s_uoff: false, g_warn: true },
+		});
+		assert.strictEqual(out.data_time, "2026-05-15 14:30:00");
+		assert.strictEqual(out.local_time, "2026-05-15 16:30:00");
+		assert.deepStrictEqual(out.warn_data, { s_uoff: false, g_warn: true });
+	});
+
+	it("recurses into nested objects and arrays", function () {
+		const out = sanitizeForLog({ data: { list: [{ sn: "A1", model_no: "HMS-800W-2T" }] } });
+		assert.ok(!String(out.data.list[0].sn).includes("A1"), "nested serial must be anonymized");
+		assert.strictEqual(out.data.list[0].model_no, "HMS-800W-2T", "nested non-sensitive field kept");
+	});
+
+	it("leaves empty/nullish sensitive values untouched and passes primitives through", function () {
+		assert.strictEqual(sanitizeForLog({ address: "" }).address, "");
+		assert.strictEqual(sanitizeForLog({ token: null }).token, null);
+		assert.strictEqual(sanitizeForLog("plain-string"), "plain-string");
+		assert.strictEqual(sanitizeForLog(42), 42);
 	});
 });

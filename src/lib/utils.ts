@@ -8,6 +8,80 @@ export function unixSeconds(): number {
 }
 
 /**
+ * Anonymize an identifier (DTU/inverter serial, account e-mail) for debug logs that
+ * may be shared in a public forum bug report. Returns a short, STABLE token — the same
+ * input always yields the same token so log lines stay correlatable, but the original
+ * value cannot be recovered. Empty input yields `<prefix>:none`.
+ *
+ * @param value - Identifier to mask.
+ * @param prefix - Short tag for the token (e.g. "sn", "acct").
+ */
+export function anonymize(value: string | undefined | null, prefix = "id"): string {
+	if (!value) {
+		return `${prefix}:none`;
+	}
+	const hash = crypto.createHash("sha256").update(String(value)).digest("hex").slice(0, 8);
+	return `${prefix}:${hash}`;
+}
+
+/** Response keys whose values are personal or secret — redacted from shareable logs. */
+const LOG_REDACT_KEYS = new Set([
+	"address",
+	"name",
+	"station_name",
+	"plant_name",
+	"nickname",
+	"nick_name",
+	"owner_name",
+	"token",
+	"ak",
+	"access_key",
+	"password",
+	"pwd",
+	"ch",
+	"mobile",
+	"phone",
+	"tel",
+]);
+/** Response keys holding device/account identifiers — replaced with a stable anonymized token. */
+const LOG_ANON_KEYS = new Set(["sn", "dtu_sn", "dtusn", "serial", "serial_number", "user", "username", "email"]);
+/** Response keys holding geo coordinates — real values hidden, 0/placeholder kept (diagnostic). */
+const LOG_GEO_KEYS = new Set(["latitude", "longitude", "lat", "lon", "lng"]);
+
+/**
+ * Deep-copy an API payload with personal and secret values removed, so a cloud response
+ * can be written to a debug log that is safe to share in a public forum bug report.
+ * Serials become stable anonymized tokens (still correlatable across lines); coordinates,
+ * address, names and tokens are redacted; everything else (status, timestamps, warn_data
+ * flags, version strings, …) is kept verbatim so the response stays diagnosable.
+ *
+ * @param value - Arbitrary parsed-JSON value.
+ */
+export function sanitizeForLog(value: unknown): unknown {
+	if (Array.isArray(value)) {
+		return value.map(sanitizeForLog);
+	}
+	if (value && typeof value === "object") {
+		const out: Record<string, unknown> = {};
+		for (const [key, v] of Object.entries(value as Record<string, unknown>)) {
+			const lk = key.toLowerCase();
+			if (LOG_ANON_KEYS.has(lk)) {
+				out[key] = typeof v === "string" && v ? anonymize(v, "id") : v;
+			} else if (LOG_REDACT_KEYS.has(lk)) {
+				out[key] = v ? "<redacted>" : v;
+			} else if (LOG_GEO_KEYS.has(lk)) {
+				const n = typeof v === "number" ? v : parseFloat(String(v));
+				out[key] = !Number.isNaN(n) && n === 0 ? v : v ? "<geo>" : v;
+			} else {
+				out[key] = sanitizeForLog(v);
+			}
+		}
+		return out;
+	}
+	return value;
+}
+
+/**
  * Parse a Hoymiles cloud wall-clock string ("YYYY-MM-DD HH:mm:ss", no zone) as if
  * it were UTC. Returns the epoch in ms, or NaN when the string is unparseable.
  *

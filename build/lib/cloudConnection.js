@@ -1,7 +1,7 @@
 import { postJson, postBinary, HttpError } from "./httpClient.js";
 import { parseChartResponse } from "./chartParser.js";
 import { TOKEN_MAX_AGE_MS, ENSURE_TOKEN_TIMEOUT_MS, CLOUD_HOST_DEFAULT, CLOUD_HOST_EU, CLOUD_DC_HOSTS, IAM_PRE_INSPECT_PATH, IAM_LOGIN_V3_PATH, IAM_REGION_PATH, PROFILE_PROBE_PATH, STATION_AK_FIND_PATH, APP_USER_AGENT_PREFIX, APP_VERSION, APP_TID, } from "./constants.js";
-import { errorMessage, withTimeout, buildCredentialChallenges, buildArgon2Challenge } from "./utils.js";
+import { errorMessage, withTimeout, buildCredentialChallenges, buildArgon2Challenge, anonymize, sanitizeForLog, safeJsonStringify, } from "./utils.js";
 const EU_WEATHER_URL = `${CLOUD_HOST_EU}/tpa/api/0/weather/get`;
 function assertData(data, label) {
     if (data == null || typeof data !== "object") {
@@ -46,6 +46,7 @@ class CloudConnection {
     lastDc;
     stationDcMap;
     stationAkMap;
+    loggedSamples;
     assertStationId(stationId) {
         if (!stationId || stationId <= 0) {
             throw new Error("Invalid stationId");
@@ -65,6 +66,14 @@ class CloudConnection {
         this.lastDc = null;
         this.stationDcMap = new Map();
         this.stationAkMap = new Map();
+        this.loggedSamples = new Set();
+    }
+    logResponseSample(label, payload) {
+        if (this.loggedSamples.has(label)) {
+            return;
+        }
+        this.loggedSamples.add(label);
+        this.log(`[diag] ${label} response: ${safeJsonStringify(sanitizeForLog(payload), 20000)}`);
     }
     getBaseUrl() {
         return this.baseUrl;
@@ -93,7 +102,7 @@ class CloudConnection {
         return this.stationAkMap.get(stationId);
     }
     async login() {
-        this.log(`Cloud login start (host=${this.baseUrl}, user=${this.user})`);
+        this.log(`[diag] Cloud login start (host=${this.baseUrl}, user=${anonymize(this.user, "acct")})`);
         await this.discoverRegion();
         const token = await this.tryLoginV3();
         if (!token) {
@@ -109,7 +118,7 @@ class CloudConnection {
             this.tokenTime = 0;
             throw err;
         }
-        this.log(`Cloud login success: profile=${this.profile} dc=${this.lastDc ?? "n/a"} host=${this.baseUrl}`);
+        this.log(`[diag] Cloud login success: profile=${this.profile} dc=${this.lastDc ?? "n/a"} host=${this.baseUrl}`);
         return token;
     }
     async tryLoginV3() {
@@ -120,7 +129,7 @@ class CloudConnection {
         const preData = assertData(preInsp.data, "Pre-inspect");
         const { n: nonce, a: salt, v } = preData;
         const ch = salt ? await buildArgon2Challenge(this.credentialInput, salt) : this.credentials[0];
-        this.log(`Cloud pre-insp: v=${v ?? "?"} saltPresent=${!!salt} dc=${preData.dc ?? "n/a"}`);
+        this.log(`[diag] Cloud pre-insp: v=${v ?? "?"} saltPresent=${!!salt} dc=${preData.dc ?? "n/a"}`);
         const result = await this._post(IAM_LOGIN_V3_PATH, { u: this.user, ch, n: nonce }, this.baseUrl);
         if (result.status !== "0") {
             throw new CloudAuthError(result.message || "Login rejected", result.status);
@@ -131,15 +140,15 @@ class CloudConnection {
         try {
             const result = await this._post(PROFILE_PROBE_PATH, { page: 1, page_size: 1 }, this.baseUrl);
             if (result.status === "0") {
-                this.log(`Cloud profile probe: /pvm accepted → installer`);
+                this.log(`[diag] Cloud profile probe: /pvm accepted → installer`);
                 return "installer";
             }
-            this.log(`Cloud profile probe: /pvm rejected (status=${result.status} msg="${result.message ?? ""}") → home`);
+            this.log(`[diag] Cloud profile probe: /pvm rejected (status=${result.status} msg="${result.message ?? ""}") → home`);
             return "home";
         }
         catch (err) {
             if (err instanceof HttpError && err.statusCode === 403) {
-                this.log(`Cloud profile probe: /pvm returned HTTP 403 → home`);
+                this.log(`[diag] Cloud profile probe: /pvm returned HTTP 403 → home`);
                 return "home";
             }
             throw err;
@@ -149,24 +158,24 @@ class CloudConnection {
         try {
             const result = await this._post(IAM_REGION_PATH, { email: this.user }, this.baseUrl);
             if (result.status !== "0" || !result.data) {
-                this.log(`Cloud region_c: status=${result.status} message="${result.message ?? ""}" — keeping host ${this.baseUrl}`);
+                this.log(`[diag] Cloud region_c: status=${result.status} message="${result.message ?? ""}" — keeping host ${this.baseUrl}`);
                 return;
             }
             const { login_url, dc } = result.data;
             this.lastDc = typeof dc === "number" ? dc : null;
             if (login_url && login_url !== this.baseUrl) {
-                this.log(`Cloud region_c: switching base URL ${this.baseUrl} → ${login_url} (dc=${dc})`);
+                this.log(`[diag] Cloud region_c: switching base URL ${this.baseUrl} → ${login_url} (dc=${dc})`);
                 this.baseUrl = login_url;
             }
             else if (login_url) {
-                this.log(`Cloud region_c: confirmed host ${this.baseUrl} (dc=${dc})`);
+                this.log(`[diag] Cloud region_c: confirmed host ${this.baseUrl} (dc=${dc})`);
             }
             else {
-                this.log(`Cloud region_c: empty login_url, dc=${dc} — keeping host ${this.baseUrl}`);
+                this.log(`[diag] Cloud region_c: empty login_url, dc=${dc} — keeping host ${this.baseUrl}`);
             }
         }
         catch (err) {
-            this.log(`Cloud region_c: ${errorMessage(err)} — keeping host ${this.baseUrl}`);
+            this.log(`[diag] Cloud region_c: ${errorMessage(err)} — keeping host ${this.baseUrl}`);
         }
     }
     async loginDiagnostics() {
@@ -325,6 +334,7 @@ class CloudConnection {
             page: 1,
             page_size: 100,
         });
+        this.logResponseSample("station-list", result);
         if (result.status !== "0") {
             throw new Error(`Station list failed: ${result.message}`);
         }
@@ -349,6 +359,7 @@ class CloudConnection {
         const path = isHome ? "/pvmc/api/0/station/find_c" : "/pvm/api/0/station/find";
         const body = isHome ? { sid: stationId } : { id: stationId };
         const result = await this._post(path, body);
+        this.logResponseSample("station-details", result);
         if (result.status !== "0") {
             throw new Error(`Station details failed: ${result.message}`);
         }
@@ -369,6 +380,7 @@ class CloudConnection {
         for (const host of hosts) {
             try {
                 const result = await this._post(STATION_AK_FIND_PATH, body, host);
+                this.logResponseSample("station-ext-info", result);
                 if (result.status !== "0") {
                     throw new Error(`Station ext-info failed: ${result.message}`);
                 }
@@ -376,7 +388,7 @@ class CloudConnection {
             }
             catch (err) {
                 lastError = err instanceof Error ? err : new Error(String(err));
-                this.log(`Station ext-info on ${host} failed: ${lastError.message}`);
+                this.log(`[diag] Station ext-info on ${host} failed: ${lastError.message}`);
             }
         }
         throw lastError ?? new Error("Station ext-info failed");
@@ -388,6 +400,7 @@ class CloudConnection {
         const path = isHome ? "/pvmc/api/0/station/select_device_c" : "/pvm/api/0/station/select_device_of_tree";
         const body = isHome ? { sid: stationId } : { id: stationId };
         const result = await this._post(path, body);
+        this.logResponseSample("device-tree", result);
         if (result.status !== "0") {
             throw new Error(`Device tree failed: ${result.message}`);
         }
@@ -410,7 +423,7 @@ class CloudConnection {
             return await parseChartResponse(rawBuf, this.log);
         }
         catch (err) {
-            this.log(`Micro chart error: ${err instanceof Error ? err.stack || err.message : errorMessage(err)}`);
+            this.log(`[diag] Micro chart error: ${err instanceof Error ? err.stack || err.message : errorMessage(err)}`);
             return null;
         }
     }
@@ -436,7 +449,7 @@ class CloudConnection {
             return await parseChartResponse(rawBuf, this.log);
         }
         catch (err) {
-            this.log(`Module chart error: ${errorMessage(err)}`);
+            this.log(`[diag] Module chart error: ${errorMessage(err)}`);
             return null;
         }
     }
@@ -447,6 +460,7 @@ class CloudConnection {
             ? "/pvmc/api/0/station_data/count_station_real_data_c"
             : "/pvm-data/api/0/station/data/count_station_real_data";
         const result = await this._post(path, { sid: stationId });
+        this.logResponseSample("station-realtime", result);
         if (result.status !== "0") {
             throw new Error(`Realtime data failed: ${result.message}`);
         }
@@ -471,6 +485,7 @@ class CloudConnection {
         const isHome = this.profile === "home";
         const path = isHome ? "/pvmc/api/0/station/upgrade_compare_c" : "/pvm/api/0/upgrade/compare";
         const result = await this._post(path, { sid: stationId, dtu_sn: dtuSn });
+        this.logResponseSample("firmware-compare", result);
         if (result.status !== "0") {
             throw new Error(`Firmware check failed: ${result.message}`);
         }
