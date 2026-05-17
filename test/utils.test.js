@@ -1,10 +1,12 @@
 import assert from "node:assert";
 import {
 	clearTimer,
+	deriveStationTzOffsetMs,
 	errorMessage,
 	logOnError,
 	mapLimit,
 	safeJsonStringify,
+	stationWallClockToEpoch,
 	unixSeconds,
 	withTimeout,
 } from "../build/lib/utils.js";
@@ -323,5 +325,65 @@ describe("safeJsonStringify", function () {
 		const smallData = [1, 2, 3];
 		const result = safeJsonStringify(smallData);
 		assert.strictEqual(result, JSON.stringify(smallData));
+	});
+});
+
+// ============================================================
+// deriveStationTzOffsetMs
+// ============================================================
+describe("deriveStationTzOffsetMs", function () {
+	/**
+	 * Build a wall-clock string offsetH hours ahead of the current real UTC time.
+	 *
+	 * @param offsetH - Hours the simulated station is ahead of UTC (may be fractional/negative).
+	 */
+	function wallClock(offsetH) {
+		return new Date(Date.now() + offsetH * 3600000).toISOString().slice(0, 19).replace("T", " ");
+	}
+
+	it("returns +2h for a station 2 hours ahead of UTC (CEST)", function () {
+		assert.strictEqual(deriveStationTzOffsetMs(wallClock(2)), 2 * 3600000);
+	});
+
+	it("returns 0 for a station on UTC", function () {
+		assert.strictEqual(deriveStationTzOffsetMs(wallClock(0)), 0);
+	});
+
+	it("returns a negative offset for a station behind UTC", function () {
+		assert.strictEqual(deriveStationTzOffsetMs(wallClock(-5)), -5 * 3600000);
+	});
+
+	it("resolves a :30 offset (rounded to 15min)", function () {
+		assert.strictEqual(deriveStationTzOffsetMs(wallClock(5.5)), 5.5 * 3600000);
+	});
+
+	it("returns null for empty/nullish/garbage input", function () {
+		assert.strictEqual(deriveStationTzOffsetMs(""), null);
+		assert.strictEqual(deriveStationTzOffsetMs(undefined), null);
+		assert.strictEqual(deriveStationTzOffsetMs(null), null);
+		assert.strictEqual(deriveStationTzOffsetMs("not-a-date"), null);
+	});
+});
+
+// ============================================================
+// stationWallClockToEpoch
+// ============================================================
+describe("stationWallClockToEpoch", function () {
+	it("subtracts the station offset to land on the real UTC instant", function () {
+		// 14:30 station-local in a UTC+2 zone == 12:30:00Z.
+		const epoch = stationWallClockToEpoch("2026-05-15 14:30:00", 2 * 3600000);
+		assert.strictEqual(epoch, Date.parse("2026-05-15T12:30:00Z"));
+	});
+
+	it("is an identity (parse-as-UTC) when offset is 0", function () {
+		const epoch = stationWallClockToEpoch("2026-05-15 14:30:00", 0);
+		assert.strictEqual(epoch, Date.parse("2026-05-15T14:30:00Z"));
+	});
+
+	it("returns null for empty/nullish/garbage input", function () {
+		assert.strictEqual(stationWallClockToEpoch("", 0), null);
+		assert.strictEqual(stationWallClockToEpoch(undefined, 0), null);
+		assert.strictEqual(stationWallClockToEpoch(null, 0), null);
+		assert.strictEqual(stationWallClockToEpoch("garbage", 0), null);
 	});
 });

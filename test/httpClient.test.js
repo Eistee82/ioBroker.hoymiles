@@ -1,6 +1,6 @@
 import assert from "node:assert";
 import * as https from "node:https";
-import { postJson, postBinary, destroyAgent, initAgent } from "../build/lib/httpClient.js";
+import { postJson, postBinary, destroyAgent, initAgent, HttpError } from "../build/lib/httpClient.js";
 
 // Allow self-signed certificates for mock server tests
 const _originalTlsReject = process.env.NODE_TLS_REJECT_UNAUTHORIZED;
@@ -270,6 +270,31 @@ describe("httpClient", function () {
 					err => {
 						assert.ok(err instanceof Error);
 						assert.ok(err.message.includes("500"), "error message should contain status code 500");
+						return true;
+					},
+				);
+			});
+
+			it("rejects with an HttpError carrying the numeric statusCode", async function () {
+				this.timeout(10000);
+				await assert.rejects(
+					() => postJson(`${baseUrl}/error400`, {}),
+					err => {
+						assert.ok(err instanceof HttpError, "should be an HttpError");
+						assert.ok(err instanceof Error, "HttpError must still be an Error");
+						assert.strictEqual(err.statusCode, 400, "statusCode should expose the HTTP status");
+						return true;
+					},
+				);
+			});
+
+			it("HttpError on HTTP 500 exposes statusCode 500", async function () {
+				this.timeout(10000);
+				await assert.rejects(
+					() => postJson(`${baseUrl}/error500`, {}),
+					err => {
+						assert.ok(err instanceof HttpError);
+						assert.strictEqual(err.statusCode, 500);
 						return true;
 					},
 				);

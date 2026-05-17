@@ -222,6 +222,7 @@ const stationChannels: ChannelDefinition[] = [
 	{ id: "grid", name: { en: "Station grid output", de: "Anlagen-Netzeinspeisung" } },
 	{ id: "info", name: { en: "Station info", de: "Anlagen-Info" } },
 	{ id: "weather", name: { en: "Weather at station", de: "Wetter am Standort" } },
+	{ id: "warn", name: { en: "Station warnings", de: "Anlagen-Warnungen" } },
 ];
 
 const stationStates: StateDefinition[] = [
@@ -269,6 +270,15 @@ const stationStates: StateDefinition[] = [
 	n("weather.temperature", "Temperature", "Temperatur", "value.temperature", "°C"),
 	n("weather.sunrise", "Sunrise", "Sonnenaufgang", "date.sunrise", ""),
 	n("weather.sunset", "Sunset", "Sonnenuntergang", "date.sunset", ""),
+
+	// Station warnings (warn_data from station/find — cloud only)
+	b("warn.stationOffline", "Station offline", "Anlage offline", "indicator.alarm"),
+	b("warn.gridUnstable", "Grid voltage unstable", "Netzspannung instabil", "indicator.alarm"),
+	b("warn.gridFault", "Grid fault", "Netzfehler", "indicator.alarm"),
+	b("warn.alarmActive", "Alarm active", "Alarm aktiv", "indicator.alarm"),
+	b("warn.deviceIdError", "Device ID not registered", "Geräte-ID nicht registriert", "indicator.alarm"),
+	b("warn.meterFault", "Meter fault", "Zählerfehler", "indicator.alarm"),
+	b("warn.powerOutputOff", "Power output off", "Ausgangsleistung abgeschaltet", "indicator.alarm"),
 ];
 
 /**

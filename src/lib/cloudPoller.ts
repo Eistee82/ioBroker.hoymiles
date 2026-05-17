@@ -2,7 +2,7 @@ import type CloudConnection from "./cloudConnection.js";
 import { toKwh } from "./convert.js";
 import type DeviceContext from "./deviceContext.js";
 import { CLOUD_POLL_CONCURRENCY, DEFAULT_POLL_MS, MIN_POLL_MS, RELAY_POLL_DELAY_MS } from "./constants.js";
-import { errorMessage, logOnError, mapLimit } from "./utils.js";
+import { deriveStationTzOffsetMs, errorMessage, logOnError, mapLimit, stationWallClockToEpoch } from "./utils.js";
 import { stationStateMap, buildStateCommon } from "./stateDefinitions.js";
 
 /**
@@ -69,7 +69,16 @@ class CloudPoller {
 	private pollTimer: ioBroker.Timeout | undefined;
 	private pollIntervalMs: number;
 	private stationCoords: Map<number, { lat: number; lon: number; tzOffsetS: number }>;
-	private lastFirmwareCheckDay: number;
+	/**
+	 * Per-station UTC offset in ms, derived from the station's reported `local_time`.
+	 * Used to convert the cloud's local-zone `data_time` / `create_at` strings to a UTC epoch.
+	 */
+	private stationTzOffsetMs: Map<number, number>;
+	/**
+	 * Day-of-month of the last firmware check, per station id. Per-station so a multi-station
+	 * account checks every station — a single shared counter skipped all but the first.
+	 */
+	private lastFirmwareCheckDay: Map<number, number>;
 	private initialFetchDone: boolean;
 
 	/** Timestamp (ms) of last cloud realtime data fetch per DTU serial. */
@@ -99,7 +108,8 @@ class CloudPoller {
 		this.pollTimer = undefined;
 		this.pollIntervalMs = DEFAULT_POLL_MS;
 		this.stationCoords = new Map();
-		this.lastFirmwareCheckDay = -1;
+		this.stationTzOffsetMs = new Map();
+		this.lastFirmwareCheckDay = new Map();
 		this.lastRealtimeFetch = new Map();
 		this.initialFetchDone = false;
 		this.pollInProgress = false;
@@ -345,9 +355,7 @@ class CloudPoller {
 			await mapLimit([...this.stationDevices], CLOUD_POLL_CONCURRENCY, async stationId => {
 				const deviceId = `station-${stationId}`;
 				await this.pollWeather(stationId, deviceId);
-				const today = new Date().getDate();
-				if (today !== this.lastFirmwareCheckDay) {
-					this.lastFirmwareCheckDay = today;
+				if (this.firmwareCheckDue(stationId)) {
 					await this.pollFirmwareStatus(stationId);
 				}
 			});
@@ -363,15 +371,18 @@ class CloudPoller {
 
 		// Station realtime data (every cycle)
 		const data = await this.cloud.getStationRealtime(stationId);
-		await this.setStationRealtimeStates(deviceId, data);
 
-		// Station details + weather (slow poll ~30min), firmware (once per day)
+		// Station details run BEFORE the realtime states on a slow poll: they cache the
+		// station's UTC offset that setStationRealtimeStates needs to convert data_time.
 		if (isSlowPoll) {
 			await this.pollStationDetails(stationId, deviceId, data);
+		}
+		await this.setStationRealtimeStates(stationId, deviceId, data);
+
+		// Weather (slow poll ~30min), firmware (once per day)
+		if (isSlowPoll) {
 			await this.pollWeather(stationId, deviceId);
-			const today = new Date().getDate();
-			if (today !== this.lastFirmwareCheckDay) {
-				this.lastFirmwareCheckDay = today;
+			if (this.firmwareCheckDue(stationId)) {
 				await this.pollFirmwareStatus(stationId);
 			}
 		}
@@ -385,12 +396,15 @@ class CloudPoller {
 	}
 
 	private async setStationRealtimeStates(
+		stationId: number,
 		deviceId: string,
 		data: Awaited<ReturnType<CloudConnection["getStationRealtime"]>>,
 	): Promise<void> {
 		const w = (suffix: string, value: string | number | boolean | null | undefined): Promise<void> =>
 			this.writeStationState(deviceId, suffix, value);
-		const lastDataStr = data.last_data_time || "";
+		// data_time / last_data_time arrive in the station's LOCAL zone, not UTC — convert
+		// with the offset cached by pollStationDetails (0 = no offset known yet, first poll).
+		const offsetMs = this.stationTzOffsetMs.get(stationId) ?? 0;
 		await Promise.all([
 			w("grid.power", num(data.real_power)),
 			w("grid.dailyEnergy", toKwh(data.today_eq)),
@@ -402,8 +416,8 @@ class CloudPoller {
 			// is_balance / is_reflux: server sends number (0/1) on Home and boolean on Web — both coerce cleanly via !!.
 			w("grid.isBalance", !!data.is_balance),
 			w("grid.isReflux", !!data.is_reflux),
-			w("info.lastCloudUpdate", data.data_time ? new Date(`${data.data_time} UTC`).getTime() : null),
-			w("info.lastDataTime", lastDataStr ? new Date(`${lastDataStr} UTC`).getTime() : null),
+			w("info.lastCloudUpdate", stationWallClockToEpoch(data.data_time, offsetMs)),
+			w("info.lastDataTime", stationWallClockToEpoch(data.last_data_time, offsetMs)),
 		]);
 	}
 
@@ -421,7 +435,16 @@ class CloudPoller {
 			let lat = details.latitude != null ? num(details.latitude) : null;
 			let lon = details.longitude != null ? num(details.longitude) : null;
 			let address = details.address ?? null;
-			const tzOffsetS = details.timezone?.offset ?? 0;
+			// Station UTC offset, derived from the reported wall-clock `local_time` — the
+			// only reliable anchor (find's `timezone` object carries no machine-readable
+			// offset). Cached so the realtime poll can convert `data_time`; on a parse
+			// failure we keep any previously cached value rather than resetting to 0.
+			const derivedOffsetMs = deriveStationTzOffsetMs(details.local_time);
+			if (derivedOffsetMs != null) {
+				this.stationTzOffsetMs.set(stationId, derivedOffsetMs);
+			}
+			const offsetMs = this.stationTzOffsetMs.get(stationId) ?? 0;
+			const tzOffsetS = Math.round(offsetMs / 1000);
 			// Some accounts/regions return placeholder 0.0/0.0 from `find` (account host doesn't
 			// mirror station-region data). The Home-app supplementary `pvm-ext/station-ak/find`
 			// endpoint carries the real coordinates — try it whenever the primary record lacks them.
@@ -445,6 +468,10 @@ class CloudPoller {
 				this.stationCoords.set(stationId, { lat, lon, tzOffsetS });
 			}
 			const price = details.electricity_price ?? null;
+			// Station-level grid/meter warning flags from `find`. The home `find_c` record
+			// may omit `warn_data` entirely — writeStationState skips undefined, so those
+			// states simply never get created on accounts that don't deliver them.
+			const wd = details.warn_data;
 			await Promise.all([
 				w("info.stationName", details.name || null),
 				w("info.stationId", stationId),
@@ -453,13 +480,20 @@ class CloudPoller {
 				w("info.latitude", lat),
 				w("info.longitude", lon),
 				w("info.stationStatus", details.status ?? null),
-				w("info.installedAt", details.create_at ? new Date(`${details.create_at} UTC`).getTime() : null),
+				w("info.installedAt", stationWallClockToEpoch(details.create_at, offsetMs)),
 				w("info.timezone", details.timezone?.tz_name || null),
 				w("grid.electricityPrice", price),
 				w("grid.currency", details.money_unit || null),
 				// Income calculations require a price > 0; otherwise skip so we don't create a meaningless 0-state.
 				w("grid.todayIncome", price ? Math.round(toKwh(realtimeData.today_eq) * price * 100) / 100 : null),
 				w("grid.totalIncome", price ? Math.round(toKwh(realtimeData.total_eq) * price * 100) / 100 : null),
+				w("warn.stationOffline", wd?.s_uoff),
+				w("warn.gridUnstable", wd?.s_ustable),
+				w("warn.gridFault", wd?.g_warn),
+				w("warn.alarmActive", wd?.l3_warn),
+				w("warn.deviceIdError", wd?.s_uid),
+				w("warn.meterFault", wd?.me_warn),
+				w("warn.powerOutputOff", wd?.pw_off),
 			]);
 		} catch (err) {
 			this.adapter.log.debug(`Cloud station details failed for ${stationId}: ${errorMessage(err)}`);
@@ -484,6 +518,9 @@ class CloudPoller {
 			}
 		}
 
+		// Refresh info.connected for cloud-only DTUs from the cloud's link status.
+		await this.updateCloudConnectedStates(deviceTree);
+
 		// DTU/inverter versions (slow poll only)
 		if (isSlowPoll && deviceTree.length > 0) {
 			await this.updateDeviceVersions(deviceTree);
@@ -491,6 +528,34 @@ class CloudPoller {
 
 		// Per-inverter + per-PV realtime data
 		await this.pollInverterRealtimeData(stationId, deviceTree);
+	}
+
+	/**
+	 * Write `<dtuSerial>.info.connected` for **cloud-only** DTUs from the cloud's reported
+	 * link status (`warn_data.connect` on the inverter node — the same signal that feeds
+	 * `inverter.linkStatus`).
+	 *
+	 * Locally-configured DTUs (`connection != null`, even while their TCP link is down) are
+	 * deliberately skipped: an inverter is "online" exactly when the local DTU connection
+	 * stands, and that state is owned by the local layer (`deviceContext`). When the sun
+	 * sets the connection drops and `deviceContext` sets `connected = false`; the cloud
+	 * must not resurrect it to `true` from cached cloud data. Overwriting it here was the
+	 * cause of offline inverters showing as online.
+	 *
+	 * @param deviceTree - Device tree from `getDeviceTree()`.
+	 */
+	private async updateCloudConnectedStates(
+		deviceTree: Awaited<ReturnType<CloudConnection["getDeviceTree"]>>,
+	): Promise<void> {
+		for (const dtu of deviceTree) {
+			const dtuDev = this.devices.get(dtu.sn);
+			if (!dtuDev?.dtuSerial || dtuDev.connection != null) {
+				// not mapped, or locally configured → local layer owns info.connected
+				continue;
+			}
+			const online = dtu.children?.some(inv => inv.warn_data?.connect) ?? false;
+			await this.boundSetState(`${dtuDev.dtuSerial}.info.connected`, online, true);
+		}
 	}
 
 	private async updateDeviceVersions(
@@ -600,7 +665,10 @@ class CloudPoller {
 					return; // Error already logged in CloudConnection
 				}
 
-				const writes: Array<Promise<void>> = [s(`${sn}.info.connected`, true, true).then(() => {})];
+				// info.connected is NOT written here — updateCloudConnectedStates() owns it
+				// (cloud-only DTUs only), so a locally-configured DTU that is merely offline
+				// for the night keeps the `false` its local layer set.
+				const writes: Array<Promise<void>> = [];
 				if (values.MI_POWER !== undefined) {
 					writes.push(cs(`${sn}.grid.power`, values.MI_POWER));
 				}
@@ -674,10 +742,20 @@ class CloudPoller {
 			}
 		}
 
-		// Clean up stale station coordinate entries
+		// Clean up stale per-station entries for stations no longer present
 		for (const sid of this.stationCoords.keys()) {
 			if (!this.stationDevices.has(sid)) {
 				this.stationCoords.delete(sid);
+			}
+		}
+		for (const sid of this.stationTzOffsetMs.keys()) {
+			if (!this.stationDevices.has(sid)) {
+				this.stationTzOffsetMs.delete(sid);
+			}
+		}
+		for (const sid of this.lastFirmwareCheckDay.keys()) {
+			if (!this.stationDevices.has(sid)) {
+				this.lastFirmwareCheckDay.delete(sid);
 			}
 		}
 	}
@@ -737,6 +815,21 @@ class CloudPoller {
 			this.lastCloudConnected = connected;
 			await this.adapter.setStateAsync("info.cloudConnected", connected, true);
 		}
+	}
+
+	/**
+	 * True at most once per calendar day per station — gates the daily firmware check.
+	 * Marks the station as checked for today as a side effect.
+	 *
+	 * @param stationId - Cloud station ID.
+	 */
+	private firmwareCheckDue(stationId: number): boolean {
+		const today = new Date().getDate();
+		if (this.lastFirmwareCheckDay.get(stationId) === today) {
+			return false;
+		}
+		this.lastFirmwareCheckDay.set(stationId, today);
+		return true;
 	}
 
 	private async pollFirmwareStatus(stationId: number): Promise<void> {

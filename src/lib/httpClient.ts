@@ -27,6 +27,26 @@ interface HttpPostOptions {
 }
 
 /**
+ * HTTP-level failure: the server answered with a status code ≥ 400.
+ * Carries the numeric `statusCode` so callers can tell an endpoint-level rejection
+ * (e.g. HTTP 403 — account not permitted on this API surface) apart from a transport
+ * error (timeout, DNS, connection reset), which arrive as a plain `Error`.
+ */
+class HttpError extends Error {
+	public readonly statusCode: number;
+
+	/**
+	 * @param statusCode - HTTP response status code (≥ 400)
+	 * @param url - Request URL, included in the message for diagnostics
+	 */
+	constructor(statusCode: number, url: string) {
+		super(`HTTP ${statusCode} on ${url}`);
+		this.name = "HttpError";
+		this.statusCode = statusCode;
+	}
+}
+
+/**
  * POST JSON to an HTTPS endpoint and return the parsed JSON response.
  *
  * @param url - Full URL to POST to
@@ -97,7 +117,7 @@ function request(
 			res.on("data", (chunk: Buffer) => chunks.push(chunk));
 			res.on("end", () => {
 				if (res.statusCode && res.statusCode >= 400) {
-					fail(new Error(`HTTP ${res.statusCode} on ${url}`));
+					fail(new HttpError(res.statusCode, url));
 					return;
 				}
 				const buf = Buffer.concat(chunks);
@@ -132,4 +152,4 @@ function destroyAgent(): void {
 	agent.destroy();
 }
 
-export { postJson, postBinary, destroyAgent, initAgent };
+export { postJson, postBinary, destroyAgent, initAgent, HttpError };

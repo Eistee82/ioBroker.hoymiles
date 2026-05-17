@@ -137,6 +137,10 @@ Cloud stations create aggregated device nodes (e.g. `hoymiles.0.station-12345.*`
 ### **WORK IN PROGRESS**
 - (@Eistee82) Route per-station cloud calls via the station's data-center: `select_by_page` now caches each station's `dc` and `ak`, and `getStationDetails` / `getStationExtInfo` use the resolved DC host so that stations in a region other than the account's no longer return placeholder `latitude="0.0"` / `longitude="0.0"`
 - (@Eistee82) Add Home-profile supplementary `pvm-ext/api/0/station-ak/find` call to recover `latitude` / `longitude` / `address` when `find_c` omits them — restores the weather poll for S-Miles Home accounts
+- (@Eistee82) Fix S-Miles Home login: the post-login profile probe now treats an HTTP 403 from `/pvm/.../select_by_page` as the definitive "home" verdict instead of aborting the whole login — Home accounts previously could not connect to the cloud at all
+- (@Eistee82) Cloud poller no longer overwrites `<dtuSerial>.info.connected` for locally-configured DTUs — an inverter that went offline for the night was wrongly shown as online; cloud-only DTUs now derive `connected` from the cloud-reported link status instead of a hard-coded `true`
+- (@Eistee82) Fix `station-<id>.info.lastCloudUpdate` / `lastDataTime` / `installedAt` being ~2h off: the cloud delivers these timestamps in station-local time — they are now converted to UTC via the station's offset derived from `local_time`
+- (@Eistee82) Add `station-<id>.warn.*` states (grid/meter warning flags from `station/find`) and track the daily firmware check per station so multi-station accounts no longer skip all stations but the first
 
 ### 0.3.5 (2026-05-13)
 - (copilot) Adapter requires node.js >= 22 now

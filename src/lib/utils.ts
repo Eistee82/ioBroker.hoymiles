@@ -8,6 +8,58 @@ export function unixSeconds(): number {
 }
 
 /**
+ * Parse a Hoymiles cloud wall-clock string ("YYYY-MM-DD HH:mm:ss", no zone) as if
+ * it were UTC. Returns the epoch in ms, or NaN when the string is unparseable.
+ *
+ * @param str - Wall-clock string from the cloud API.
+ */
+function parseWallClockAsUtc(str: string): number {
+	return Date.parse(`${str.trim().replace(" ", "T")}Z`);
+}
+
+/**
+ * Derive a station's UTC offset (ms) by comparing the server-reported wall-clock
+ * `local_time` against the host's real UTC clock. Rounded to 15-minute steps so
+ * request latency / minor clock skew don't perturb it, while still resolving every
+ * real-world zone (including the :30 and :45 offsets).
+ *
+ * The Hoymiles cloud delivers `data_time` / `last_data_time` / `create_at` in the
+ * station's local zone but exposes no machine-readable UTC offset — `local_time`
+ * from `station/find` is the only reliable anchor.
+ *
+ * @param localTime - Station wall-clock string ("YYYY-MM-DD HH:mm:ss").
+ * @returns Offset in ms (local = UTC + offset), or null if `localTime` is unusable.
+ */
+export function deriveStationTzOffsetMs(localTime: string | undefined | null): number | null {
+	if (!localTime) {
+		return null;
+	}
+	const asUtc = parseWallClockAsUtc(localTime);
+	if (Number.isNaN(asUtc)) {
+		return null;
+	}
+	const offsetMs = Math.round((asUtc - Date.now()) / 900000) * 900000;
+	return offsetMs === 0 ? 0 : offsetMs; // normalize -0 (host clock a few ms ahead of a UTC station)
+}
+
+/**
+ * Convert a station-local wall-clock string to a UTC epoch (ms) by subtracting the
+ * station's UTC offset. Use for `data_time` / `last_data_time` / `create_at`, which
+ * the Hoymiles cloud returns in the station's local zone (not UTC).
+ *
+ * @param wallClock - Wall-clock string ("YYYY-MM-DD HH:mm:ss"), or empty/nullish.
+ * @param offsetMs - Station UTC offset from `deriveStationTzOffsetMs`.
+ * @returns UTC epoch in ms, or null when `wallClock` is empty/unparseable.
+ */
+export function stationWallClockToEpoch(wallClock: string | undefined | null, offsetMs: number): number | null {
+	if (!wallClock) {
+		return null;
+	}
+	const asUtc = parseWallClockAsUtc(wallClock);
+	return Number.isNaN(asUtc) ? null : asUtc - offsetMs;
+}
+
+/**
  * Safely extract an error message from an unknown catch value.
  *
  * @param err - The caught value (may not be an Error instance)
