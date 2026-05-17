@@ -2,6 +2,59 @@ import * as crypto from "node:crypto";
 export function unixSeconds() {
     return Math.floor(Date.now() / 1000);
 }
+export function anonymize(value, prefix = "id") {
+    if (!value) {
+        return `${prefix}:none`;
+    }
+    const hash = crypto.createHash("sha256").update(String(value)).digest("hex").slice(0, 8);
+    return `${prefix}:${hash}`;
+}
+const LOG_REDACT_KEYS = new Set([
+    "address",
+    "name",
+    "station_name",
+    "plant_name",
+    "nickname",
+    "nick_name",
+    "owner_name",
+    "token",
+    "ak",
+    "access_key",
+    "password",
+    "pwd",
+    "ch",
+    "mobile",
+    "phone",
+    "tel",
+]);
+const LOG_ANON_KEYS = new Set(["sn", "dtu_sn", "dtusn", "serial", "serial_number", "user", "username", "email"]);
+const LOG_GEO_KEYS = new Set(["latitude", "longitude", "lat", "lon", "lng"]);
+export function sanitizeForLog(value) {
+    if (Array.isArray(value)) {
+        return value.map(sanitizeForLog);
+    }
+    if (value && typeof value === "object") {
+        const out = {};
+        for (const [key, v] of Object.entries(value)) {
+            const lk = key.toLowerCase();
+            if (LOG_ANON_KEYS.has(lk)) {
+                out[key] = typeof v === "string" && v ? anonymize(v, "id") : v;
+            }
+            else if (LOG_REDACT_KEYS.has(lk)) {
+                out[key] = v ? "<redacted>" : v;
+            }
+            else if (LOG_GEO_KEYS.has(lk)) {
+                const n = typeof v === "number" ? v : parseFloat(String(v));
+                out[key] = !Number.isNaN(n) && n === 0 ? v : v ? "<geo>" : v;
+            }
+            else {
+                out[key] = sanitizeForLog(v);
+            }
+        }
+        return out;
+    }
+    return value;
+}
 function parseWallClockAsUtc(str) {
     return Date.parse(`${str.trim().replace(" ", "T")}Z`);
 }

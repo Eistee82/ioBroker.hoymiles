@@ -141,6 +141,7 @@ Cloud stations create aggregated device nodes (e.g. `hoymiles.0.station-12345.*`
 - (@Eistee82) Cloud poller no longer overwrites `<dtuSerial>.info.connected` for locally-configured DTUs — an inverter that went offline for the night was wrongly shown as online; cloud-only DTUs now derive `connected` from the cloud-reported link status instead of a hard-coded `true`
 - (@Eistee82) Fix `station-<id>.info.lastCloudUpdate` / `lastDataTime` / `installedAt` being ~2h off: the cloud delivers these timestamps in station-local time — they are now converted to UTC via the station's offset derived from `local_time`
 - (@Eistee82) Add `station-<id>.warn.*` states (grid/meter warning flags from `station/find`) and track the daily firmware check per station so multi-station accounts no longer skip all stations but the first
+- (@Eistee82) Add an anonymized `[diag]` debug log: at `debug` log level the adapter dumps the raw cloud API responses (login, station list/details, device tree, realtime, firmware) and its per-decision results — serials and the account e-mail are replaced with stable hash tokens and coordinates/address/station name are redacted, so the `[diag]` lines are safe to share in a forum bug report
 
 ### 0.3.5 (2026-05-13)
 - (copilot) Adapter requires node.js >= 22 now

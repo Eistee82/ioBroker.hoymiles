@@ -371,3 +371,13 @@ Protokoll-Reverse-Engineering durch die Community:
 - Prüfe E-Mail und Passwort des S-Miles Kontos
 - Stelle sicher, dass du dich unter https://global.hoymiles.com/website/login einloggen kannst
 - Bei einem dauerhaften Authentifizierungsfehler (falsche Zugangsdaten, gesperrtes Konto) stoppt der Adapter den Wiederholungs-Loop, um weitere Kontosperren zu vermeiden. Der Fehler wird nach `info.cloudLastError` geschrieben und eine ioBroker-Alert-Notification (Scope `hoymiles`, Kategorie `cloudAuth`) ausgelöst. Korrigiere die Zugangsdaten und speichere die Konfiguration, um den State zu löschen und Wiederholungsversuche fortzusetzen.
+
+### Einen Fehler melden
+
+Damit aus „geht nicht" etwas Behebbares wird, erzeugt der Adapter ein gezieltes, **anonymisiertes** Diagnose-Log:
+
+1. Öffne im ioBroker-Admin die Instanz-Einstellungen des Adapters und setze das **Log-Level** auf `debug`.
+2. Starte die Instanz neu und lass sie ein paar Minuten laufen (ein bis zwei Cloud-Poll-Zyklen).
+3. Exportiere das Log und filtere die Zeilen mit der Markierung `[diag]` heraus.
+
+Die `[diag]`-Zeilen enthalten die rohen Cloud-API-Antworten (Login-Ablauf, Anlagenliste/-details, Gerätebaum, Echtzeit, Firmware) sowie die Entscheidungs-Ergebnisse des Adapters. DTU-/Wechselrichter-Seriennummern und die Konto-E-Mail werden durch stabile Hash-Tokens ersetzt, GPS-Koordinaten / Adresse / Anlagenname werden geschwärzt — die `[diag]`-Zeilen sind also gefahrlos in einem öffentlichen Forum-Bugreport postbar. (Andere, nicht mit `[diag]` markierte Debug-Zeilen können weiterhin die echte Seriennummer enthalten — schick daher gezielt die `[diag]`-Zeilen.)

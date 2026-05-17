@@ -372,3 +372,13 @@ Protocol reverse-engineering by the community:
 - Check your S-Miles email and password
 - Make sure you can login at https://global.hoymiles.com/website/login
 - On a permanent authentication error (wrong credentials, account locked) the adapter stops the retry loop to avoid further account lockouts. The error is written to `info.cloudLastError` and an ioBroker alert notification (scope `hoymiles`, category `cloudAuth`) is raised. Correct the credentials and save the configuration to clear the state and resume retries.
+
+### Reporting a bug
+
+To turn an "it doesn't work" into something fixable, the adapter emits a focused, **anonymized** diagnostic log:
+
+1. In the ioBroker admin, open the adapter instance settings and set the **log level** to `debug`.
+2. Restart the instance and let it run a few minutes (one or two cloud poll cycles).
+3. Export the log and pick out the lines tagged `[diag]`.
+
+The `[diag]` lines carry the raw cloud API responses (login flow, station list/details, device tree, realtime, firmware) plus the adapter's per-decision results. DTU/inverter serials and the account e-mail are replaced with stable hash tokens, and GPS coordinates / address / station name are redacted — so the `[diag]` lines are safe to paste into a public forum bug report. (Other, non-`[diag]` debug lines may still contain the real serial, so send the `[diag]` lines specifically.)

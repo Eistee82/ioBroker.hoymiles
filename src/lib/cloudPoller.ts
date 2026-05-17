@@ -2,7 +2,14 @@ import type CloudConnection from "./cloudConnection.js";
 import { toKwh } from "./convert.js";
 import type DeviceContext from "./deviceContext.js";
 import { CLOUD_POLL_CONCURRENCY, DEFAULT_POLL_MS, MIN_POLL_MS, RELAY_POLL_DELAY_MS } from "./constants.js";
-import { deriveStationTzOffsetMs, errorMessage, logOnError, mapLimit, stationWallClockToEpoch } from "./utils.js";
+import {
+	anonymize,
+	deriveStationTzOffsetMs,
+	errorMessage,
+	logOnError,
+	mapLimit,
+	stationWallClockToEpoch,
+} from "./utils.js";
 import { stationStateMap, buildStateCommon } from "./stateDefinitions.js";
 
 /**
@@ -405,6 +412,11 @@ class CloudPoller {
 		// data_time / last_data_time arrive in the station's LOCAL zone, not UTC — convert
 		// with the offset cached by pollStationDetails (0 = no offset known yet, first poll).
 		const offsetMs = this.stationTzOffsetMs.get(stationId) ?? 0;
+		const cloudUpdateEpoch = stationWallClockToEpoch(data.data_time, offsetMs);
+		this.adapter.log.debug(
+			`[diag] station ${stationId} lastCloudUpdate: data_time="${data.data_time ?? "<none>"}" ` +
+				`offset=${offsetMs / 3600000}h → ${cloudUpdateEpoch != null ? new Date(cloudUpdateEpoch).toISOString() : "n/a"}`,
+		);
 		await Promise.all([
 			w("grid.power", num(data.real_power)),
 			w("grid.dailyEnergy", toKwh(data.today_eq)),
@@ -416,7 +428,7 @@ class CloudPoller {
 			// is_balance / is_reflux: server sends number (0/1) on Home and boolean on Web — both coerce cleanly via !!.
 			w("grid.isBalance", !!data.is_balance),
 			w("grid.isReflux", !!data.is_reflux),
-			w("info.lastCloudUpdate", stationWallClockToEpoch(data.data_time, offsetMs)),
+			w("info.lastCloudUpdate", cloudUpdateEpoch),
 			w("info.lastDataTime", stationWallClockToEpoch(data.last_data_time, offsetMs)),
 		]);
 	}
@@ -445,6 +457,9 @@ class CloudPoller {
 			}
 			const offsetMs = this.stationTzOffsetMs.get(stationId) ?? 0;
 			const tzOffsetS = Math.round(offsetMs / 1000);
+			this.adapter.log.debug(
+				`[diag] station ${stationId} tz: local_time="${details.local_time ?? "<none>"}" → offset=${offsetMs / 3600000}h`,
+			);
 			// Some accounts/regions return placeholder 0.0/0.0 from `find` (account host doesn't
 			// mirror station-region data). The Home-app supplementary `pvm-ext/station-ak/find`
 			// endpoint carries the real coordinates — try it whenever the primary record lacks them.
@@ -472,6 +487,7 @@ class CloudPoller {
 			// may omit `warn_data` entirely — writeStationState skips undefined, so those
 			// states simply never get created on accounts that don't deliver them.
 			const wd = details.warn_data;
+			this.adapter.log.debug(`[diag] station ${stationId} warn_data: ${wd ? "present" : "absent (home find_c)"}`);
 			await Promise.all([
 				w("info.stationName", details.name || null),
 				w("info.stationId", stationId),
@@ -549,11 +565,21 @@ class CloudPoller {
 	): Promise<void> {
 		for (const dtu of deviceTree) {
 			const dtuDev = this.devices.get(dtu.sn);
-			if (!dtuDev?.dtuSerial || dtuDev.connection != null) {
-				// not mapped, or locally configured → local layer owns info.connected
+			if (!dtuDev?.dtuSerial) {
+				continue;
+			}
+			const sn = anonymize(dtuDev.dtuSerial, "dtu");
+			if (dtuDev.connection != null) {
+				// locally configured → local layer owns info.connected, cloud keeps hands off
+				this.adapter.log.debug(
+					`[diag] connected: ${sn} locally-configured → cloud leaves info.connected alone`,
+				);
 				continue;
 			}
 			const online = dtu.children?.some(inv => inv.warn_data?.connect) ?? false;
+			this.adapter.log.debug(
+				`[diag] connected: ${sn} cloud-only → info.connected=${online} (from warn_data.connect)`,
+			);
 			await this.boundSetState(`${dtuDev.dtuSerial}.info.connected`, online, true);
 		}
 	}
@@ -839,6 +865,9 @@ class CloudPoller {
 					continue;
 				}
 				const fw = await this.cloud.checkFirmwareUpdate(stationId, device.dtuSerial);
+				this.adapter.log.debug(
+					`[diag] firmware: ${anonymize(device.dtuSerial, "dtu")} station ${stationId} → updateAvailable=${fw.upgrade > 0}`,
+				);
 				await this.adapter.setStateAsync(`${device.dtuSerial}.dtu.fwUpdateAvailable`, fw.upgrade > 0, true);
 			}
 		} catch (err) {

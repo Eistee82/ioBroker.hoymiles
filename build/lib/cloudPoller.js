@@ -1,6 +1,6 @@
 import { toKwh } from "./convert.js";
 import { CLOUD_POLL_CONCURRENCY, DEFAULT_POLL_MS, MIN_POLL_MS, RELAY_POLL_DELAY_MS } from "./constants.js";
-import { deriveStationTzOffsetMs, errorMessage, logOnError, mapLimit, stationWallClockToEpoch } from "./utils.js";
+import { anonymize, deriveStationTzOffsetMs, errorMessage, logOnError, mapLimit, stationWallClockToEpoch, } from "./utils.js";
 import { stationStateMap, buildStateCommon } from "./stateDefinitions.js";
 const num = (v) => parseFloat(v) || 0;
 const WEATHER_DESCRIPTIONS = {
@@ -252,6 +252,9 @@ class CloudPoller {
     async setStationRealtimeStates(stationId, deviceId, data) {
         const w = (suffix, value) => this.writeStationState(deviceId, suffix, value);
         const offsetMs = this.stationTzOffsetMs.get(stationId) ?? 0;
+        const cloudUpdateEpoch = stationWallClockToEpoch(data.data_time, offsetMs);
+        this.adapter.log.debug(`[diag] station ${stationId} lastCloudUpdate: data_time="${data.data_time ?? "<none>"}" ` +
+            `offset=${offsetMs / 3600000}h → ${cloudUpdateEpoch != null ? new Date(cloudUpdateEpoch).toISOString() : "n/a"}`);
         await Promise.all([
             w("grid.power", num(data.real_power)),
             w("grid.dailyEnergy", toKwh(data.today_eq)),
@@ -262,7 +265,7 @@ class CloudPoller {
             w("grid.treesPlanted", num(data.plant_tree)),
             w("grid.isBalance", !!data.is_balance),
             w("grid.isReflux", !!data.is_reflux),
-            w("info.lastCloudUpdate", stationWallClockToEpoch(data.data_time, offsetMs)),
+            w("info.lastCloudUpdate", cloudUpdateEpoch),
             w("info.lastDataTime", stationWallClockToEpoch(data.last_data_time, offsetMs)),
         ]);
     }
@@ -279,6 +282,7 @@ class CloudPoller {
             }
             const offsetMs = this.stationTzOffsetMs.get(stationId) ?? 0;
             const tzOffsetS = Math.round(offsetMs / 1000);
+            this.adapter.log.debug(`[diag] station ${stationId} tz: local_time="${details.local_time ?? "<none>"}" → offset=${offsetMs / 3600000}h`);
             if (lat == null || lon == null || (lat === 0 && lon === 0)) {
                 try {
                     const ext = await this.cloud.getStationExtInfo(stationId);
@@ -301,6 +305,7 @@ class CloudPoller {
             }
             const price = details.electricity_price ?? null;
             const wd = details.warn_data;
+            this.adapter.log.debug(`[diag] station ${stationId} warn_data: ${wd ? "present" : "absent (home find_c)"}`);
             await Promise.all([
                 w("info.stationName", details.name || null),
                 w("info.stationId", stationId),
@@ -354,10 +359,16 @@ class CloudPoller {
     async updateCloudConnectedStates(deviceTree) {
         for (const dtu of deviceTree) {
             const dtuDev = this.devices.get(dtu.sn);
-            if (!dtuDev?.dtuSerial || dtuDev.connection != null) {
+            if (!dtuDev?.dtuSerial) {
+                continue;
+            }
+            const sn = anonymize(dtuDev.dtuSerial, "dtu");
+            if (dtuDev.connection != null) {
+                this.adapter.log.debug(`[diag] connected: ${sn} locally-configured → cloud leaves info.connected alone`);
                 continue;
             }
             const online = dtu.children?.some(inv => inv.warn_data?.connect) ?? false;
+            this.adapter.log.debug(`[diag] connected: ${sn} cloud-only → info.connected=${online} (from warn_data.connect)`);
             await this.boundSetState(`${dtuDev.dtuSerial}.info.connected`, online, true);
         }
     }
@@ -572,6 +583,7 @@ class CloudPoller {
                     continue;
                 }
                 const fw = await this.cloud.checkFirmwareUpdate(stationId, device.dtuSerial);
+                this.adapter.log.debug(`[diag] firmware: ${anonymize(device.dtuSerial, "dtu")} station ${stationId} → updateAvailable=${fw.upgrade > 0}`);
                 await this.adapter.setStateAsync(`${device.dtuSerial}.dtu.fwUpdateAvailable`, fw.upgrade > 0, true);
             }
         }

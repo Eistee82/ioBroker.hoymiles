@@ -7,7 +7,7 @@ import { ProtobufHandler } from "./lib/protobufHandler.js";
 import { discoverDtus, probeHost } from "./lib/networkDiscovery.js";
 import { destroyAgent } from "./lib/httpClient.js";
 import { DISCOVERY_CONCURRENCY, DISCOVERY_TIMEOUT_MS, PROBE_TIMEOUT_MS, UNLOAD_TIMEOUT_MS } from "./lib/constants.js";
-import { errorMessage, mapLimit } from "./lib/utils.js";
+import { anonymize, errorMessage, mapLimit } from "./lib/utils.js";
 
 interface DeviceConfig {
 	host: string;
@@ -451,7 +451,7 @@ class Hoymiles extends utils.Adapter {
 				return;
 			}
 
-			this.log.info(`[testCloudLogin] starting diagnostics for ${user}`);
+			this.log.info(`[testCloudLogin] starting diagnostics for ${anonymize(user, "acct")}`);
 			const cloud = new CloudConnection(user, password, m => this.log.debug(`[testCloudLogin] ${m}`));
 			const results = await cloud.loginDiagnostics();
 
@@ -481,7 +481,7 @@ class Hoymiles extends utils.Adapter {
 				})
 				.join(" | ");
 
-			this.log.info(`[testCloudLogin] result for ${user}: ${summary}`);
+			this.log.info(`[testCloudLogin] result for ${anonymize(user, "acct")}: ${summary}`);
 
 			const anyAccepted = results.some(r => r.flow === "login" && r.ok);
 			this.reply(obj, {
