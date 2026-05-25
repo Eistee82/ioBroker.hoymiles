@@ -247,7 +247,7 @@ PV-Channels werden dynamisch basierend auf dem Wechselrichter-Modell erstellt (1
 
 ### `station-<id>.warn.*` — Anlagen-Warnungen (Cloud)
 
-Netz- und Zähler-Warnflags aus dem Cloud-Datensatz `station/find`. Alle boolesch — `true` bedeutet, die Bedingung ist gerade aktiv. Diese States erscheinen erst, sobald die Cloud tatsächlich einen `warn_data`-Block liefert (ein Home-Konto liefert ihn ggf. nicht).
+Netz- und Zähler-Warnflags aus dem Cloud-Datensatz `station/find`. Alle boolesch — `true` bedeutet, die Bedingung ist gerade aktiv. Bei Installer-Konten kommen die Flags aus `station/find`; bei S-Miles-Home-Konten (wo `find_c` sie auslässt) fällt der Adapter auf die `realtime_c`-Antwort zurück, die denselben `warn_data`-Block trägt. Die States erscheinen erst, sobald die Cloud aus einer der beiden Quellen einen `warn_data`-Block liefert.
 
 | State | Typ | Beschreibung |
 |-------|-----|--------------|

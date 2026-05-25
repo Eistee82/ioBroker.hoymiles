@@ -135,6 +135,13 @@ Cloud stations create aggregated device nodes (e.g. `hoymiles.0.station-12345.*`
 
 ## Changelog
 ### **WORK IN PROGRESS**
+- (@Eistee82) Fix `station-<id>.warn.*` states staying empty on S-Miles Home accounts: the `find_c` station-details record omits `warn_data`, but the home realtime response (`realtime_c`) carries the same flags — the cloud poller now falls back to that source so home accounts populate `warn.stationOffline` / `warn.gridFault` / etc. the same way installer accounts do
+- (@Eistee82) Fix S-Miles Home station timestamps showing ~2h off: `find_c` omits `local_time` so the per-station UTC-offset derivation defaulted to 0h; the offset is now also derived from `realtime_c`'s `local_time` field, restoring correct conversion of `info.lastCloudUpdate` / `lastDataTime` for home accounts
+- (@Eistee82) Populate `dtu.swVersion` / `inverter.swVersion` for S-Miles Home accounts from the daily firmware-compare call: the home device-tree returns empty `soft_ver`, so without this fallback those states stayed blank in the object tree even though the version was available in the cloud
+- (@Eistee82) Cloud poller writes DTU/inverter identity and version fields (`serialNumber`, `swVersion`, `hwVersion`, `model`) on every slow poll regardless of whether the DTU's local TCP link is currently up — these are slow-changing static fields, and the previous gate left them blank for locally-configured DTUs whose InfoData hadn't yet arrived; only the live `inverter.linkStatus` keeps the cloud-only-DTU guard
+- (@Eistee82) Bump direct `protobufjs` to 8.4.2 and add npm `overrides` for the transitive dev-only `protobufjs` (via `@iobroker/adapter-dev → google-gax`) and `serialize-javascript` (via `mocha`) to address the open Dependabot advisories
+- (@Eistee82) Bump GitHub Actions `check-and-lint` and `deploy` jobs to Node.js 24 to satisfy repochecker E3022/S3021
+- (@Eistee82) Add the missing `CHANGELOG_OLD.md` link to the README changelog section (repochecker S6022)
 - (@Eistee82) Route per-station cloud calls via the station's data-center: `select_by_page` now caches each station's `dc` and `ak`, and `getStationDetails` / `getStationExtInfo` use the resolved DC host so that stations in a region other than the account's no longer return placeholder `latitude="0.0"` / `longitude="0.0"`
 - (@Eistee82) Add Home-profile supplementary `pvm-ext/api/0/station-ak/find` call to recover `latitude` / `longitude` / `address` when `find_c` omits them — restores the weather poll for S-Miles Home accounts
 - (@Eistee82) Fix S-Miles Home login: the post-login profile probe now treats an HTTP 403 from `/pvm/.../select_by_page` as the definitive "home" verdict instead of aborting the whole login — Home accounts previously could not connect to the cloud at all
@@ -169,6 +176,8 @@ Cloud stations create aggregated device nodes (e.g. `hoymiles.0.station-12345.*`
 ### 0.3.1 (2026-04-03)
 - (@Eistee82) Fix admin UI responsive layout (add missing size attributes for repochecker)
 - (@Eistee82) Fix news translations in io-package.json for repochecker E2004
+
+Older entries: see [CHANGELOG_OLD.md](CHANGELOG_OLD.md).
 
 ## License
 

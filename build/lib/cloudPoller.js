@@ -1,5 +1,6 @@
 import { toKwh } from "./convert.js";
 import { CLOUD_POLL_CONCURRENCY, DEFAULT_POLL_MS, MIN_POLL_MS, RELAY_POLL_DELAY_MS } from "./constants.js";
+import { formatDtuVersion, formatSwVersion } from "./protobufHandler.js";
 import { anonymize, deriveStationTzOffsetMs, errorMessage, logOnError, mapLimit, stationWallClockToEpoch, } from "./utils.js";
 import { stationStateMap, buildStateCommon } from "./stateDefinitions.js";
 const num = (v) => parseFloat(v) || 0;
@@ -276,13 +277,14 @@ class CloudPoller {
             let lat = details.latitude != null ? num(details.latitude) : null;
             let lon = details.longitude != null ? num(details.longitude) : null;
             let address = details.address ?? null;
-            const derivedOffsetMs = deriveStationTzOffsetMs(details.local_time);
+            const tzSource = details.local_time ?? realtimeData.local_time ?? null;
+            const derivedOffsetMs = deriveStationTzOffsetMs(details.local_time, realtimeData.local_time);
             if (derivedOffsetMs != null) {
                 this.stationTzOffsetMs.set(stationId, derivedOffsetMs);
             }
             const offsetMs = this.stationTzOffsetMs.get(stationId) ?? 0;
             const tzOffsetS = Math.round(offsetMs / 1000);
-            this.adapter.log.debug(`[diag] station ${stationId} tz: local_time="${details.local_time ?? "<none>"}" → offset=${offsetMs / 3600000}h`);
+            this.adapter.log.debug(`[diag] station ${stationId} tz: local_time="${tzSource ?? "<none>"}" → offset=${offsetMs / 3600000}h`);
             if (lat == null || lon == null || (lat === 0 && lon === 0)) {
                 try {
                     const ext = await this.cloud.getStationExtInfo(stationId);
@@ -304,8 +306,9 @@ class CloudPoller {
                 this.stationCoords.set(stationId, { lat, lon, tzOffsetS });
             }
             const price = details.electricity_price ?? null;
-            const wd = details.warn_data;
-            this.adapter.log.debug(`[diag] station ${stationId} warn_data: ${wd ? "present" : "absent (home find_c)"}`);
+            const wd = details.warn_data ?? realtimeData.warn_data;
+            const wdSource = details.warn_data ? "station/find" : realtimeData.warn_data ? "realtime (home)" : "absent";
+            this.adapter.log.debug(`[diag] station ${stationId} warn_data: ${wdSource}`);
             await Promise.all([
                 w("info.stationName", details.name || null),
                 w("info.stationId", stationId),
@@ -382,14 +385,22 @@ class CloudPoller {
             const sn = dtuDevice.dtuSerial;
             const isLocal = dtuDevice.connection?.connected;
             const writes = [];
-            if (!isLocal) {
-                writes.push(s(`${sn}.dtu.serialNumber`, dtu.sn || "", true), s(`${sn}.dtu.swVersion`, dtu.soft_ver || "", true), s(`${sn}.dtu.hwVersion`, dtu.hard_ver || "", true));
-            }
+            const writeIfFilled = (id, val) => {
+                if (val) {
+                    writes.push(s(id, val, true));
+                }
+            };
+            writeIfFilled(`${sn}.dtu.serialNumber`, dtu.sn || "");
+            writeIfFilled(`${sn}.dtu.swVersion`, dtu.soft_ver || "");
+            writeIfFilled(`${sn}.dtu.hwVersion`, dtu.hard_ver || "");
             if (dtu.children?.[0]) {
                 const inv = dtu.children[0];
-                writes.push(s(`${sn}.inverter.model`, inv.model_no || "", true));
+                writeIfFilled(`${sn}.inverter.model`, inv.model_no || "");
+                writeIfFilled(`${sn}.inverter.serialNumber`, inv.sn || "");
+                writeIfFilled(`${sn}.inverter.swVersion`, inv.soft_ver || "");
+                writeIfFilled(`${sn}.inverter.hwVersion`, inv.hard_ver || "");
                 if (!isLocal) {
-                    writes.push(s(`${sn}.inverter.serialNumber`, inv.sn || "", true), s(`${sn}.inverter.swVersion`, inv.soft_ver || "", true), s(`${sn}.inverter.hwVersion`, inv.hard_ver || "", true), s(`${sn}.inverter.linkStatus`, inv.warn_data?.connect ? 1 : 0, true));
+                    writes.push(s(`${sn}.inverter.linkStatus`, inv.warn_data?.connect ? 1 : 0, true));
                 }
             }
             await Promise.all(writes);
@@ -583,8 +594,22 @@ class CloudPoller {
                     continue;
                 }
                 const fw = await this.cloud.checkFirmwareUpdate(stationId, device.dtuSerial);
-                this.adapter.log.debug(`[diag] firmware: ${anonymize(device.dtuSerial, "dtu")} station ${stationId} → updateAvailable=${fw.upgrade > 0}`);
-                await this.adapter.setStateAsync(`${device.dtuSerial}.dtu.fwUpdateAvailable`, fw.upgrade > 0, true);
+                const sn = device.dtuSerial;
+                const fwDevices = fw.devices ?? [];
+                this.adapter.log.debug(`[diag] firmware: ${anonymize(sn, "dtu")} station ${stationId} → ` +
+                    `updateAvailable=${fw.upgrade > 0} devices=${fwDevices.length}`);
+                const writes = [
+                    this.boundSetState(`${sn}.dtu.fwUpdateAvailable`, fw.upgrade > 0, true).then(() => { }),
+                ];
+                for (const fwDev of fwDevices) {
+                    if (fwDev.devType === 1 && fwDev.currentVer > 0) {
+                        writes.push(this.boundSetState(`${sn}.dtu.swVersion`, formatDtuVersion(fwDev.currentVer), true).then(() => { }));
+                    }
+                    else if (fwDev.devType === 3 && fwDev.currentVer > 0) {
+                        writes.push(this.boundSetState(`${sn}.inverter.swVersion`, formatSwVersion(fwDev.currentVer), true).then(() => { }));
+                    }
+                }
+                await Promise.all(writes);
             }
         }
         catch (err) {

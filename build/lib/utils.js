@@ -58,16 +58,19 @@ export function sanitizeForLog(value) {
 function parseWallClockAsUtc(str) {
     return Date.parse(`${str.trim().replace(" ", "T")}Z`);
 }
-export function deriveStationTzOffsetMs(localTime) {
-    if (!localTime) {
-        return null;
+export function deriveStationTzOffsetMs(...candidates) {
+    for (const candidate of candidates) {
+        if (!candidate) {
+            continue;
+        }
+        const asUtc = parseWallClockAsUtc(candidate);
+        if (Number.isNaN(asUtc)) {
+            continue;
+        }
+        const offsetMs = Math.round((asUtc - Date.now()) / 900000) * 900000;
+        return offsetMs === 0 ? 0 : offsetMs;
     }
-    const asUtc = parseWallClockAsUtc(localTime);
-    if (Number.isNaN(asUtc)) {
-        return null;
-    }
-    const offsetMs = Math.round((asUtc - Date.now()) / 900000) * 900000;
-    return offsetMs === 0 ? 0 : offsetMs;
+    return null;
 }
 export function stationWallClockToEpoch(wallClock, offsetMs) {
     if (!wallClock) {

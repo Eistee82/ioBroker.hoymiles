@@ -157,6 +157,23 @@ interface CloudRealtimeData {
 	clp: number;
 	is_balance?: boolean;
 	is_reflux?: boolean;
+	/** Station wall-clock time ("YYYY-MM-DD HH:mm:ss"). Present on `realtime_c` (home), absent on installer. */
+	local_time?: string;
+	/**
+	 * Station-level grid/meter warning flags. Present on `realtime_c` (home — the
+	 * `find_c` details payload omits it), absent on the installer realtime response
+	 * (which carries warn_data in `station/find` instead).
+	 */
+	warn_data?: {
+		s_uoff?: boolean;
+		s_ustable?: boolean;
+		s_uid?: boolean;
+		l3_warn?: boolean;
+		g_warn?: boolean;
+		me_warn?: boolean;
+		pw_off?: boolean;
+		[key: string]: unknown;
+	};
 	[key: string]: unknown;
 }
 
@@ -227,10 +244,27 @@ interface CloudStationExtInfo {
 	[key: string]: unknown;
 }
 
+/** Per-device firmware entry from `upgrade/compare`. */
+interface FirmwareDevice {
+	/** Device serial (matches DTU sn for dev_type=1, inverter sn for dev_type=3). */
+	sn: string;
+	/** 1 = DTU, 3 = inverter. */
+	devType: number;
+	/** Packed integer current version. Format depends on devType (see formatDtuVersion/formatSwVersion). */
+	currentVer: number;
+	/** Packed integer target version. */
+	targetVer: number;
+	/** 1 when target > current (upgrade available). */
+	isUpgrade: number;
+}
+
 interface FirmwareStatus {
+	/** 1 when any device on this DTU has an upgrade available. */
 	upgrade: number;
 	done: number;
 	tid: string;
+	/** Per-device version details. Empty for the Web/installer endpoint which doesn't expose them. */
+	devices: FirmwareDevice[];
 }
 
 /**
@@ -1007,20 +1041,44 @@ class CloudConnection {
 			// web shape:
 			upgrade?: number;
 			done?: number;
-			// home shape:
-			list?: Array<{ sn?: string; is_upgrade?: number; target_ver?: number; current_ver?: number }>;
+			// home shape (also observed on the web endpoint with the `list` field present):
+			list?: Array<{
+				sn?: string;
+				dev_type?: number;
+				is_upgrade?: number;
+				target_ver?: number;
+				current_ver?: number;
+			}>;
 		}>(path, { sid: stationId, dtu_sn: dtuSn });
 		this.logResponseSample("firmware-compare", result);
 		if (result.status !== "0") {
 			throw new Error(`Firmware check failed: ${result.message}`);
 		}
 		const data = result.data;
+		// Both endpoints return entries like { sn:"id:xxxx", dev_type, is_upgrade, current_ver, target_ver }
+		// — strip the "id:" prefix so callers can match the unprefixed DTU serials they hold.
+		const devices: FirmwareDevice[] = (data?.list ?? [])
+			.filter(e => typeof e?.sn === "string")
+			.map(e => ({
+				sn: (e.sn as string).replace(/^id:/, ""),
+				devType: e.dev_type ?? 0,
+				currentVer: e.current_ver ?? 0,
+				targetVer: e.target_ver ?? 0,
+				isUpgrade: e.is_upgrade ?? 0,
+			}));
 		if (isHome) {
-			// _c shape: per-device list. "upgrade" = ANY device on this DTU has is_upgrade>0.
-			const anyUpgrade = (data?.list ?? []).some(e => (e?.is_upgrade ?? 0) > 0);
-			return { upgrade: anyUpgrade ? 1 : 0, done: 0, tid: data?.tid ?? "" };
+			// _c shape: "upgrade" = ANY device on this DTU has is_upgrade>0.
+			const anyUpgrade = devices.some(d => d.isUpgrade > 0);
+			return { upgrade: anyUpgrade ? 1 : 0, done: 0, tid: data?.tid ?? "", devices };
 		}
-		return assertData<FirmwareStatus>(data ?? { upgrade: 0, done: 0, tid: "" }, "Firmware status");
+		// Web/installer shape carries top-level upgrade/done; keep the list as well if the server
+		// included it (recent firmware-compare responses do).
+		return {
+			upgrade: data?.upgrade ?? (devices.some(d => d.isUpgrade > 0) ? 1 : 0),
+			done: data?.done ?? 0,
+			tid: data?.tid ?? "",
+			devices,
+		};
 	}
 
 	// --- HTTP helpers ---

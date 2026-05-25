@@ -2,6 +2,7 @@ import type CloudConnection from "./cloudConnection.js";
 import { toKwh } from "./convert.js";
 import type DeviceContext from "./deviceContext.js";
 import { CLOUD_POLL_CONCURRENCY, DEFAULT_POLL_MS, MIN_POLL_MS, RELAY_POLL_DELAY_MS } from "./constants.js";
+import { formatDtuVersion, formatSwVersion } from "./protobufHandler.js";
 import {
 	anonymize,
 	deriveStationTzOffsetMs,
@@ -447,18 +448,22 @@ class CloudPoller {
 			let lat = details.latitude != null ? num(details.latitude) : null;
 			let lon = details.longitude != null ? num(details.longitude) : null;
 			let address = details.address ?? null;
-			// Station UTC offset, derived from the reported wall-clock `local_time` — the
+			// Station UTC offset, derived from a reported wall-clock `local_time` — the
 			// only reliable anchor (find's `timezone` object carries no machine-readable
-			// offset). Cached so the realtime poll can convert `data_time`; on a parse
-			// failure we keep any previously cached value rather than resetting to 0.
-			const derivedOffsetMs = deriveStationTzOffsetMs(details.local_time);
+			// offset). The Web/Installer API ships `local_time` in `station/find`; the
+			// S-Miles Home `find_c` endpoint omits it but the realtime response carries it.
+			// Try details first, then realtime as a fallback. Cached so the realtime poll
+			// can convert `data_time`; on a parse failure we keep any previously cached
+			// value rather than resetting to 0.
+			const tzSource = details.local_time ?? realtimeData.local_time ?? null;
+			const derivedOffsetMs = deriveStationTzOffsetMs(details.local_time, realtimeData.local_time);
 			if (derivedOffsetMs != null) {
 				this.stationTzOffsetMs.set(stationId, derivedOffsetMs);
 			}
 			const offsetMs = this.stationTzOffsetMs.get(stationId) ?? 0;
 			const tzOffsetS = Math.round(offsetMs / 1000);
 			this.adapter.log.debug(
-				`[diag] station ${stationId} tz: local_time="${details.local_time ?? "<none>"}" → offset=${offsetMs / 3600000}h`,
+				`[diag] station ${stationId} tz: local_time="${tzSource ?? "<none>"}" → offset=${offsetMs / 3600000}h`,
 			);
 			// Some accounts/regions return placeholder 0.0/0.0 from `find` (account host doesn't
 			// mirror station-region data). The Home-app supplementary `pvm-ext/station-ak/find`
@@ -483,11 +488,13 @@ class CloudPoller {
 				this.stationCoords.set(stationId, { lat, lon, tzOffsetS });
 			}
 			const price = details.electricity_price ?? null;
-			// Station-level grid/meter warning flags from `find`. The home `find_c` record
-			// may omit `warn_data` entirely — writeStationState skips undefined, so those
-			// states simply never get created on accounts that don't deliver them.
-			const wd = details.warn_data;
-			this.adapter.log.debug(`[diag] station ${stationId} warn_data: ${wd ? "present" : "absent (home find_c)"}`);
+			// Station-level grid/meter warning flags. The Web/installer API delivers them
+			// on `station/find`; the S-Miles Home `find_c` record omits them entirely but
+			// the home realtime response (`realtime_c`) carries the same `warn_data`
+			// object — fall back to it so home accounts also populate the warn.* states.
+			const wd = details.warn_data ?? realtimeData.warn_data;
+			const wdSource = details.warn_data ? "station/find" : realtimeData.warn_data ? "realtime (home)" : "absent";
+			this.adapter.log.debug(`[diag] station ${stationId} warn_data: ${wdSource}`);
 			await Promise.all([
 				w("info.stationName", details.name || null),
 				w("info.stationId", stationId),
@@ -596,24 +603,30 @@ class CloudPoller {
 			const sn = dtuDevice.dtuSerial;
 			const isLocal = dtuDevice.connection?.connected;
 
+			// Identity + version fields are slow-changing and not authority-sensitive: write
+			// them from the cloud even for locally-configured-but-currently-connected DTUs,
+			// so the object tree shows a value before the local InfoData arrives. Skip empty
+			// strings to avoid blanking a freshly written local value (home device-tree often
+			// returns "" for soft_ver / hard_ver).
 			const writes: Array<Promise<unknown>> = [];
-			if (!isLocal) {
-				writes.push(
-					s(`${sn}.dtu.serialNumber`, dtu.sn || "", true),
-					s(`${sn}.dtu.swVersion`, dtu.soft_ver || "", true),
-					s(`${sn}.dtu.hwVersion`, dtu.hard_ver || "", true),
-				);
-			}
+			const writeIfFilled = (id: string, val: string): void => {
+				if (val) {
+					writes.push(s(id, val, true));
+				}
+			};
+			writeIfFilled(`${sn}.dtu.serialNumber`, dtu.sn || "");
+			writeIfFilled(`${sn}.dtu.swVersion`, dtu.soft_ver || "");
+			writeIfFilled(`${sn}.dtu.hwVersion`, dtu.hard_ver || "");
 			if (dtu.children?.[0]) {
 				const inv = dtu.children[0];
-				writes.push(s(`${sn}.inverter.model`, inv.model_no || "", true));
+				writeIfFilled(`${sn}.inverter.model`, inv.model_no || "");
+				writeIfFilled(`${sn}.inverter.serialNumber`, inv.sn || "");
+				writeIfFilled(`${sn}.inverter.swVersion`, inv.soft_ver || "");
+				writeIfFilled(`${sn}.inverter.hwVersion`, inv.hard_ver || "");
+				// linkStatus is a live status indicator. Keep the cloud-only guard so a locally
+				// configured DTU's link state (owned by the local layer) isn't overwritten.
 				if (!isLocal) {
-					writes.push(
-						s(`${sn}.inverter.serialNumber`, inv.sn || "", true),
-						s(`${sn}.inverter.swVersion`, inv.soft_ver || "", true),
-						s(`${sn}.inverter.hwVersion`, inv.hard_ver || "", true),
-						s(`${sn}.inverter.linkStatus`, inv.warn_data?.connect ? 1 : 0, true),
-					);
+					writes.push(s(`${sn}.inverter.linkStatus`, inv.warn_data?.connect ? 1 : 0, true));
 				}
 			}
 			await Promise.all(writes);
@@ -865,10 +878,37 @@ class CloudPoller {
 					continue;
 				}
 				const fw = await this.cloud.checkFirmwareUpdate(stationId, device.dtuSerial);
+				const sn = device.dtuSerial;
+				const fwDevices = fw.devices ?? [];
 				this.adapter.log.debug(
-					`[diag] firmware: ${anonymize(device.dtuSerial, "dtu")} station ${stationId} → updateAvailable=${fw.upgrade > 0}`,
+					`[diag] firmware: ${anonymize(sn, "dtu")} station ${stationId} → ` +
+						`updateAvailable=${fw.upgrade > 0} devices=${fwDevices.length}`,
 				);
-				await this.adapter.setStateAsync(`${device.dtuSerial}.dtu.fwUpdateAvailable`, fw.upgrade > 0, true);
+				const writes: Array<Promise<void>> = [
+					this.boundSetState(`${sn}.dtu.fwUpdateAvailable`, fw.upgrade > 0, true).then(() => {}),
+				];
+				// The compare endpoint is the only reliable firmware-version source for S-Miles
+				// Home accounts (device-tree returns empty soft_ver / soft_num=0 there). Write
+				// the formatted versions per device so the home-account object tree shows them
+				// instead of staying empty until a local InfoData arrives.
+				for (const fwDev of fwDevices) {
+					if (fwDev.devType === 1 && fwDev.currentVer > 0) {
+						writes.push(
+							this.boundSetState(`${sn}.dtu.swVersion`, formatDtuVersion(fwDev.currentVer), true).then(
+								() => {},
+							),
+						);
+					} else if (fwDev.devType === 3 && fwDev.currentVer > 0) {
+						writes.push(
+							this.boundSetState(
+								`${sn}.inverter.swVersion`,
+								formatSwVersion(fwDev.currentVer),
+								true,
+							).then(() => {}),
+						);
+					}
+				}
+				await Promise.all(writes);
 			}
 		} catch (err) {
 			this.adapter.log.debug(`Firmware check failed for station ${stationId}: ${errorMessage(err)}`);

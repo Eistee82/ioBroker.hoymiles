@@ -490,11 +490,25 @@ class CloudConnection {
             throw new Error(`Firmware check failed: ${result.message}`);
         }
         const data = result.data;
+        const devices = (data?.list ?? [])
+            .filter(e => typeof e?.sn === "string")
+            .map(e => ({
+            sn: e.sn.replace(/^id:/, ""),
+            devType: e.dev_type ?? 0,
+            currentVer: e.current_ver ?? 0,
+            targetVer: e.target_ver ?? 0,
+            isUpgrade: e.is_upgrade ?? 0,
+        }));
         if (isHome) {
-            const anyUpgrade = (data?.list ?? []).some(e => (e?.is_upgrade ?? 0) > 0);
-            return { upgrade: anyUpgrade ? 1 : 0, done: 0, tid: data?.tid ?? "" };
+            const anyUpgrade = devices.some(d => d.isUpgrade > 0);
+            return { upgrade: anyUpgrade ? 1 : 0, done: 0, tid: data?.tid ?? "", devices };
         }
-        return assertData(data ?? { upgrade: 0, done: 0, tid: "" }, "Firmware status");
+        return {
+            upgrade: data?.upgrade ?? (devices.some(d => d.isUpgrade > 0) ? 1 : 0),
+            done: data?.done ?? 0,
+            tid: data?.tid ?? "",
+            devices,
+        };
     }
     _post(apiPath, body, hostOverride) {
         const url = new URL(apiPath, hostOverride ?? this.getDataHost()).href;

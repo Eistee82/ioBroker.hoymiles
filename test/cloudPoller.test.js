@@ -1199,6 +1199,85 @@ describe("CloudPoller – station timezone & warnings", function () {
 		assert.strictEqual(stateWrites["station-1.warn.gridFault"], undefined);
 		poller.stop();
 	});
+
+	it("falls back to realtime.warn_data when details omits it (S-Miles Home account)", async function () {
+		const stateWrites = {};
+		const cloud = makeMockCloud();
+		cloud.ensureToken = async () => {};
+		// Home find_c: no warn_data in details.
+		cloud.getStationDetails = async () => ({ name: "Home" });
+		// Home realtime_c: warn_data sits here instead.
+		cloud.getStationRealtime = async () => ({
+			real_power: "0",
+			today_eq: "0",
+			month_eq: "0",
+			year_eq: "0",
+			total_eq: "0",
+			co2_emission_reduction: "0",
+			plant_tree: "0",
+			data_time: "2026-05-21 10:00:00",
+			warn_data: {
+				s_uoff: true,
+				s_ustable: false,
+				s_uid: false,
+				l3_warn: false,
+				g_warn: false,
+				me_warn: false,
+				pw_off: null,
+			},
+		});
+		cloud.getDeviceTree = async () => [];
+
+		const adapter = makeMockAdapter();
+		adapter.setStateAsync = async (id, val) => {
+			stateWrites[id] = typeof val === "object" ? val.val : val;
+		};
+
+		const poller = makePoller({ cloud, adapter, stationDevices: new Set([1]), slowPollFactor: 1 });
+		await poller.poll();
+
+		assert.strictEqual(
+			stateWrites["station-1.warn.stationOffline"],
+			true,
+			"stationOffline from realtime warn_data",
+		);
+		assert.strictEqual(stateWrites["station-1.warn.gridFault"], false);
+		poller.stop();
+	});
+
+	it("derives TZ offset from realtime.local_time when details omits it (S-Miles Home account)", async function () {
+		const stateWrites = {};
+		const cloud = makeMockCloud();
+		cloud.ensureToken = async () => {};
+		// Home find_c: no local_time in details.
+		cloud.getStationDetails = async () => ({ name: "Home" });
+		const stationLocalNow = new Date(Date.now() + 2 * 3600000).toISOString().slice(0, 19).replace("T", " ");
+		cloud.getStationRealtime = async () => ({
+			real_power: "0",
+			today_eq: "0",
+			month_eq: "0",
+			year_eq: "0",
+			total_eq: "0",
+			co2_emission_reduction: "0",
+			plant_tree: "0",
+			data_time: "2026-05-21 12:30:00",
+			// Home realtime: local_time present here.
+			local_time: stationLocalNow,
+		});
+		cloud.getDeviceTree = async () => [];
+
+		const adapter = makeMockAdapter();
+		adapter.setStateAsync = async (id, val) => {
+			stateWrites[id] = typeof val === "object" ? val.val : val;
+		};
+
+		const poller = makePoller({ cloud, adapter, stationDevices: new Set([1]), slowPollFactor: 1 });
+		await poller.poll();
+
+		// 12:30 station-local at +2h offset is 10:30:00Z.
+		assert.strictEqual(stateWrites["station-1.info.lastCloudUpdate"], Date.parse("2026-05-21T10:30:00Z"));
+		poller.stop();
+	});
 });
 
 // ============================================================
@@ -1410,6 +1489,102 @@ describe("CloudPoller – pollFirmwareStatus", function () {
 
 		assert.ok(fwStations.includes(1), "station 1 firmware should be checked");
 		assert.ok(fwStations.includes(2), "station 2 firmware should be checked (per-station day tracking)");
+		poller.stop();
+	});
+
+	it("writes formatted swVersion from firmware-compare list (home account fallback)", async function () {
+		const stateWrites = {};
+		const cloud = makeMockCloud();
+		cloud.ensureToken = async () => {};
+		cloud.getStationRealtime = async () => ({
+			real_power: "0",
+			today_eq: "0",
+			month_eq: "0",
+			year_eq: "0",
+			total_eq: "0",
+			co2_emission_reduction: "0",
+			plant_tree: "0",
+		});
+		cloud.getStationDetails = async () => ({});
+		cloud.getDeviceTree = async () => [];
+		cloud.checkFirmwareUpdate = async () => ({
+			upgrade: 0,
+			done: 0,
+			tid: "0",
+			devices: [
+				// DTU: 4103 → V01.00.07 via formatDtuVersion
+				{ sn: "DTU_HM", devType: 1, currentVer: 4103, targetVer: 4103, isUpgrade: 0 },
+				// Inverter: 10309 → V01.03.09 via formatSwVersion
+				{ sn: "INV_HM", devType: 3, currentVer: 10309, targetVer: 10309, isUpgrade: 0 },
+			],
+		});
+
+		const adapter = makeMockAdapter();
+		adapter.setStateAsync = async (id, val, _ack) => {
+			stateWrites[id] = val;
+		};
+
+		const devices = new Map();
+		devices.set("DTU_HM", { dtuSerial: "DTU_HM", cloudStationId: 1, connection: null });
+
+		const poller = makePoller({
+			cloud,
+			adapter,
+			devices,
+			stationDevices: new Set([1]),
+			slowPollFactor: 1,
+		});
+		poller.lastFirmwareCheckDay = new Map();
+		await poller.poll();
+
+		assert.strictEqual(stateWrites["DTU_HM.dtu.fwUpdateAvailable"], false);
+		assert.strictEqual(stateWrites["DTU_HM.dtu.swVersion"], "V01.00.07");
+		assert.strictEqual(stateWrites["DTU_HM.inverter.swVersion"], "V01.03.09");
+		poller.stop();
+	});
+
+	it("skips swVersion writes when currentVer is zero (no overwrite with V00.00.00)", async function () {
+		const stateWrites = {};
+		const cloud = makeMockCloud();
+		cloud.ensureToken = async () => {};
+		cloud.getStationRealtime = async () => ({
+			real_power: "0",
+			today_eq: "0",
+			month_eq: "0",
+			year_eq: "0",
+			total_eq: "0",
+			co2_emission_reduction: "0",
+			plant_tree: "0",
+		});
+		cloud.getStationDetails = async () => ({});
+		cloud.getDeviceTree = async () => [];
+		cloud.checkFirmwareUpdate = async () => ({
+			upgrade: 0,
+			done: 0,
+			tid: "0",
+			devices: [{ sn: "DTU_X", devType: 1, currentVer: 0, targetVer: 0, isUpgrade: 0 }],
+		});
+
+		const adapter = makeMockAdapter();
+		adapter.setStateAsync = async (id, val, _ack) => {
+			stateWrites[id] = val;
+		};
+
+		const devices = new Map();
+		devices.set("DTU_X", { dtuSerial: "DTU_X", cloudStationId: 1, connection: null });
+
+		const poller = makePoller({
+			cloud,
+			adapter,
+			devices,
+			stationDevices: new Set([1]),
+			slowPollFactor: 1,
+		});
+		poller.lastFirmwareCheckDay = new Map();
+		await poller.poll();
+
+		assert.strictEqual(stateWrites["DTU_X.dtu.fwUpdateAvailable"], false);
+		assert.strictEqual(stateWrites["DTU_X.dtu.swVersion"], undefined, "must not blank swVersion with V00.00.00");
 		poller.stop();
 	});
 });

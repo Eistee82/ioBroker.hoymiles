@@ -247,7 +247,7 @@ PV channels are created dynamically based on the inverter model (1T = 1 channel,
 
 ### `station-<id>.warn.*` — Station Warnings (cloud)
 
-Grid- and meter-level warning flags from the cloud `station/find` record. All boolean — `true` means the condition is currently active. These states only appear once the cloud actually delivers a `warn_data` block (a home account may not).
+Grid- and meter-level warning flags from the cloud's `station/find` record. All boolean — `true` means the condition is currently active. Installer accounts read the flags from `station/find`; on S-Miles Home accounts (where `find_c` omits them) the adapter falls back to the `realtime_c` response, which carries the same `warn_data` block. The states only appear once the cloud delivers a `warn_data` block from either source.
 
 | State | Type | Description |
 |-------|------|-------------|

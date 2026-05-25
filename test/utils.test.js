@@ -365,6 +365,17 @@ describe("deriveStationTzOffsetMs", function () {
 		assert.strictEqual(deriveStationTzOffsetMs(null), null);
 		assert.strictEqual(deriveStationTzOffsetMs("not-a-date"), null);
 	});
+
+	it("accepts multiple candidates and takes the first usable one", function () {
+		// First candidate empty/invalid → second wins (S-Miles Home: local_time absent in details, present in realtime).
+		assert.strictEqual(deriveStationTzOffsetMs(undefined, wallClock(2)), 2 * 3600000);
+		assert.strictEqual(deriveStationTzOffsetMs("", wallClock(2)), 2 * 3600000);
+		assert.strictEqual(deriveStationTzOffsetMs("not-a-date", wallClock(2)), 2 * 3600000);
+		// First candidate valid → stops there (ignores subsequent candidates).
+		assert.strictEqual(deriveStationTzOffsetMs(wallClock(-3), wallClock(2)), -3 * 3600000);
+		// All candidates unusable → null.
+		assert.strictEqual(deriveStationTzOffsetMs(null, undefined, ""), null);
+	});
 });
 
 // ============================================================

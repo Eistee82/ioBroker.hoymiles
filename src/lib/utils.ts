@@ -98,22 +98,27 @@ function parseWallClockAsUtc(str: string): number {
  * real-world zone (including the :30 and :45 offsets).
  *
  * The Hoymiles cloud delivers `data_time` / `last_data_time` / `create_at` in the
- * station's local zone but exposes no machine-readable UTC offset — `local_time`
- * from `station/find` is the only reliable anchor.
+ * station's local zone but exposes no machine-readable UTC offset. The Web/Installer
+ * API ships `local_time` in `station/find`; the S-Miles Home `find_c` endpoint omits
+ * it from the details payload but includes it on the station-realtime response. Pass
+ * both as candidates — the first non-empty parseable one wins.
  *
- * @param localTime - Station wall-clock string ("YYYY-MM-DD HH:mm:ss").
- * @returns Offset in ms (local = UTC + offset), or null if `localTime` is unusable.
+ * @param candidates - One or more station wall-clock strings ("YYYY-MM-DD HH:mm:ss").
+ * @returns Offset in ms (local = UTC + offset), or null if no candidate is usable.
  */
-export function deriveStationTzOffsetMs(localTime: string | undefined | null): number | null {
-	if (!localTime) {
-		return null;
+export function deriveStationTzOffsetMs(...candidates: Array<string | undefined | null>): number | null {
+	for (const candidate of candidates) {
+		if (!candidate) {
+			continue;
+		}
+		const asUtc = parseWallClockAsUtc(candidate);
+		if (Number.isNaN(asUtc)) {
+			continue;
+		}
+		const offsetMs = Math.round((asUtc - Date.now()) / 900000) * 900000;
+		return offsetMs === 0 ? 0 : offsetMs; // normalize -0 (host clock a few ms ahead of a UTC station)
 	}
-	const asUtc = parseWallClockAsUtc(localTime);
-	if (Number.isNaN(asUtc)) {
-		return null;
-	}
-	const offsetMs = Math.round((asUtc - Date.now()) / 900000) * 900000;
-	return offsetMs === 0 ? 0 : offsetMs; // normalize -0 (host clock a few ms ahead of a UTC station)
+	return null;
 }
 
 /**
