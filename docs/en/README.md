@@ -91,13 +91,13 @@ The adapter uses ioBroker's state quality attribute (`q`) to indicate the reliab
 |---------|-------|---------|------|
 | Good | `0x00` (0) | Fresh, locally sourced data | Normal operation — data received directly from DTU via TCP |
 | Substitute | `0x40` (64) | Cloud-sourced fallback data | Inverter data fetched from the Hoymiles Cloud API instead of local TCP (cloud-only devices) |
-| Device not connected | `0x42` (66) | Stale data, device offline | DTU connection lost — values are the last known readings before disconnect |
+| Device not connected | `0x42` (66) | Stale data, device offline | DTU connection lost — values are the last known readings before disconnect. Also set on cloud station `grid.*` when the station's last cloud upload is older than ~20 min (DTU not uploading). |
 
-**Affected states:** `grid.*`, `pv*.*`, `inverter.temperature`, `inverter.active`, `inverter.warnCount`, `inverter.warnMessage`, `inverter.activePowerLimit`, `meter.*`
+**Affected states:** `grid.*`, `pv*.*`, `inverter.temperature`, `inverter.active`, `inverter.warnCount`, `inverter.warnMessage`, `inverter.activePowerLimit`, `meter.*` — plus the cloud station measurements `station-<id>.grid.*` (flagged `0x42` while the station is offline/stale).
 
-Info states (`info.*`), config states (`config.*`), and station-level cloud data are **not** affected by quality changes.
+Info states (`info.*`), config states (`config.*`), and static station-level cloud data (name, address, coordinates, warning flags) are **not** affected by quality changes.
 
-**Automatic reset:** When the local DTU connection is restored, the next successful data response automatically resets all affected states back to quality `0x00` (good).
+**Automatic reset:** When the local DTU connection is restored, the next successful data response automatically resets all affected states back to quality `0x00` (good). Likewise, when a cloud station resumes uploading, its `grid.*` quality returns to `0x00` and the adapter immediately performs one full refresh (details, devices, firmware, warnings) before resuming the normal poll cadence.
 
 You can use the quality attribute in scripts and visualizations to distinguish between fresh and stale data, e.g. by dimming or greying out values with `q > 0`.
 

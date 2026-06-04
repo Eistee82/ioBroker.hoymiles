@@ -11,6 +11,8 @@ export const RELAY_POLL_DELAY_MS = 30000;
 // Polling
 export const DEFAULT_POLL_MS = 300000; // 5min
 export const MIN_POLL_MS = 60000; // 1min
+/** A cloud station counts as offline/stale when its last upload (`data_time`) is older than this. */
+export const CLOUD_STATION_STALE_MS = 1200000; // 20min (DTU uploads ~every 5min; tolerate a few misses)
 
 // Connection
 export const DTU_PORT = 10081;

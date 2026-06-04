@@ -1762,3 +1762,108 @@ describe("CloudPoller – station poll error handling", function () {
 		poller.stop();
 	});
 });
+
+// ============================================================
+// CloudPoller – station freshness & re-online behaviour
+// ============================================================
+describe("CloudPoller – freshness & re-online", function () {
+	// Format a Date as the cloud's local-zone wall-clock string "YYYY-MM-DD HH:MM:SS" (UTC here,
+	// matched by offset=0 in the poller on the first poll).
+	const wallClock = d =>
+		`${d.getUTCFullYear()}-${String(d.getUTCMonth() + 1).padStart(2, "0")}-${String(d.getUTCDate()).padStart(2, "0")} ` +
+		`${String(d.getUTCHours()).padStart(2, "0")}:${String(d.getUTCMinutes()).padStart(2, "0")}:${String(d.getUTCSeconds()).padStart(2, "0")}`;
+
+	const realtime = dataTime => ({
+		real_power: "5",
+		today_eq: "0",
+		month_eq: "0",
+		year_eq: "0",
+		total_eq: "0",
+		co2_emission_reduction: "0",
+		plant_tree: "0",
+		data_time: dataTime,
+		last_data_time: dataTime,
+	});
+
+	it("forces a full refresh when a station transitions offline → online", async function () {
+		let detailsCalls = 0;
+		const cloud = makeMockCloud();
+		cloud.getStationRealtime = async () => realtime(wallClock(new Date())); // fresh
+		cloud.getStationDetails = async () => {
+			detailsCalls++;
+			return {};
+		};
+		cloud.getDeviceTree = async () => [];
+
+		const poller = makePoller({ cloud, stationDevices: new Set([42]) });
+		poller.stationOnline.set(42, false); // pretend it was offline last cycle
+
+		await poller.poll(); // pollCount → 1, 1 % 6 ≠ 0 ⇒ NOT a slow poll
+		assert.strictEqual(detailsCalls, 1, "details must be fetched on the fast poll that detects re-online");
+		assert.strictEqual(poller.stationOnline.get(42), true, "station should now be marked online");
+		poller.stop();
+	});
+
+	it("does not force a refresh while the station stays online", async function () {
+		let detailsCalls = 0;
+		const cloud = makeMockCloud();
+		cloud.getStationRealtime = async () => realtime(wallClock(new Date()));
+		cloud.getStationDetails = async () => {
+			detailsCalls++;
+			return {};
+		};
+		cloud.getDeviceTree = async () => [];
+
+		const poller = makePoller({ cloud, stationDevices: new Set([42]) });
+		poller.stationOnline.set(42, true); // already online
+
+		await poller.poll(); // fast poll, no transition
+		assert.strictEqual(detailsCalls, 0, "no details fetch on a fast poll when already online");
+		poller.stop();
+	});
+
+	it("flags stale cloud measurements with quality 0x42 (and fresh ones with 0x00)", async function () {
+		const writes = [];
+		const adapter = makeMockAdapter();
+		adapter.setStateAsync = async (id, state) => {
+			writes.push({ id, state });
+		};
+
+		// Stale: data_time far in the past ⇒ offline ⇒ q=0x42
+		const staleCloud = makeMockCloud();
+		staleCloud.getStationRealtime = async () => realtime("2020-01-01 00:00:00");
+		staleCloud.getDeviceTree = async () => [];
+		const stalePoller = new CloudPoller({
+			cloud: staleCloud,
+			adapter,
+			devices: new Map(),
+			stationDevices: new Set([42]),
+			hasRelay: false,
+			slowPollFactor: 6,
+		});
+		await stalePoller.poll();
+		const stalePower = writes.find(w => w.id === "station-42.grid.power");
+		assert.ok(stalePower, "grid.power should be written");
+		assert.strictEqual(stalePower.state.q, 0x42, "stale grid.power must carry quality 0x42");
+		stalePoller.stop();
+
+		// Fresh: current data_time ⇒ online ⇒ q=0x00
+		writes.length = 0;
+		const freshCloud = makeMockCloud();
+		freshCloud.getStationRealtime = async () => realtime(wallClock(new Date()));
+		freshCloud.getDeviceTree = async () => [];
+		const freshPoller = new CloudPoller({
+			cloud: freshCloud,
+			adapter,
+			devices: new Map(),
+			stationDevices: new Set([42]),
+			hasRelay: false,
+			slowPollFactor: 6,
+		});
+		await freshPoller.poll();
+		const freshPower = writes.find(w => w.id === "station-42.grid.power");
+		assert.ok(freshPower, "grid.power should be written");
+		assert.strictEqual(freshPower.state.q, 0x00, "fresh grid.power must carry quality 0x00");
+		freshPoller.stop();
+	});
+});

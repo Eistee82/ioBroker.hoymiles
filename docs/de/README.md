@@ -91,13 +91,13 @@ Der Adapter nutzt das ioBroker State-Quality-Attribut (`q`), um die Zuverlässig
 |---------|------|-----------|------|
 | Gut | `0x00` (0) | Frische, lokale Daten | Normalbetrieb — Daten direkt von der DTU via TCP empfangen |
 | Ersatzwert | `0x40` (64) | Cloud-Daten als Fallback | Wechselrichter-Daten von der Hoymiles Cloud-API statt lokal (Cloud-only Geräte) |
-| Gerät nicht verbunden | `0x42` (66) | Veraltete Daten, Gerät offline | DTU-Verbindung verloren — Werte sind die letzten bekannten Messwerte vor dem Disconnect |
+| Gerät nicht verbunden | `0x42` (66) | Veraltete Daten, Gerät offline | DTU-Verbindung verloren — Werte sind die letzten bekannten Messwerte vor dem Disconnect. Wird auch bei Cloud-Station-`grid.*` gesetzt, wenn der letzte Cloud-Upload der Station älter als ~20 min ist (DTU sendet nicht). |
 
-**Betroffene Datenpunkte:** `grid.*`, `pv*.*`, `inverter.temperature`, `inverter.active`, `inverter.warnCount`, `inverter.warnMessage`, `inverter.activePowerLimit`, `meter.*`
+**Betroffene Datenpunkte:** `grid.*`, `pv*.*`, `inverter.temperature`, `inverter.active`, `inverter.warnCount`, `inverter.warnMessage`, `inverter.activePowerLimit`, `meter.*` — sowie die Cloud-Station-Messwerte `station-<id>.grid.*` (mit `0x42` markiert, solange die Station offline/veraltet ist).
 
-Info-States (`info.*`), Config-States (`config.*`) und Cloud-Stationsdaten werden **nicht** von Quality-Änderungen betroffen.
+Info-States (`info.*`), Config-States (`config.*`) und statische Cloud-Stationsdaten (Name, Adresse, Koordinaten, Warn-Flags) werden **nicht** von Quality-Änderungen betroffen.
 
-**Automatischer Reset:** Wenn die lokale DTU-Verbindung wiederhergestellt wird, setzt die nächste erfolgreiche Datenantwort alle betroffenen States automatisch auf Quality `0x00` (gut) zurück.
+**Automatischer Reset:** Wenn die lokale DTU-Verbindung wiederhergestellt wird, setzt die nächste erfolgreiche Datenantwort alle betroffenen States automatisch auf Quality `0x00` (gut) zurück. Ebenso: sobald eine Cloud-Station wieder Daten sendet, geht die `grid.*`-Quality auf `0x00` zurück und der Adapter führt sofort einen vollständigen Refresh durch (Details, Geräte, Firmware, Warnungen), bevor er zum normalen Poll-Zyklus zurückkehrt.
 
 Das Quality-Attribut kann in Skripten und Visualisierungen genutzt werden, um zwischen aktuellen und veralteten Daten zu unterscheiden, z.B. durch Ausgrauen von Werten mit `q > 0`.
 
