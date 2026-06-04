@@ -584,6 +584,8 @@ class DeviceContext {
 			this.adapter.log.debug(`[${this.deviceId}] [diag] cloud command action=${action} tid=${tid}`);
 			if (action === 41) {
 				this.serveGridProfileToCloud(tid);
+			} else if (action === 4) {
+				this.serveVersionToCloud(tid);
 			}
 		} catch (err) {
 			this.adapter.log.warn(`[${this.deviceId}] handleCloudCommand error: ${errorMessage(err)}`);
@@ -616,6 +618,29 @@ class DeviceContext {
 			),
 		);
 		this.adapter.log.info(`[${this.deviceId}] served grid profile to cloud via relay (tid=${tid})`);
+	}
+
+	/**
+	 * Answer a cloud version query (action 4) over the relay: ack (0x22 0x05) + status
+	 * (0x22 0x06) echoing the inverter serial in `mi_sns_sucs`. There is no separate version
+	 * payload — the firmware versions already live in the cloud's device tree (`soft_ver`);
+	 * this just lets the request complete instead of timing out while the relay is primary.
+	 *
+	 * @param tid - Transaction id from the originating command (echoed back).
+	 */
+	private serveVersionToCloud(tid: number): void {
+		const relay = this.cloudRelay;
+		if (!relay || !this.protobuf || !this.inverterSn) {
+			this.adapter.log.debug(`[${this.deviceId}] version cloud-serve skipped (relay/sn missing)`);
+			return;
+		}
+		const ts = unixSeconds();
+		const miSn = Number.parseInt(this.inverterSn, 16);
+		relay.sendFrame(this.protobuf.encodeCloudCommandAck(ts, this.dtuSerial, 4, tid));
+		relay.sendFrame(
+			this.protobuf.encodeCloudCommandStatus(ts, this.dtuSerial, 4, tid, Number.isFinite(miSn) ? [miSn] : []),
+		);
+		this.adapter.log.info(`[${this.deviceId}] answered cloud version query (action 4) via relay (tid=${tid})`);
 	}
 
 	private stopPollCycle(): void {

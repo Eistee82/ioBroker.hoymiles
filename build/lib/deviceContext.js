@@ -387,6 +387,9 @@ class DeviceContext {
             if (action === 41) {
                 this.serveGridProfileToCloud(tid);
             }
+            else if (action === 4) {
+                this.serveVersionToCloud(tid);
+            }
         }
         catch (err) {
             this.adapter.log.warn(`[${this.deviceId}] handleCloudCommand error: ${errorMessage(err)}`);
@@ -403,6 +406,18 @@ class DeviceContext {
         relay.sendFrame(this.protobuf.encodeCloudCommandStatus(ts, this.dtuSerial, 41, tid));
         relay.sendFrame(this.protobuf.encodeGridProfileResponse(ts, this.dtuSerial, this.inverterSn, tid, byteSwap16(this.gridBlob)));
         this.adapter.log.info(`[${this.deviceId}] served grid profile to cloud via relay (tid=${tid})`);
+    }
+    serveVersionToCloud(tid) {
+        const relay = this.cloudRelay;
+        if (!relay || !this.protobuf || !this.inverterSn) {
+            this.adapter.log.debug(`[${this.deviceId}] version cloud-serve skipped (relay/sn missing)`);
+            return;
+        }
+        const ts = unixSeconds();
+        const miSn = Number.parseInt(this.inverterSn, 16);
+        relay.sendFrame(this.protobuf.encodeCloudCommandAck(ts, this.dtuSerial, 4, tid));
+        relay.sendFrame(this.protobuf.encodeCloudCommandStatus(ts, this.dtuSerial, 4, tid, Number.isFinite(miSn) ? [miSn] : []));
+        this.adapter.log.info(`[${this.deviceId}] answered cloud version query (action 4) via relay (tid=${tid})`);
     }
     stopPollCycle() {
         if (this.pollTimer) {

@@ -325,9 +325,17 @@ class ProtobufHandler {
         const msg = ReqDTO.create({ dtuSn, time: timestamp, action, tid });
         return this.buildMessage(0x22, 0x05, ReqDTO.encode(msg).finish());
     }
-    encodeCloudCommandStatus(timestamp, dtuSn, action, tid) {
+    encodeCloudCommandStatus(timestamp, dtuSn, action, tid, miSnsSucs = []) {
         const ReqDTO = this.getType("CommandPB", "CommandStatusReqDTO");
-        const msg = ReqDTO.create({ dtuSn, time: timestamp, action, packageNub: 1, packageNow: 1, tid });
+        const msg = ReqDTO.create({
+            dtuSn,
+            time: timestamp,
+            action,
+            packageNub: 1,
+            packageNow: 1,
+            tid,
+            miSnsSucs,
+        });
         return this.buildMessage(0x22, 0x06, ReqDTO.encode(msg).finish());
     }
     encodeGridProfileResponse(timestamp, dtuSn, devSn, tid, data) {

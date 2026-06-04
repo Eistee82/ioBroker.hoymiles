@@ -668,12 +668,28 @@ class ProtobufHandler {
 	 *
 	 * @param timestamp - Unix timestamp in seconds
 	 * @param dtuSn - DTU serial number
-	 * @param action - Action code (e.g. 41 = read grid profile)
+	 * @param action - Action code (e.g. 41 = read grid profile, 4 = report version)
 	 * @param tid - Transaction id from the originating command
+	 * @param miSnsSucs - Micro-inverter serials (as int64) the command succeeded for; the version
+	 *   query (action 4) echoes the inverter here. Omit/empty for commands that don't report it.
 	 */
-	encodeCloudCommandStatus(timestamp: number, dtuSn: string, action: number, tid: number): Buffer {
+	encodeCloudCommandStatus(
+		timestamp: number,
+		dtuSn: string,
+		action: number,
+		tid: number,
+		miSnsSucs: number[] = [],
+	): Buffer {
 		const ReqDTO = this.getType("CommandPB", "CommandStatusReqDTO");
-		const msg = ReqDTO.create({ dtuSn, time: timestamp, action, packageNub: 1, packageNow: 1, tid });
+		const msg = ReqDTO.create({
+			dtuSn,
+			time: timestamp,
+			action,
+			packageNub: 1,
+			packageNow: 1,
+			tid,
+			miSnsSucs,
+		});
 		return this.buildMessage(0x22, 0x06, ReqDTO.encode(msg).finish());
 	}
 
