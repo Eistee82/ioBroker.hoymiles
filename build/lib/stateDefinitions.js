@@ -1,3 +1,4 @@
+import { GRID_PROFILE_SCHEMA } from "./gridProfile.js";
 const n = (id, en, de, role, unit, extra) => ({
     id,
     name: { en, de },
@@ -29,6 +30,13 @@ const channels = [
     { id: "dtu", name: { en: "DTU", de: "DTU" } },
     { id: "alarms", name: { en: "Alarms & warnings", de: "Alarme & Warnungen" }, source: "local" },
     { id: "config", name: { en: "DTU configuration", de: "DTU-Konfiguration" }, source: "local" },
+    { id: "gridProfile", name: { en: "Grid profile", de: "Netzprofil" }, source: "local" },
+];
+const gridProfileStates = [
+    s("gridProfile.standard", "Grid standard", "Netznorm", "text", { source: "local" }),
+    ...GRID_PROFILE_SCHEMA.map(p => p.flag
+        ? b(`gridProfile.${p.key}`, p.en, p.de, "indicator", { source: "local" })
+        : n(`gridProfile.${p.key}`, p.en, p.de, "value", p.unit, { source: "local" })),
 ];
 const states = [
     n("grid.power", "Grid power", "Netzleistung", "value.power", "W"),
@@ -166,6 +174,7 @@ const states = [
     s("config.wifiIpAddress", "WiFi IP address", "WLAN IP-Adresse", "text", { source: "local" }),
     s("config.netMacAddress", "MAC address", "MAC-Adresse", "text", { source: "local" }),
     s("config.wifiMacAddress", "WiFi MAC address", "WLAN MAC-Adresse", "text", { source: "local" }),
+    ...gridProfileStates,
 ];
 const stationChannels = [
     { id: "grid", name: { en: "Station grid output", de: "Anlagen-Netzeinspeisung" } },

@@ -301,6 +301,59 @@ Netz- und Zähler-Warnflags aus dem Cloud-Datensatz `station/find`. Alle boolesc
 | `config.sub1gSweepSwitch` | number | — | nein | Sub-1G Sweep |
 | `config.sub1gWorkChannel` | number | — | nein | Sub-1G Arbeitskanal |
 
+### `<dtuSerial>.gridProfile.*` — Netzprofil (pro DTU, lokal)
+
+Das Netz-Anschlussprofil des Wechselrichters (Netz-/Sicherheitsparameter), lokal über DevConfigFetch gelesen. Alle nur lesbar. Spannungs-/Frequenzwerte richten sich nach der aktiven Netznorm (z. B. `DE_VDE4105_2018`). Funktions-Flags sind boolesch (`true` = Funktion aktiv).
+
+| State | Typ | Einheit | Schreibbar | Beschreibung |
+|-------|-----|---------|------------|--------------|
+| `gridProfile.standard` | string | — | nein | Netznorm-Name (z. B. DE_VDE4105_2018) |
+| `gridProfile.countryStdCode` | number | — | nein | Ländernorm-Code |
+| `gridProfile.version` | number | — | nein | Netzprofil-Version |
+| `gridProfile.nominalVoltage` | number | V | nein | Nennspannung |
+| `gridProfile.lowVoltage1` | number | V | nein | Unterspannung 1 (LV1) |
+| `gridProfile.lowVoltage1TripTime` | number | s | nein | LV1 max. Auslösezeit |
+| `gridProfile.highVoltage1` | number | V | nein | Überspannung 1 (HV1) |
+| `gridProfile.highVoltage1TripTime` | number | s | nein | HV1 max. Auslösezeit |
+| `gridProfile.lowVoltage2` | number | V | nein | Unterspannung 2 (LV2) |
+| `gridProfile.lowVoltage2TripTime` | number | s | nein | LV2 max. Auslösezeit |
+| `gridProfile.avgHighVoltage10min` | number | V | nein | 10-Min-Mittel Überspannung |
+| `gridProfile.nominalFrequency` | number | Hz | nein | Nennfrequenz |
+| `gridProfile.lowFrequency1` | number | Hz | nein | Unterfrequenz 1 (LF1) |
+| `gridProfile.lowFrequency1TripTime` | number | s | nein | LF1 max. Auslösezeit |
+| `gridProfile.highFrequency1` | number | Hz | nein | Überfrequenz 1 (HF1) |
+| `gridProfile.highFrequency1TripTime` | number | s | nein | HF1 max. Auslösezeit |
+| `gridProfile.islandingDetection` | boolean | — | nein | Inselerkennung aktiv |
+| `gridProfile.reconnectTime` | number | s | nein | Wiederzuschaltzeit |
+| `gridProfile.reconnectHighVoltage` | number | V | nein | Wiederzuschalt-Überspannung |
+| `gridProfile.reconnectLowVoltage` | number | V | nein | Wiederzuschalt-Unterspannung |
+| `gridProfile.reconnectHighFrequency` | number | Hz | nein | Wiederzuschalt-Überfrequenz |
+| `gridProfile.reconnectLowFrequency` | number | Hz | nein | Wiederzuschalt-Unterfrequenz |
+| `gridProfile.rampUpRateNormal` | number | %/s | nein | Normale Hochlaufrate |
+| `gridProfile.rampUpRateSoftStart` | number | %/s | nein | Soft-Start-Hochlaufrate |
+| `gridProfile.freqWattActive` | boolean | — | nein | Frequenz-Watt aktiv |
+| `gridProfile.freqWattStart` | number | Hz | nein | Frequenz-Watt Start (Fstart) |
+| `gridProfile.freqWattDroopSlope` | number | %Pn/Hz | nein | Frequenz-Watt Droop-Steigung |
+| `gridProfile.recoveryRampRate` | number | %Pn/s | nein | Wiederanlauf-Rampe |
+| `gridProfile.recoveryHighFrequency` | number | Hz | nein | Wiederanlauf-Überfrequenz |
+| `gridProfile.recoveryLowFrequency` | number | Hz | nein | Wiederanlauf-Unterfrequenz |
+| `gridProfile.activePowerControlActive` | boolean | — | nein | Wirkleistungssteuerung aktiv |
+| `gridProfile.powerRampRate` | number | %Pn/s | nein | Leistungs-Rampe |
+| `gridProfile.voltVarActive` | boolean | — | nein | Volt-Var aktiv |
+| `gridProfile.voltVarV1` | number | V | nein | Volt-Var Sollwert V1 |
+| `gridProfile.voltVarQ1` | number | %Pn | nein | Volt-Var Sollwert Q1 |
+| `gridProfile.voltVarV2` | number | V | nein | Volt-Var Sollwert V2 |
+| `gridProfile.voltVarV3` | number | V | nein | Volt-Var Sollwert V3 |
+| `gridProfile.voltVarV4` | number | V | nein | Volt-Var Sollwert V4 |
+| `gridProfile.voltVarQ4` | number | %Pn | nein | Volt-Var Sollwert Q4 |
+| `gridProfile.specifiedPowerFactorActive` | boolean | — | nein | Fester Leistungsfaktor aktiv |
+| `gridProfile.powerFactor` | number | — | nein | Leistungsfaktor (cos φ) |
+| `gridProfile.wattPowerFactorActive` | boolean | — | nein | Watt-Leistungsfaktor aktiv |
+| `gridProfile.wattPowerFactorStart` | number | %Pn | nein | Watt-PF Startleistung |
+| `gridProfile.powerFactorAtRatedPower` | number | — | nein | Leistungsfaktor bei Nennleistung |
+| `gridProfile.reactivePowerControlActive` | boolean | — | nein | Blindleistungssteuerung aktiv |
+| `gridProfile.reactivePower` | number | %Sn | nein | Blindleistung (VAR) |
+
 ### `<dtuSerial>.meter.*` — Energiezähler (pro DTU, lokal, dynamisch)
 
 Meter-States werden automatisch erstellt wenn erstmals Zählerdaten von der DTU empfangen werden. Nur verfügbar wenn ein kompatibler Energiezähler angeschlossen ist.

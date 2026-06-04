@@ -51,10 +51,11 @@ describe("stateDefinitions", function () {
 		assert.ok(channelIds.includes("info"), "Missing info channel");
 		assert.ok(channelIds.includes("alarms"), "Missing alarms channel");
 		assert.ok(channelIds.includes("config"), "Missing config channel");
+		assert.ok(channelIds.includes("gridProfile"), "Missing gridProfile channel");
 	});
 
-	it("has 6 static channels (PV and meter are dynamic)", function () {
-		assert.strictEqual(channels.length, 6, `Expected 6 channels but got ${channels.length}`);
+	it("has 7 static channels (PV and meter are dynamic)", function () {
+		assert.strictEqual(channels.length, 7, `Expected 7 channels but got ${channels.length}`);
 	});
 
 	it("contains DTU states", function () {

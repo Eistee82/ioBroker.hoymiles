@@ -301,6 +301,59 @@ Grid- and meter-level warning flags from the cloud's `station/find` record. All 
 | `config.sub1gSweepSwitch` | number | — | no | Sub-1G sweep |
 | `config.sub1gWorkChannel` | number | — | no | Sub-1G work channel |
 
+### `<dtuSerial>.gridProfile.*` — Grid Profile (per DTU, local)
+
+The inverter's grid-connection profile (safety/grid-code parameters), read locally via DevConfigFetch. All read-only. Voltage/frequency values follow the active grid standard (e.g. `DE_VDE4105_2018`). Function flags are booleans (`true` = function active).
+
+| State | Type | Unit | Writable | Description |
+|-------|------|------|----------|-------------|
+| `gridProfile.standard` | string | — | no | Grid standard name (e.g. DE_VDE4105_2018) |
+| `gridProfile.countryStdCode` | number | — | no | Country standard code |
+| `gridProfile.version` | number | — | no | Grid profile version |
+| `gridProfile.nominalVoltage` | number | V | no | Nominal voltage |
+| `gridProfile.lowVoltage1` | number | V | no | Low voltage 1 (LV1) |
+| `gridProfile.lowVoltage1TripTime` | number | s | no | LV1 max trip time |
+| `gridProfile.highVoltage1` | number | V | no | High voltage 1 (HV1) |
+| `gridProfile.highVoltage1TripTime` | number | s | no | HV1 max trip time |
+| `gridProfile.lowVoltage2` | number | V | no | Low voltage 2 (LV2) |
+| `gridProfile.lowVoltage2TripTime` | number | s | no | LV2 max trip time |
+| `gridProfile.avgHighVoltage10min` | number | V | no | 10-min average high voltage |
+| `gridProfile.nominalFrequency` | number | Hz | no | Nominal frequency |
+| `gridProfile.lowFrequency1` | number | Hz | no | Low frequency 1 (LF1) |
+| `gridProfile.lowFrequency1TripTime` | number | s | no | LF1 max trip time |
+| `gridProfile.highFrequency1` | number | Hz | no | High frequency 1 (HF1) |
+| `gridProfile.highFrequency1TripTime` | number | s | no | HF1 max trip time |
+| `gridProfile.islandingDetection` | boolean | — | no | Islanding detection active |
+| `gridProfile.reconnectTime` | number | s | no | Reconnect time |
+| `gridProfile.reconnectHighVoltage` | number | V | no | Reconnect high voltage |
+| `gridProfile.reconnectLowVoltage` | number | V | no | Reconnect low voltage |
+| `gridProfile.reconnectHighFrequency` | number | Hz | no | Reconnect high frequency |
+| `gridProfile.reconnectLowFrequency` | number | Hz | no | Reconnect low frequency |
+| `gridProfile.rampUpRateNormal` | number | %/s | no | Normal ramp-up rate |
+| `gridProfile.rampUpRateSoftStart` | number | %/s | no | Soft-start ramp-up rate |
+| `gridProfile.freqWattActive` | boolean | — | no | Frequency-Watt active |
+| `gridProfile.freqWattStart` | number | Hz | no | Frequency-Watt start (Fstart) |
+| `gridProfile.freqWattDroopSlope` | number | %Pn/Hz | no | Frequency-Watt droop slope |
+| `gridProfile.recoveryRampRate` | number | %Pn/s | no | Recovery ramp rate |
+| `gridProfile.recoveryHighFrequency` | number | Hz | no | Recovery high frequency |
+| `gridProfile.recoveryLowFrequency` | number | Hz | no | Recovery low frequency |
+| `gridProfile.activePowerControlActive` | boolean | — | no | Active power control active |
+| `gridProfile.powerRampRate` | number | %Pn/s | no | Power ramp rate |
+| `gridProfile.voltVarActive` | boolean | — | no | Volt-Var active |
+| `gridProfile.voltVarV1` | number | V | no | Volt-Var set point V1 |
+| `gridProfile.voltVarQ1` | number | %Pn | no | Volt-Var set point Q1 |
+| `gridProfile.voltVarV2` | number | V | no | Volt-Var set point V2 |
+| `gridProfile.voltVarV3` | number | V | no | Volt-Var set point V3 |
+| `gridProfile.voltVarV4` | number | V | no | Volt-Var set point V4 |
+| `gridProfile.voltVarQ4` | number | %Pn | no | Volt-Var set point Q4 |
+| `gridProfile.specifiedPowerFactorActive` | boolean | — | no | Specified power factor active |
+| `gridProfile.powerFactor` | number | — | no | Power factor (cos φ) |
+| `gridProfile.wattPowerFactorActive` | boolean | — | no | Watt-power-factor active |
+| `gridProfile.wattPowerFactorStart` | number | %Pn | no | Watt-PF start power |
+| `gridProfile.powerFactorAtRatedPower` | number | — | no | Power factor at rated power |
+| `gridProfile.reactivePowerControlActive` | boolean | — | no | Reactive power control active |
+| `gridProfile.reactivePower` | number | %Sn | no | Reactive power (VAR) |
+
 ### `<dtuSerial>.meter.*` — Energy Meter (per DTU, local, dynamic)
 
 Meter states are created automatically when meter data is first received from the DTU. Only available if a compatible energy meter is connected.

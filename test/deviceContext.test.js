@@ -3740,9 +3740,15 @@ describe("deviceContext – handleNetworkInfo / handleDevConfigFetch", function 
 			updateConnectionState: async () => {},
 		};
 
+		// Single-package grid profile: CountryStd=768, Version=8193 (big-endian).
 		const mockProtobuf = {
 			getType: () => ({
 				decode: () => ({}),
+				toObject: () => ({
+					data: new Uint8Array([0x03, 0x00, 0x20, 0x01]),
+					currentPackage: 0,
+					totalPackages: 1,
+				}),
 			}),
 		};
 
@@ -3759,8 +3765,8 @@ describe("deviceContext – handleNetworkInfo / handleDevConfigFetch", function 
 
 		ctx["handleDevConfigFetch"](Buffer.alloc(0));
 		assert.ok(
-			debugMsgs.some(m => m.includes("DevConfig")),
-			"Should log DevConfig debug",
+			debugMsgs.some(m => m.includes("grid profile")),
+			"Should log grid profile debug",
 		);
 	});
 

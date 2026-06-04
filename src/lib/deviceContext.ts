@@ -5,6 +5,7 @@ import { executeCommand } from "./commandHandler.js";
 import Encryption from "./encryption.js";
 import { channels, states } from "./stateDefinitions.js";
 import { getAlarmDescription } from "./alarmCodes.js";
+import { decodeGridProfile } from "./gridProfile.js";
 import { INFO_FALLBACK_TIMEOUT_MS, SCALE_POWER } from "./constants.js";
 import { whToKwh } from "./convert.js";
 import { errorMessage, safeJsonStringify, unixSeconds } from "./utils.js";
@@ -110,6 +111,10 @@ class DeviceContext {
 	cloudSendTimeMin: number;
 	private cloudRelayInitializing: boolean;
 	private dataInterval: number;
+	/** Micro-inverter serial (from InfoData) — needed as `dev_sn` for DevConfigFetch (grid profile). */
+	private inverterSn: string;
+	/** Grid-profile chunk accumulator: package index → raw data bytes. */
+	private readonly gridChunks: Map<number, Buffer> = new Map();
 
 	/** Pending response resolver for request-response pairing. */
 	private pendingResponse: { cmdKey: string; resolve: () => void; timer: ioBroker.Timeout | undefined } | null;
@@ -170,6 +175,7 @@ class DeviceContext {
 		this.slowPollRotations = 0;
 		this.pollBusy = false;
 		this.consecutivePollErrors = 0;
+		this.inverterSn = "";
 	}
 
 	/**
@@ -520,6 +526,24 @@ class DeviceContext {
 		this.pollTimer = this.adapter.setInterval(() => {
 			this.pollTick().catch(onPollError);
 		}, interval);
+
+		// Read the grid profile once per (re)connect — it is near-static, so no need to poll it
+		// repeatedly. The DTU answers via DevConfigFetch (0xa2 0x07); handleDevConfigFetch
+		// reassembles chunked packages and decodes the blob into gridProfile.* states.
+		this.requestGridProfile();
+	}
+
+	/** Kick off a grid-profile read (package 0). Subsequent packages are requested in the handler. */
+	private requestGridProfile(): void {
+		if (!this.enableLocal || !this.inverterSn || !this.connection?.connected || !this.protobuf) {
+			return;
+		}
+		this.gridChunks.clear();
+		this.connection
+			.send(this.protobuf.encodeDevConfigFetch(unixSeconds(), this.dtuSerial, this.inverterSn))
+			.catch(e => {
+				this.adapter.log.debug(`[${this.deviceId}] DevConfigFetch send failed: ${errorMessage(e)}`);
+			});
 	}
 
 	private stopPollCycle(): void {
@@ -1018,6 +1042,7 @@ class DeviceContext {
 	private async updateInverterVersions(info: ReturnType<ProtobufHandler["decodeInfoData"]>): Promise<void> {
 		if (info.pvInfo.length > 0) {
 			const pv = info.pvInfo[0];
+			this.inverterSn = pv.sn || this.inverterSn;
 			await this.setStates(
 				[
 					["inverter.serialNumber", pv.sn],
@@ -1312,13 +1337,57 @@ class DeviceContext {
 		}
 	}
 
+	/**
+	 * Handle a DevConfigFetch response (grid-connection file). The blob can be chunked over
+	 * several packages — accumulate them, request the next while incomplete, then decode the
+	 * reassembled big-endian blob into `gridProfile.*` states.
+	 *
+	 * @param payload - Decrypted DevConfigFetchReqDTO payload.
+	 */
 	private handleDevConfigFetch(payload: Buffer): void {
 		if (!this.protobuf) {
 			return;
 		}
 		try {
-			this.protobuf.getType("DevConfig", "DevConfigFetchReqDTO").decode(payload);
-			this.adapter.log.debug(`[${this.deviceId || this.host}] DevConfig response received`);
+			const ReqDTO = this.protobuf.getType("DevConfig", "DevConfigFetchReqDTO");
+			const obj = ReqDTO.toObject(ReqDTO.decode(payload), { longs: Number, defaults: true }) as Record<
+				string,
+				unknown
+			>;
+			const data = obj.data as Uint8Array | undefined;
+			const chunk = data && data.length ? Buffer.from(data) : Buffer.alloc(0);
+			const pkg = Number(obj.currentPackage) || 0;
+			const total = Math.max(Number(obj.totalPackages) || 1, 1);
+			this.gridChunks.set(pkg, chunk);
+			this.adapter.log.debug(
+				`[${this.deviceId || this.host}] grid profile package ${pkg + 1}/${total} (${chunk.length} bytes)`,
+			);
+
+			// More packages outstanding → request the next one and wait for it
+			if (pkg + 1 < total) {
+				this.connection
+					?.send(this.protobuf.encodeDevConfigFetch(unixSeconds(), this.dtuSerial, this.inverterSn, pkg + 1))
+					.catch(e =>
+						this.adapter.log.debug(`[${this.deviceId}] grid profile next-pkg failed: ${errorMessage(e)}`),
+					);
+				return;
+			}
+
+			// All packages received → assemble in order and decode
+			const blob = Buffer.concat(
+				[...this.gridChunks.keys()].sort((a, b) => a - b).map(k => this.gridChunks.get(k)!),
+			);
+			this.gridChunks.clear();
+			if (blob.length < 4) {
+				return;
+			}
+			this.adapter.log.debug(`[${this.deviceId || this.host}] [diag] grid profile blob: ${blob.toString("hex")}`);
+			const decoded = decodeGridProfile(blob);
+			const entries: Array<[string, ioBroker.StateValue]> = [["gridProfile.standard", decoded.standard]];
+			for (const [key, val] of Object.entries(decoded.values)) {
+				entries.push([`gridProfile.${key}`, val]);
+			}
+			void this.setStates(entries, true);
 		} catch (err) {
 			this.adapter.log.warn(`[${this.deviceId || this.host}] Error decoding DevConfig: ${errorMessage(err)}`);
 		}

@@ -629,14 +629,16 @@ class ProtobufHandler {
 	 * @param timestamp - Unix timestamp in seconds
 	 * @param dtuSn - DTU serial number
 	 * @param devSn - Device serial number
+	 * @param currentPackage - Package index to request (0-based; for chunked grid-profile reads)
 	 */
-	encodeDevConfigFetch(timestamp: number, dtuSn: string, devSn: string): Buffer {
+	encodeDevConfigFetch(timestamp: number, dtuSn: string, devSn: string, currentPackage = 0): Buffer {
 		const ResDTO = this.getType("DevConfig", "DevConfigFetchResDTO");
 		const msg = ResDTO.create({
 			responseTime: timestamp,
 			transactionId: timestamp,
 			dtuSn: dtuSn,
 			devSn: devSn,
+			currentPackage: currentPackage,
 		});
 		const payload = ResDTO.encode(msg).finish();
 		return this.buildMessage(CMD.DEV_CONFIG_FETCH[0], CMD.DEV_CONFIG_FETCH[1], payload);

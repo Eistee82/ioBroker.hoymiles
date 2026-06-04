@@ -1,3 +1,5 @@
+import { GRID_PROFILE_SCHEMA } from "./gridProfile.js";
+
 // source?: "local" = only from local TCP, "cloud" = only from cloud API, undefined = available from both
 
 interface ChannelDefinition {
@@ -56,7 +58,18 @@ const channels: ChannelDefinition[] = [
 	{ id: "dtu", name: { en: "DTU", de: "DTU" } },
 	{ id: "alarms", name: { en: "Alarms & warnings", de: "Alarme & Warnungen" }, source: "local" },
 	{ id: "config", name: { en: "DTU configuration", de: "DTU-Konfiguration" }, source: "local" },
+	{ id: "gridProfile", name: { en: "Grid profile", de: "Netzprofil" }, source: "local" },
 	// meter channel is created dynamically when meter data is first received
+];
+
+// Grid-profile states are generated from the shared schema so decode + state list never drift.
+const gridProfileStates: StateDefinition[] = [
+	s("gridProfile.standard", "Grid standard", "Netznorm", "text", { source: "local" }),
+	...GRID_PROFILE_SCHEMA.map(p =>
+		p.flag
+			? b(`gridProfile.${p.key}`, p.en, p.de, "indicator", { source: "local" })
+			: n(`gridProfile.${p.key}`, p.en, p.de, "value", p.unit, { source: "local" }),
+	),
 ];
 
 const states: StateDefinition[] = [
@@ -214,6 +227,9 @@ const states: StateDefinition[] = [
 	s("config.wifiIpAddress", "WiFi IP address", "WLAN IP-Adresse", "text", { source: "local" }),
 	s("config.netMacAddress", "MAC address", "MAC-Adresse", "text", { source: "local" }),
 	s("config.wifiMacAddress", "WiFi MAC address", "WLAN MAC-Adresse", "text", { source: "local" }),
+
+	// === Grid profile (from DevConfigFetch, local) ===
+	...gridProfileStates,
 ];
 
 // === Station channels & states (prefixed with station-<stationId>.) ===

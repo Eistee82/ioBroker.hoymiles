@@ -308,13 +308,14 @@ class ProtobufHandler {
         const payload = ResDTO.encode(msg).finish();
         return this.buildMessage(CMD.AUTO_SEARCH[0], CMD.AUTO_SEARCH[1], payload);
     }
-    encodeDevConfigFetch(timestamp, dtuSn, devSn) {
+    encodeDevConfigFetch(timestamp, dtuSn, devSn, currentPackage = 0) {
         const ResDTO = this.getType("DevConfig", "DevConfigFetchResDTO");
         const msg = ResDTO.create({
             responseTime: timestamp,
             transactionId: timestamp,
             dtuSn: dtuSn,
             devSn: devSn,
+            currentPackage: currentPackage,
         });
         const payload = ResDTO.encode(msg).finish();
         return this.buildMessage(CMD.DEV_CONFIG_FETCH[0], CMD.DEV_CONFIG_FETCH[1], payload);
