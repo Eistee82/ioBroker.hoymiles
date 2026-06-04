@@ -1,5 +1,5 @@
 import assert from "node:assert";
-import { decodeGridProfile, GRID_PROFILE_SCHEMA } from "../build/lib/gridProfile.js";
+import { decodeGridProfile, GRID_PROFILE_SCHEMA, byteSwap16 } from "../build/lib/gridProfile.js";
 
 // Real grid-profile blob read locally from an HMS-800W-2T via DevConfigFetch (0xa3 0x07),
 // field `data` (big-endian 16-bit words). Verified 1:1 against the S-Miles cloud's decoded
@@ -55,5 +55,23 @@ describe("decodeGridProfile", () => {
 	it("schema keys are unique", () => {
 		const keys = GRID_PROFILE_SCHEMA.map(p => p.key);
 		assert.strictEqual(new Set(keys).size, keys.length);
+	});
+});
+
+describe("byteSwap16", () => {
+	it("swaps the byte order of each 16-bit word", () => {
+		assert.strictEqual(byteSwap16(Buffer.from("0300", "hex")).toString("hex"), "0003");
+		assert.strictEqual(byteSwap16(Buffer.from("03002001000a", "hex")).toString("hex"), "000301200a00");
+	});
+
+	it("is its own inverse (local BE blob ↔ cloud LE blob)", () => {
+		const be = Buffer.from(REAL_BLOB, "hex");
+		assert.strictEqual(byteSwap16(byteSwap16(be)).toString("hex"), be.toString("hex"));
+	});
+
+	it("reading the swapped blob little-endian equals reading the original big-endian", () => {
+		const be = Buffer.from(REAL_BLOB, "hex");
+		const le = byteSwap16(be);
+		assert.strictEqual(le.readUInt16LE(6), be.readUInt16BE(6)); // nominal voltage word (2300)
 	});
 });

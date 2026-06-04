@@ -644,6 +644,63 @@ class ProtobufHandler {
 		return this.buildMessage(CMD.DEV_CONFIG_FETCH[0], CMD.DEV_CONFIG_FETCH[1], payload);
 	}
 
+	// --- Cloud-relay downlink responses (DTU → cloud, 0x22 tags) ---
+	// Used when the relay impersonates the DTU and must answer a server command itself.
+
+	/**
+	 * Encode the command acknowledgement the DTU sends after receiving an action command
+	 * (cloud tag 0x22 0x05, `CommandReqDTO`).
+	 *
+	 * @param timestamp - Unix timestamp in seconds
+	 * @param dtuSn - DTU serial number
+	 * @param action - Action code being acknowledged (e.g. 41 = read grid profile)
+	 * @param tid - Transaction id from the originating command
+	 */
+	encodeCloudCommandAck(timestamp: number, dtuSn: string, action: number, tid: number): Buffer {
+		const ReqDTO = this.getType("CommandPB", "CommandReqDTO");
+		const msg = ReqDTO.create({ dtuSn, time: timestamp, action, tid });
+		return this.buildMessage(0x22, 0x05, ReqDTO.encode(msg).finish());
+	}
+
+	/**
+	 * Encode the command-status message (cloud tag 0x22 0x06, `CommandStatusReqDTO`) the DTU
+	 * sends while processing a command.
+	 *
+	 * @param timestamp - Unix timestamp in seconds
+	 * @param dtuSn - DTU serial number
+	 * @param action - Action code (e.g. 41 = read grid profile)
+	 * @param tid - Transaction id from the originating command
+	 */
+	encodeCloudCommandStatus(timestamp: number, dtuSn: string, action: number, tid: number): Buffer {
+		const ReqDTO = this.getType("CommandPB", "CommandStatusReqDTO");
+		const msg = ReqDTO.create({ dtuSn, time: timestamp, action, packageNub: 1, packageNow: 1, tid });
+		return this.buildMessage(0x22, 0x06, ReqDTO.encode(msg).finish());
+	}
+
+	/**
+	 * Encode a device-config (grid-profile) upload (cloud tag 0x22 0x0e, `DevConfigFetchReqDTO`).
+	 * The `data` blob must be little-endian (cloud byte order — see {@link byteSwap16}).
+	 *
+	 * @param timestamp - Unix timestamp in seconds
+	 * @param dtuSn - DTU serial number
+	 * @param devSn - Micro-inverter serial number
+	 * @param tid - Transaction id from the originating command
+	 * @param data - Little-endian grid-file blob
+	 */
+	encodeGridProfileResponse(timestamp: number, dtuSn: string, devSn: string, tid: number, data: Uint8Array): Buffer {
+		const ReqDTO = this.getType("DevConfig", "DevConfigFetchReqDTO");
+		const msg = ReqDTO.create({
+			requestTime: timestamp,
+			transactionId: tid,
+			data,
+			dtuSn,
+			devSn,
+			totalPackages: 1,
+			currentPackage: 1,
+		});
+		return this.buildMessage(0x22, 0x0e, ReqDTO.encode(msg).finish());
+	}
+
 	// --- Decode Responses ---
 
 	/**

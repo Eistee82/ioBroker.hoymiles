@@ -5,7 +5,7 @@ import { executeCommand } from "./commandHandler.js";
 import Encryption from "./encryption.js";
 import { channels, states } from "./stateDefinitions.js";
 import { getAlarmDescription } from "./alarmCodes.js";
-import { decodeGridProfile } from "./gridProfile.js";
+import { decodeGridProfile, byteSwap16 } from "./gridProfile.js";
 import { INFO_FALLBACK_TIMEOUT_MS, SCALE_POWER } from "./constants.js";
 import { whToKwh } from "./convert.js";
 import { errorMessage, safeJsonStringify, unixSeconds } from "./utils.js";
@@ -64,6 +64,7 @@ class DeviceContext {
     dataInterval;
     inverterSn;
     gridChunks = new Map();
+    gridBlob = null;
     pendingResponse;
     slowPollQueue;
     slowPollIndex;
@@ -368,6 +369,40 @@ class DeviceContext {
             .catch(e => {
             this.adapter.log.debug(`[${this.deviceId}] DevConfigFetch send failed: ${errorMessage(e)}`);
         });
+    }
+    handleCloudCommand(cmd) {
+        if (!this.protobuf || !this.cloudRelay) {
+            return;
+        }
+        try {
+            if (!(cmd.cmdHigh === 0x23 && cmd.cmdLow === 0x05)) {
+                this.adapter.log.debug(`[${this.deviceId}] [diag] cloud command 0x${cmd.cmdHigh.toString(16)} 0x${cmd.cmdLow.toString(16)} — not handled`);
+                return;
+            }
+            const ResDTO = this.protobuf.getType("CommandPB", "CommandResDTO");
+            const obj = ResDTO.toObject(ResDTO.decode(cmd.payload), { longs: Number, defaults: true });
+            const action = Number(obj.action) || 0;
+            const tid = Number(obj.tid) || 0;
+            this.adapter.log.debug(`[${this.deviceId}] [diag] cloud command action=${action} tid=${tid}`);
+            if (action === 41) {
+                this.serveGridProfileToCloud(tid);
+            }
+        }
+        catch (err) {
+            this.adapter.log.warn(`[${this.deviceId}] handleCloudCommand error: ${errorMessage(err)}`);
+        }
+    }
+    serveGridProfileToCloud(tid) {
+        const relay = this.cloudRelay;
+        if (!relay || !this.protobuf || !this.gridBlob || !this.inverterSn) {
+            this.adapter.log.debug(`[${this.deviceId}] grid-profile cloud-serve skipped (relay/blob/sn missing)`);
+            return;
+        }
+        const ts = unixSeconds();
+        relay.sendFrame(this.protobuf.encodeCloudCommandAck(ts, this.dtuSerial, 41, tid));
+        relay.sendFrame(this.protobuf.encodeCloudCommandStatus(ts, this.dtuSerial, 41, tid));
+        relay.sendFrame(this.protobuf.encodeGridProfileResponse(ts, this.dtuSerial, this.inverterSn, tid, byteSwap16(this.gridBlob)));
+        this.adapter.log.info(`[${this.deviceId}] served grid profile to cloud via relay (tid=${tid})`);
     }
     stopPollCycle() {
         if (this.pollTimer) {
@@ -753,6 +788,7 @@ class DeviceContext {
                     this.adapter.log.debug(`[${this.deviceId}] Cloud relay sent data, triggering cloud poll`);
                     void this.adapter.onRelayDataSent();
                 });
+                this.cloudRelay.on("command", (cmd) => this.handleCloudCommand(cmd));
                 this.cloudRelay.connect();
             }
         }
@@ -977,6 +1013,7 @@ class DeviceContext {
             if (blob.length < 4) {
                 return;
             }
+            this.gridBlob = blob;
             this.adapter.log.debug(`[${this.deviceId || this.host}] [diag] grid profile blob: ${blob.toString("hex")}`);
             const decoded = decodeGridProfile(blob);
             const entries = [["gridProfile.standard", decoded.standard]];

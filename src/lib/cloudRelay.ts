@@ -37,6 +37,8 @@ class CloudRelay extends TcpConnection {
 	private lastRealDataTimestamp: number;
 	private seq: number;
 	private realDataIntervalMs: number;
+	/** Accumulator for splitting downlink (cloud→DTU) HM frames across TCP segments. */
+	private rxBuffer: Buffer;
 
 	/**
 	 * @param host - Cloud relay server hostname
@@ -55,6 +57,7 @@ class CloudRelay extends TcpConnection {
 		this.lastRealDataTimestamp = 0;
 		this.seq = 0;
 		this.realDataIntervalMs = CLOUD_DEFAULT_REALDATA_INTERVAL_MS;
+		this.rxBuffer = Buffer.alloc(0);
 	}
 
 	/**
@@ -167,6 +170,7 @@ class CloudRelay extends TcpConnection {
 
 		socket.on("data", (data: Buffer) => {
 			this.emit("dataReceived", data.length);
+			this._onDownlink(data);
 		});
 
 		socket.on("timeout", () => {
@@ -270,6 +274,66 @@ class CloudRelay extends TcpConnection {
 		const seq = this.seq;
 		this.seq = seq >= 60000 ? 0 : seq + 1;
 		return this.protobuf.buildMessage(cmdHigh, cmdLow, protobufPayload, seq);
+	}
+
+	/**
+	 * Send a pre-built, HM-framed cloud-protocol frame. Used to answer downlink commands the
+	 * server sends to the relay (e.g. grid-profile read) — the frame is built by the
+	 * `ProtobufHandler.encodeCloud*` helpers.
+	 *
+	 * @param frame - Complete HM-framed message (header + payload).
+	 */
+	sendFrame(frame: Buffer): void {
+		if (!this.connected || !this.socket) {
+			return;
+		}
+		this._safeWrite(frame);
+	}
+
+	/**
+	 * Parse downlink (cloud→DTU) HM frames out of the TCP stream. Routine keep-alive frames
+	 * (heartbeat 0x02, realdata request 0x0c, realdata-status 0x0d) are ignored; everything
+	 * else is surfaced as a `"command"` event `{ cmdHigh, cmdLow, seq, payload }` so the
+	 * device layer can answer it (the relay alone has no local DTU connection).
+	 *
+	 * @param chunk - Raw bytes received from the cloud socket.
+	 */
+	private _onDownlink(chunk: Buffer): void {
+		if (!this.protobuf) {
+			return;
+		}
+		this.rxBuffer = this.rxBuffer.length ? Buffer.concat([this.rxBuffer, chunk]) : chunk;
+		while (this.rxBuffer.length >= 10) {
+			if (this.rxBuffer[0] !== 0x48 || this.rxBuffer[1] !== 0x4d) {
+				const idx = this.rxBuffer.indexOf(Buffer.from([0x48, 0x4d]), 1);
+				if (idx === -1) {
+					this.rxBuffer = Buffer.alloc(0);
+					return;
+				}
+				this.rxBuffer = this.rxBuffer.subarray(idx);
+				continue;
+			}
+			const total = (this.rxBuffer[8] << 8) | this.rxBuffer[9];
+			if (total < 10 || total > 65535) {
+				this.rxBuffer = this.rxBuffer.subarray(1);
+				continue;
+			}
+			if (this.rxBuffer.length < total) {
+				break;
+			}
+			const frame = Buffer.from(this.rxBuffer.subarray(0, total));
+			this.rxBuffer = this.rxBuffer.subarray(total);
+			const parsed = this.protobuf.parseResponse(frame);
+			if (!parsed) {
+				continue;
+			}
+			const { cmdHigh, cmdLow, payload } = parsed;
+			if (cmdLow === 0x02 || cmdLow === 0x0c || cmdLow === 0x0d) {
+				continue; // routine keep-alive / realdata poll
+			}
+			const seq = (frame[4] << 8) | frame[5];
+			this.emit("command", { cmdHigh, cmdLow, seq, payload });
+		}
 	}
 
 	/**

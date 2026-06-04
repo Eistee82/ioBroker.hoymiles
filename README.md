@@ -136,6 +136,7 @@ Cloud stations create aggregated device nodes (e.g. `hoymiles.0.station-12345.*`
 ## Changelog
 ### **WORK IN PROGRESS**
 - (@Eistee82) Read the inverter grid profile (grid-connection file) locally via DevConfigFetch and expose it under `<dtuSerial>.gridProfile.*` (voltage/frequency limits, trip times, reconnect thresholds, ramp rates, Volt-Var/power-factor, function flags)
+- (@Eistee82) Cloud relay now parses downlink server commands instead of discarding them and answers the grid-profile read (action 41) on behalf of the DTU (ack/status + the locally-read profile as `0x22 0x0e`), so the S-Miles app/portal can still read the grid profile while the adapter holds the local connection
 - (@Eistee82) S-Miles Home account support: home login (HTTP 403 treated as the "home" verdict), per-station data-center routing for lat/lon/address (incl. `pvm-ext/station-ak/find`), and `warn_data` / timestamps / firmware versions recovered from the `realtime_c` and firmware-compare fallbacks
 - (@Eistee82) Cloud fixes: offline inverters no longer shown as online, station timestamps converted to UTC, new `station-<id>.warn.*` flags, per-station daily firmware check, `warn.deviceAlarm` relabelled "Inverter alarm" (`warn.powerLimited` is installer-only)
 - (@Eistee82) Add anonymized `[diag]` debug logging of raw cloud responses (serials/e-mail hashed, coordinates/address redacted) for safe forum bug reports

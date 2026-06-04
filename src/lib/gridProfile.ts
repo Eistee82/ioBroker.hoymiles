@@ -288,6 +288,24 @@ const COUNTRY_STD_NAMES: Record<number, string> = {
 	768: "DE_VDE4105_2018",
 };
 
+/**
+ * Swap the byte order of every 16-bit word in a buffer. The grid-file blob is big-endian on
+ * the local DevConfigFetch interface (0xa3 0x07) but little-endian on the cloud interface
+ * (0x22 0x0e) — used to translate between the two when the relay serves the cloud. An odd
+ * trailing byte (shouldn't occur for grid files) is copied through unchanged.
+ *
+ * @param buf - Source buffer.
+ */
+export function byteSwap16(buf: Buffer): Buffer {
+	const out = Buffer.from(buf);
+	for (let i = 0; i + 1 < out.length; i += 2) {
+		const tmp = out[i];
+		out[i] = out[i + 1];
+		out[i + 1] = tmp;
+	}
+	return out;
+}
+
 /** Decoded grid profile: each schema key → value (flags as boolean), plus `standard` name. */
 export interface DecodedGridProfile {
 	/** Schema key → decoded value (numbers scaled by `multiple`, flags as boolean). */

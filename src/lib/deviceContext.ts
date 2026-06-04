@@ -5,7 +5,7 @@ import { executeCommand } from "./commandHandler.js";
 import Encryption from "./encryption.js";
 import { channels, states } from "./stateDefinitions.js";
 import { getAlarmDescription } from "./alarmCodes.js";
-import { decodeGridProfile } from "./gridProfile.js";
+import { decodeGridProfile, byteSwap16 } from "./gridProfile.js";
 import { INFO_FALLBACK_TIMEOUT_MS, SCALE_POWER } from "./constants.js";
 import { whToKwh } from "./convert.js";
 import { errorMessage, safeJsonStringify, unixSeconds } from "./utils.js";
@@ -40,6 +40,14 @@ interface DeviceContextOptions {
 	enableCloudRelay: boolean;
 	dataInterval: number;
 	slowPollFactor: number;
+}
+
+/** A non-routine downlink frame the cloud sent to the relay (server → DTU command). */
+interface CloudRelayCommand {
+	cmdHigh: number;
+	cmdLow: number;
+	seq: number;
+	payload: Buffer;
 }
 
 /** PV field definitions — base fields available from both local and cloud. */
@@ -115,6 +123,8 @@ class DeviceContext {
 	private inverterSn: string;
 	/** Grid-profile chunk accumulator: package index → raw data bytes. */
 	private readonly gridChunks: Map<number, Buffer> = new Map();
+	/** Last fully-read grid-profile blob (big-endian), cached to answer cloud-relay reads. */
+	private gridBlob: Buffer | null = null;
 
 	/** Pending response resolver for request-response pairing. */
 	private pendingResponse: { cmdKey: string; resolve: () => void; timer: ioBroker.Timeout | undefined } | null;
@@ -544,6 +554,68 @@ class DeviceContext {
 			.catch(e => {
 				this.adapter.log.debug(`[${this.deviceId}] DevConfigFetch send failed: ${errorMessage(e)}`);
 			});
+	}
+
+	/**
+	 * Handle a downlink command the cloud sent to the relay (which impersonates the DTU).
+	 * Currently answers the grid-profile read (action 41); other commands are logged only.
+	 *
+	 * @param cmd - Parsed downlink frame from the cloud relay.
+	 */
+	private handleCloudCommand(cmd: CloudRelayCommand): void {
+		if (!this.protobuf || !this.cloudRelay) {
+			return;
+		}
+		try {
+			// Cloud action commands arrive as 0x23 0x05 (CommandResDTO with an action code).
+			if (!(cmd.cmdHigh === 0x23 && cmd.cmdLow === 0x05)) {
+				this.adapter.log.debug(
+					`[${this.deviceId}] [diag] cloud command 0x${cmd.cmdHigh.toString(16)} 0x${cmd.cmdLow.toString(16)} — not handled`,
+				);
+				return;
+			}
+			const ResDTO = this.protobuf.getType("CommandPB", "CommandResDTO");
+			const obj = ResDTO.toObject(ResDTO.decode(cmd.payload), { longs: Number, defaults: true }) as Record<
+				string,
+				unknown
+			>;
+			const action = Number(obj.action) || 0;
+			const tid = Number(obj.tid) || 0;
+			this.adapter.log.debug(`[${this.deviceId}] [diag] cloud command action=${action} tid=${tid}`);
+			if (action === 41) {
+				this.serveGridProfileToCloud(tid);
+			}
+		} catch (err) {
+			this.adapter.log.warn(`[${this.deviceId}] handleCloudCommand error: ${errorMessage(err)}`);
+		}
+	}
+
+	/**
+	 * Answer a cloud grid-profile read (action 41) over the relay: ack (0x22 0x05) + status
+	 * (0x22 0x06) + the grid file (0x22 0x0e, blob byte-swapped to the cloud's little-endian
+	 * order). Uses the last locally-read profile blob.
+	 *
+	 * @param tid - Transaction id from the originating command (echoed back).
+	 */
+	private serveGridProfileToCloud(tid: number): void {
+		const relay = this.cloudRelay;
+		if (!relay || !this.protobuf || !this.gridBlob || !this.inverterSn) {
+			this.adapter.log.debug(`[${this.deviceId}] grid-profile cloud-serve skipped (relay/blob/sn missing)`);
+			return;
+		}
+		const ts = unixSeconds();
+		relay.sendFrame(this.protobuf.encodeCloudCommandAck(ts, this.dtuSerial, 41, tid));
+		relay.sendFrame(this.protobuf.encodeCloudCommandStatus(ts, this.dtuSerial, 41, tid));
+		relay.sendFrame(
+			this.protobuf.encodeGridProfileResponse(
+				ts,
+				this.dtuSerial,
+				this.inverterSn,
+				tid,
+				byteSwap16(this.gridBlob),
+			),
+		);
+		this.adapter.log.info(`[${this.deviceId}] served grid profile to cloud via relay (tid=${tid})`);
 	}
 
 	private stopPollCycle(): void {
@@ -1087,6 +1159,7 @@ class DeviceContext {
 					this.adapter.log.debug(`[${this.deviceId}] Cloud relay sent data, triggering cloud poll`);
 					void this.adapter.onRelayDataSent();
 				});
+				this.cloudRelay.on("command", (cmd: CloudRelayCommand) => this.handleCloudCommand(cmd));
 				this.cloudRelay.connect();
 			}
 		} else if (this.cloudRelay && this.protobuf && dtuSn) {
@@ -1381,6 +1454,7 @@ class DeviceContext {
 			if (blob.length < 4) {
 				return;
 			}
+			this.gridBlob = blob; // cache (big-endian) to answer cloud-relay grid-profile reads
 			this.adapter.log.debug(`[${this.deviceId || this.host}] [diag] grid profile blob: ${blob.toString("hex")}`);
 			const decoded = decodeGridProfile(blob);
 			const entries: Array<[string, ioBroker.StateValue]> = [["gridProfile.standard", decoded.standard]];

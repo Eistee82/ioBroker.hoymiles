@@ -320,6 +320,29 @@ class ProtobufHandler {
         const payload = ResDTO.encode(msg).finish();
         return this.buildMessage(CMD.DEV_CONFIG_FETCH[0], CMD.DEV_CONFIG_FETCH[1], payload);
     }
+    encodeCloudCommandAck(timestamp, dtuSn, action, tid) {
+        const ReqDTO = this.getType("CommandPB", "CommandReqDTO");
+        const msg = ReqDTO.create({ dtuSn, time: timestamp, action, tid });
+        return this.buildMessage(0x22, 0x05, ReqDTO.encode(msg).finish());
+    }
+    encodeCloudCommandStatus(timestamp, dtuSn, action, tid) {
+        const ReqDTO = this.getType("CommandPB", "CommandStatusReqDTO");
+        const msg = ReqDTO.create({ dtuSn, time: timestamp, action, packageNub: 1, packageNow: 1, tid });
+        return this.buildMessage(0x22, 0x06, ReqDTO.encode(msg).finish());
+    }
+    encodeGridProfileResponse(timestamp, dtuSn, devSn, tid, data) {
+        const ReqDTO = this.getType("DevConfig", "DevConfigFetchReqDTO");
+        const msg = ReqDTO.create({
+            requestTime: timestamp,
+            transactionId: tid,
+            data,
+            dtuSn,
+            devSn,
+            totalPackages: 1,
+            currentPackage: 1,
+        });
+        return this.buildMessage(0x22, 0x0e, ReqDTO.encode(msg).finish());
+    }
     decodeRealDataNew(payload) {
         const obj = this.decodePayload("RealDataNew", "RealDataNewReqDTO", payload);
         const result = {

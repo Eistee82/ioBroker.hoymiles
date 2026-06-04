@@ -16,6 +16,7 @@ class CloudRelay extends TcpConnection {
     lastRealDataTimestamp;
     seq;
     realDataIntervalMs;
+    rxBuffer;
     constructor(host, port) {
         super(host, port, CLOUD_RECONNECT_DELAY_MIN_MS, CLOUD_RECONNECT_DELAY_MAX_MS);
         this.paused = false;
@@ -29,6 +30,7 @@ class CloudRelay extends TcpConnection {
         this.lastRealDataTimestamp = 0;
         this.seq = 0;
         this.realDataIntervalMs = CLOUD_DEFAULT_REALDATA_INTERVAL_MS;
+        this.rxBuffer = Buffer.alloc(0);
     }
     configure(protobuf, dtuSn, timezoneOffset) {
         if (!dtuSn) {
@@ -103,6 +105,7 @@ class CloudRelay extends TcpConnection {
         socket.setTimeout(CLOUD_SOCKET_TIMEOUT_MS);
         socket.on("data", (data) => {
             this.emit("dataReceived", data.length);
+            this._onDownlink(data);
         });
         socket.on("timeout", () => {
             this.emit("error", new Error("Socket timeout — no heartbeat response received"));
@@ -172,6 +175,49 @@ class CloudRelay extends TcpConnection {
         const seq = this.seq;
         this.seq = seq >= 60000 ? 0 : seq + 1;
         return this.protobuf.buildMessage(cmdHigh, cmdLow, protobufPayload, seq);
+    }
+    sendFrame(frame) {
+        if (!this.connected || !this.socket) {
+            return;
+        }
+        this._safeWrite(frame);
+    }
+    _onDownlink(chunk) {
+        if (!this.protobuf) {
+            return;
+        }
+        this.rxBuffer = this.rxBuffer.length ? Buffer.concat([this.rxBuffer, chunk]) : chunk;
+        while (this.rxBuffer.length >= 10) {
+            if (this.rxBuffer[0] !== 0x48 || this.rxBuffer[1] !== 0x4d) {
+                const idx = this.rxBuffer.indexOf(Buffer.from([0x48, 0x4d]), 1);
+                if (idx === -1) {
+                    this.rxBuffer = Buffer.alloc(0);
+                    return;
+                }
+                this.rxBuffer = this.rxBuffer.subarray(idx);
+                continue;
+            }
+            const total = (this.rxBuffer[8] << 8) | this.rxBuffer[9];
+            if (total < 10 || total > 65535) {
+                this.rxBuffer = this.rxBuffer.subarray(1);
+                continue;
+            }
+            if (this.rxBuffer.length < total) {
+                break;
+            }
+            const frame = Buffer.from(this.rxBuffer.subarray(0, total));
+            this.rxBuffer = this.rxBuffer.subarray(total);
+            const parsed = this.protobuf.parseResponse(frame);
+            if (!parsed) {
+                continue;
+            }
+            const { cmdHigh, cmdLow, payload } = parsed;
+            if (cmdLow === 0x02 || cmdLow === 0x0c || cmdLow === 0x0d) {
+                continue;
+            }
+            const seq = (frame[4] << 8) | frame[5];
+            this.emit("command", { cmdHigh, cmdLow, seq, payload });
+        }
     }
     _safeWrite(data) {
         if (!this.socket) {

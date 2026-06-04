@@ -250,6 +250,15 @@ export const GRID_PROFILE_SCHEMA = [
 const COUNTRY_STD_NAMES = {
     768: "DE_VDE4105_2018",
 };
+export function byteSwap16(buf) {
+    const out = Buffer.from(buf);
+    for (let i = 0; i + 1 < out.length; i += 2) {
+        const tmp = out[i];
+        out[i] = out[i + 1];
+        out[i + 1] = tmp;
+    }
+    return out;
+}
 export function decodeGridProfile(blob) {
     const values = {};
     for (const p of GRID_PROFILE_SCHEMA) {
