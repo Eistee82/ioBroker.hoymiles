@@ -315,7 +315,7 @@ class DeviceContext {
 				name: `DTU ${this.deviceId}`,
 				statusStates: { onlineId: "info.connected" },
 				icon: "hoymiles.png",
-			} as ioBroker.DeviceCommon,
+			},
 			native: { host: this.host },
 		});
 
@@ -360,7 +360,7 @@ class DeviceContext {
 				};
 				return this.adapter.extendObjectAsync(`${this.deviceId}.${def.id}`, {
 					type: "state",
-					common: common as ioBroker.StateCommon,
+					common: common,
 					native: {},
 				});
 			}),
@@ -441,7 +441,7 @@ class DeviceContext {
 			unit: string,
 		): { id: string; name: ioBroker.StringOrTranslated; role: string; unit: string } => ({
 			id: `meter.${id}`,
-			name: { en, de } as ioBroker.StringOrTranslated,
+			name: { en, de },
 			role,
 			unit,
 		});

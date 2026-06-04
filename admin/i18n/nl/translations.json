@@ -26,5 +26,6 @@
     "tabLocal": "Lokale verbinding",
     "testCloudLoginButton": "Cloud-login testen",
     "testCloudLoginHelp": "Voert alle vier login-fasen uit (region_c, pre-insp, login, probe) en meldt v en de aanwezigheid van een salt uit pre-insp, of de login een token heeft opgeleverd en welk profiel de probe toewijst (installer / home). Het resultaat verschijnt in een popup en wordt ook naar het adapterlog geschreven — handig voor forum-bugrapporten.",
-    "testConnectionButton": "Verbinding testen"
+    "testConnectionButton": "Verbinding testen",
+    "email@example.com": "email@example.com"
 }

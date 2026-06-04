@@ -26,5 +26,6 @@
     "tabLocal": "Локальне з'єднання",
     "testCloudLoginButton": "Перевірити вхід у хмару",
     "testCloudLoginHelp": "Запускає всі чотири фази входу (region_c, pre-insp, login, probe) і повідомляє v і наявність salt із pre-insp, чи вхід отримав токен і який профіль призначила проба (installer / home). Результат відображається у спливаючому вікні та додатково записується в журнал адаптера — корисно для звітів про помилки на форумі.",
-    "testConnectionButton": "Перевірити з'єднання"
+    "testConnectionButton": "Перевірити з'єднання",
+    "email@example.com": "email@example.com"
 }

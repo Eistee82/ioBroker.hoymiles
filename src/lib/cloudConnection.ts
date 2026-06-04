@@ -484,7 +484,7 @@ class CloudConnection {
 	 * have a token, because pre-insp.v no longer maps 1:1 to the data-API surface.
 	 *
 	 * @returns Session token on success, or null if status=0 but data.token is empty
-	 * @throws CloudAuthError on permanent server-side rejection (wrong password, account locked)
+	 * @throws {CloudAuthError} on permanent server-side rejection (wrong password, account locked)
 	 */
 	private async tryLoginV3(): Promise<string | null> {
 		// Auth endpoints stay on the regional login host (this.baseUrl), separate from the
@@ -530,7 +530,7 @@ class CloudConnection {
 	 *
 	 * Must run AFTER token assignment — the endpoint requires authentication.
 	 *
-	 * @throws on genuine transport/network errors (timeout, DNS, 5xx). Caller rolls back token state.
+	 * @throws {Error} on genuine transport/network errors (timeout, DNS, 5xx). Caller rolls back token state.
 	 */
 	private async probeDataProfile(): Promise<CloudProfile> {
 		try {
@@ -794,7 +794,7 @@ class CloudConnection {
 			if (id && typeof entry.ak === "string" && entry.ak) {
 				this.stationAkMap.set(id, entry.ak);
 			}
-			return { ...entry, id, name: typeof entry.name === "string" ? entry.name : "" } as CloudStation;
+			return { ...entry, id, name: typeof entry.name === "string" ? entry.name : "" };
 		});
 	}
 
