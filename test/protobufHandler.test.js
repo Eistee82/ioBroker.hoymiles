@@ -813,7 +813,9 @@ describe("protobufHandler – additional decode methods", function () {
 		it("encodeCloudCommandStatus echoes mi_sns_sucs for the version query (action 4)", function () {
 			// inverter SN 1412A01CEDE4 as int64 == 22070228217316 (captured live)
 			const miSn = parseInt("1412A01CEDE4", 16);
-			const parsed = handler.parseResponse(handler.encodeCloudCommandStatus(1700000000, "DTU123", 4, 50628399, [miSn]));
+			const parsed = handler.parseResponse(
+				handler.encodeCloudCommandStatus(1700000000, "DTU123", 4, 50628399, [miSn]),
+			);
 			assert.strictEqual(parsed.cmdHigh, 0x22);
 			assert.strictEqual(parsed.cmdLow, 0x06);
 			const ReqDTO = handler.protos.CommandPB.lookupType("CommandStatusReqDTO");

@@ -1472,14 +1472,19 @@ class DeviceContext {
 			}
 
 			// All packages received → assemble in order and decode
-			const blob = Buffer.concat(
+			const assembled = Buffer.concat(
 				[...this.gridChunks.keys()].sort((a, b) => a - b).map(k => this.gridChunks.get(k)!),
 			);
 			this.gridChunks.clear();
-			if (blob.length < 4) {
+			if (assembled.length < 4) {
 				return;
 			}
-			this.gridBlob = blob; // cache (big-endian) to answer cloud-relay grid-profile reads
+			// The local DevConfigFetch `data` field is the grid file (big-endian) followed by a
+			// 2-byte CRC-16 trailer of that grid file. The cloud's grid-file blob (and our decode)
+			// is the grid file ONLY — the CRC lives in a separate field. Strip the trailer so the
+			// relay serves the exact 112-byte cloud format, not 114 bytes (which the app can't show).
+			const blob = assembled.subarray(0, assembled.length - 2);
+			this.gridBlob = blob; // cache (big-endian, no trailer) to answer cloud-relay grid-profile reads
 			this.adapter.log.debug(`[${this.deviceId || this.host}] [diag] grid profile blob: ${blob.toString("hex")}`);
 			const decoded = decodeGridProfile(blob);
 			const entries: Array<[string, ioBroker.StateValue]> = [["gridProfile.standard", decoded.standard]];

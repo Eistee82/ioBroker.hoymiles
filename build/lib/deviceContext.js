@@ -1023,11 +1023,12 @@ class DeviceContext {
                     .catch(e => this.adapter.log.debug(`[${this.deviceId}] grid profile next-pkg failed: ${errorMessage(e)}`));
                 return;
             }
-            const blob = Buffer.concat([...this.gridChunks.keys()].sort((a, b) => a - b).map(k => this.gridChunks.get(k)));
+            const assembled = Buffer.concat([...this.gridChunks.keys()].sort((a, b) => a - b).map(k => this.gridChunks.get(k)));
             this.gridChunks.clear();
-            if (blob.length < 4) {
+            if (assembled.length < 4) {
                 return;
             }
+            const blob = assembled.subarray(0, assembled.length - 2);
             this.gridBlob = blob;
             this.adapter.log.debug(`[${this.deviceId || this.host}] [diag] grid profile blob: ${blob.toString("hex")}`);
             const decoded = decodeGridProfile(blob);
