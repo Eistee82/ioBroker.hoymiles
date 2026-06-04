@@ -139,7 +139,7 @@ Cloud stations create aggregated device nodes (e.g. `hoymiles.0.station-12345.*`
 - (@Eistee82) S-Miles Home account support: home login (HTTP 403 treated as the "home" verdict), per-station data-center routing for lat/lon/address (incl. `pvm-ext/station-ak/find`), and `warn_data` / timestamps / firmware versions recovered from the `realtime_c` and firmware-compare fallbacks
 - (@Eistee82) Cloud fixes: offline inverters no longer shown as online, station timestamps converted to UTC, new `station-<id>.warn.*` flags, per-station daily firmware check, `warn.deviceAlarm` relabelled "Inverter alarm" (`warn.powerLimited` is installer-only)
 - (@Eistee82) Add anonymized `[diag]` debug logging of raw cloud responses (serials/e-mail hashed, coordinates/address redacted) for safe forum bug reports
-- (@Eistee82) Maintenance: CI/tsconfig to Node 22/24, bump dev deps (`@iobroker/eslint-config`, `rimraf`) + npm `overrides` for the transitive protobufjs/serialize-javascript advisories, admin i18n placeholder key, CHANGELOG_OLD link
+- (@Eistee82) Maintenance: CI/tsconfig to Node 22/24, bump dev deps (`@iobroker/eslint-config`, `rimraf`, `@alcalzone/release-script` 5.2.1 per repochecker E0036) + npm `overrides` for the transitive protobufjs/serialize-javascript advisories, admin i18n placeholder key, CHANGELOG_OLD link
 
 ### 0.3.5 (2026-05-13)
 - (copilot) Adapter requires node.js >= 22 now
