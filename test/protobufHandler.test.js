@@ -775,6 +775,18 @@ describe("protobufHandler – additional decode methods", function () {
 			assert.strictEqual(obj.transactionId, 9999);
 			assert.strictEqual(obj.totalPackages, 1);
 			assert.strictEqual(obj.currentPackage, 1);
+			assert.strictEqual(obj.crc, crc16(data), "crc must be CRC-16/Modbus over the data blob");
+		});
+
+		it("encodeGridProfileResponse crc matches the captured DTU value (20325 for the real LE blob)", function () {
+			const leBlob = Buffer.from(
+				"000301200a00fc0830071e003b0b01000b041e00e209001088138e1201001e1401000020010003305802e209a30792138e120040d0071000085001009c13900110009c137413027001001027008000005b082c01b70841099d092c01009000005f0000b00000f401a1ff02a000000000",
+				"hex",
+			);
+			const frame = handler.encodeGridProfileResponse(1700000000, "DTU", "MI", 1, leBlob);
+			const ReqDTO = handler.protos.DevConfig.lookupType("DevConfigFetchReqDTO");
+			const obj = ReqDTO.toObject(ReqDTO.decode(handler.parseResponse(frame).payload), { longs: Number });
+			assert.strictEqual(obj.crc, 20325);
 		});
 
 		it("encodeCloudCommandAck carries dtuSn/action/tid via 0x22 0x05", function () {

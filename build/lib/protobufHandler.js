@@ -336,6 +336,7 @@ class ProtobufHandler {
             requestTime: timestamp,
             transactionId: tid,
             data,
+            crc: crc16(data),
             dtuSn,
             devSn,
             totalPackages: 1,

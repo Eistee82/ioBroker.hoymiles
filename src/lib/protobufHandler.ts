@@ -693,6 +693,7 @@ class ProtobufHandler {
 			requestTime: timestamp,
 			transactionId: tid,
 			data,
+			crc: crc16(data), // CRC-16/Modbus over the (little-endian) blob — matches the real DTU
 			dtuSn,
 			devSn,
 			totalPackages: 1,
