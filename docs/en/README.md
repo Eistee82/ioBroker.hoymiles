@@ -247,17 +247,17 @@ PV channels are created dynamically based on the inverter model (1T = 1 channel,
 
 ### `station-<id>.warn.*` — Station Warnings (cloud)
 
-Grid- and meter-level warning flags from the cloud's `station/find` record. All boolean — `true` means the condition is currently active. Installer accounts read the flags from `station/find`; on S-Miles Home accounts (where `find_c` omits them) the adapter falls back to the `realtime_c` response, which carries the same `warn_data` block. The states only appear once the cloud delivers a `warn_data` block from either source.
+Grid- and meter-level warning flags from the cloud's `station/find` record. All boolean — `true` means the condition is currently active. Installer accounts read the flags from `station/find`; on S-Miles Home accounts (where `find_c` omits them) the adapter falls back to the `realtime_c` response. That fallback block carries six of the flags — but **not** `warn.powerLimited`, which only exists in the installer `station/find` record — so on home accounts `warn.powerLimited` stays `false` even when curtailment is active. The states only appear once the cloud delivers a `warn_data` block from either source.
 
 | State | Type | Description |
 |-------|------|-------------|
 | `warn.stationOffline` | boolean | Station offline / supply voltage off |
 | `warn.gridUnstable` | boolean | Grid voltage unstable |
 | `warn.gridFault` | boolean | Grid fault / grid abnormal |
-| `warn.deviceAlarm` | boolean | Device alarm — an inverter has an active fault |
+| `warn.deviceAlarm` | boolean | Inverter alarm — an inverter has an active fault (e.g. "PVx no input" when a DC string is disconnected). The same condition surfaces locally and faster under `alarms.lastCode`/`alarms.lastMessage` |
 | `warn.deviceIdWarning` | boolean | Device ID warning (ID mismatch / anti-theft) |
 | `warn.meterFault` | boolean | Meter fault / meter warning |
-| `warn.powerLimited` | boolean | Power output limited (curtailment / power limit active) |
+| `warn.powerLimited` | boolean | Power output limited (curtailment / power limit active). **Installer accounts only** — not delivered on home accounts |
 
 ### `<dtuSerial>.alarms.*` — Alarm Data (per DTU, local)
 

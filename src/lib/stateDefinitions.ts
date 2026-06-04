@@ -271,11 +271,15 @@ const stationStates: StateDefinition[] = [
 	n("weather.sunrise", "Sunrise", "Sonnenaufgang", "date.sunrise", ""),
 	n("weather.sunset", "Sunset", "Sonnenuntergang", "date.sunset", ""),
 
-	// Station warnings (warn_data from station/find — cloud only)
+	// Station warnings (warn_data — cloud only). Field meanings verified against the
+	// S-Miles app decompile. `l3_warn` aggregates microinverter alarms (e.g. "PVx no
+	// input" when a string is pulled), hence "Inverter alarm". `powerLimited`/`pw_off`
+	// is only present in the installer `station/find` record — the home `realtime_c`
+	// fallback omits it, so it stays false on home accounts (see README).
 	b("warn.stationOffline", "Station offline", "Anlage offline", "indicator.alarm"),
 	b("warn.gridUnstable", "Grid voltage unstable", "Netzspannung instabil", "indicator.alarm"),
 	b("warn.gridFault", "Grid fault", "Netzfehler", "indicator.alarm"),
-	b("warn.deviceAlarm", "Device alarm", "Gerätealarm", "indicator.alarm"),
+	b("warn.deviceAlarm", "Inverter alarm", "Wechselrichter-Alarm", "indicator.alarm"),
 	b("warn.deviceIdWarning", "Device ID warning", "Geräte-ID-Warnung", "indicator.alarm"),
 	b("warn.meterFault", "Meter fault", "Zählerfehler", "indicator.alarm"),
 	b("warn.powerLimited", "Power output limited", "Leistungsreduktion aktiv", "indicator.alarm"),
@@ -304,7 +308,7 @@ function buildStateCommon(def: StateDefinition): ioBroker.StateCommon {
 		write: !!def.write,
 		def: def.type === "boolean" ? false : def.type === "number" ? 0 : "",
 		states: def.states,
-	} as ioBroker.StateCommon;
+	};
 }
 
 export type { ChannelDefinition, StateDefinition };

@@ -247,17 +247,17 @@ PV-Channels werden dynamisch basierend auf dem Wechselrichter-Modell erstellt (1
 
 ### `station-<id>.warn.*` — Anlagen-Warnungen (Cloud)
 
-Netz- und Zähler-Warnflags aus dem Cloud-Datensatz `station/find`. Alle boolesch — `true` bedeutet, die Bedingung ist gerade aktiv. Bei Installer-Konten kommen die Flags aus `station/find`; bei S-Miles-Home-Konten (wo `find_c` sie auslässt) fällt der Adapter auf die `realtime_c`-Antwort zurück, die denselben `warn_data`-Block trägt. Die States erscheinen erst, sobald die Cloud aus einer der beiden Quellen einen `warn_data`-Block liefert.
+Netz- und Zähler-Warnflags aus dem Cloud-Datensatz `station/find`. Alle boolesch — `true` bedeutet, die Bedingung ist gerade aktiv. Bei Installer-Konten kommen die Flags aus `station/find`; bei S-Miles-Home-Konten (wo `find_c` sie auslässt) fällt der Adapter auf die `realtime_c`-Antwort zurück. Dieser Fallback-Block trägt sechs der Flags — aber **nicht** `warn.powerLimited`, das es nur im Installer-Datensatz `station/find` gibt — daher bleibt `warn.powerLimited` bei Home-Konten auch bei aktiver Drosselung `false`. Die States erscheinen erst, sobald die Cloud aus einer der beiden Quellen einen `warn_data`-Block liefert.
 
 | State | Typ | Beschreibung |
 |-------|-----|--------------|
 | `warn.stationOffline` | boolean | Anlage offline / Netzspannung weg |
 | `warn.gridUnstable` | boolean | Netzspannung instabil |
 | `warn.gridFault` | boolean | Netzfehler / Netz-Anomalie |
-| `warn.deviceAlarm` | boolean | Gerätealarm — ein Wechselrichter hat eine aktive Störung |
+| `warn.deviceAlarm` | boolean | Wechselrichter-Alarm — ein Wechselrichter hat eine aktive Störung (z. B. „PVx kein Eingang", wenn ein DC-Strang gezogen wird). Dieselbe Bedingung erscheint lokal und schneller unter `alarms.lastCode`/`alarms.lastMessage` |
 | `warn.deviceIdWarning` | boolean | Geräte-ID-Warnung (ID-Konflikt / Diebstahlschutz) |
 | `warn.meterFault` | boolean | Zählerfehler / Zähler-Warnung |
-| `warn.powerLimited` | boolean | Leistungsreduktion aktiv (Drosselung / Leistungslimit) |
+| `warn.powerLimited` | boolean | Leistungsreduktion aktiv (Drosselung / Leistungslimit). **Nur Installer-Konten** — bei Home-Konten nicht geliefert |
 
 ### `<dtuSerial>.alarms.*` — Alarmdaten (pro DTU, lokal)
 

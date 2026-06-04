@@ -135,6 +135,11 @@ Cloud stations create aggregated device nodes (e.g. `hoymiles.0.station-12345.*`
 
 ## Changelog
 ### **WORK IN PROGRESS**
+- (@Eistee82) Rename the `station-<id>.warn.deviceAlarm` label to "Inverter alarm" and document (verified against the S-Miles app decompile) that it aggregates microinverter alarms — e.g. "PVx no input" when a DC string is disconnected — the same condition that surfaces locally and faster under `alarms.lastCode` / `alarms.lastMessage`
+- (@Eistee82) Document that `station-<id>.warn.powerLimited` (`pw_off`) is delivered for installer accounts only — the S-Miles Home `realtime_c` fallback omits the field, so it stays `false` on home accounts even when curtailment is active
+- (@Eistee82) Add the `email@example.com` placeholder key to all 11 admin i18n files (repochecker W5612)
+- (@Eistee82) Align `@tsconfig/node20` → `@tsconfig/node22` and update `tsconfig.json` to match `engines.node >= 22` (repochecker W0086/W0090)
+- (@Eistee82) Bump dev dependencies `@iobroker/eslint-config` 2.2.0 → 2.3.4 and `rimraf` 6.0.0 → 6.1.3, and remove the unnecessary type assertions newly flagged by the stricter eslint ruleset
 - (@Eistee82) Fix `station-<id>.warn.*` states staying empty on S-Miles Home accounts: the `find_c` station-details record omits `warn_data`, but the home realtime response (`realtime_c`) carries the same flags — the cloud poller now falls back to that source so home accounts populate `warn.stationOffline` / `warn.gridFault` / etc. the same way installer accounts do
 - (@Eistee82) Fix S-Miles Home station timestamps showing ~2h off: `find_c` omits `local_time` so the per-station UTC-offset derivation defaulted to 0h; the offset is now also derived from `realtime_c`'s `local_time` field, restoring correct conversion of `info.lastCloudUpdate` / `lastDataTime` for home accounts
 - (@Eistee82) Populate `dtu.swVersion` / `inverter.swVersion` for S-Miles Home accounts from the daily firmware-compare call: the home device-tree returns empty `soft_ver`, so without this fallback those states stayed blank in the object tree even though the version was available in the cloud
