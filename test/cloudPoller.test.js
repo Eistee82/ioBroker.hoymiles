@@ -1822,6 +1822,58 @@ describe("CloudPoller – freshness & re-online", function () {
 		poller.stop();
 	});
 
+	it("reports stationOffline=false when s_uoff=true but realtime data is fresh (relay-bump transient)", async function () {
+		const writes = [];
+		const adapter = makeMockAdapter();
+		adapter.setStateAsync = async (id, state) => {
+			writes.push({ id, state });
+		};
+		const cloud = makeMockCloud();
+		cloud.getStationRealtime = async () => realtime(wallClock(new Date())); // fresh upload
+		cloud.getStationDetails = async () => ({ warn_data: { s_uoff: true } }); // cloud transiently flags offline
+		cloud.getDeviceTree = async () => [];
+		const poller = new CloudPoller({
+			cloud,
+			adapter,
+			devices: new Map(),
+			stationDevices: new Set([42]),
+			hasRelay: false,
+			slowPollFactor: 6,
+		});
+
+		await poller.poll(true); // force a slow poll so pollStationDetails runs
+		const off = writes.find(w => w.id === "station-42.warn.stationOffline");
+		assert.ok(off, "warn.stationOffline should be written");
+		assert.strictEqual(off.state, false, "fresh data must override a transient s_uoff=true → stationOffline false");
+		poller.stop();
+	});
+
+	it("reports stationOffline=true only when s_uoff=true AND data is stale", async function () {
+		const writes = [];
+		const adapter = makeMockAdapter();
+		adapter.setStateAsync = async (id, state) => {
+			writes.push({ id, state });
+		};
+		const cloud = makeMockCloud();
+		cloud.getStationRealtime = async () => realtime("2020-01-01 00:00:00"); // stale
+		cloud.getStationDetails = async () => ({ warn_data: { s_uoff: true } });
+		cloud.getDeviceTree = async () => [];
+		const poller = new CloudPoller({
+			cloud,
+			adapter,
+			devices: new Map(),
+			stationDevices: new Set([42]),
+			hasRelay: false,
+			slowPollFactor: 6,
+		});
+
+		await poller.poll(true);
+		const off = writes.find(w => w.id === "station-42.warn.stationOffline");
+		assert.ok(off, "warn.stationOffline should be written");
+		assert.strictEqual(off.state, true, "stale data + s_uoff=true → stationOffline true");
+		poller.stop();
+	});
+
 	it("flags stale cloud measurements with quality 0x42 (and fresh ones with 0x00)", async function () {
 		const writes = [];
 		const adapter = makeMockAdapter();

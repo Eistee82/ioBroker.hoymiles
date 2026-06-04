@@ -251,7 +251,7 @@ Netz- und Zähler-Warnflags aus dem Cloud-Datensatz `station/find`. Alle boolesc
 
 | State | Typ | Beschreibung |
 |-------|-----|--------------|
-| `warn.stationOffline` | boolean | Anlage offline / Netzspannung weg |
+| `warn.stationOffline` | boolean | Anlage offline / Netzspannung weg. Wird gegen die Daten-Frische gegengeprüft: eine Anlage, die noch aktuelle Daten hochlädt, wird nie als offline gemeldet — auch wenn die Cloud kurzzeitig `s_uoff` setzt (z.B. während das Cloud-Relay beim Adapter-Start die DTU-Verbindung übernimmt) |
 | `warn.gridUnstable` | boolean | Netzspannung instabil |
 | `warn.gridFault` | boolean | Netzfehler / Netz-Anomalie |
 | `warn.deviceAlarm` | boolean | Wechselrichter-Alarm — ein Wechselrichter hat eine aktive Störung (z. B. „PVx kein Eingang", wenn ein DC-Strang gezogen wird). Dieselbe Bedingung erscheint lokal und schneller unter `alarms.lastCode`/`alarms.lastMessage` |

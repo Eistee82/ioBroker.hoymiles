@@ -251,7 +251,7 @@ Grid- and meter-level warning flags from the cloud's `station/find` record. All 
 
 | State | Type | Description |
 |-------|------|-------------|
-| `warn.stationOffline` | boolean | Station offline / supply voltage off |
+| `warn.stationOffline` | boolean | Station offline / supply voltage off. Cross-checked against realtime data freshness: a station that is still uploading recent data is never reported offline, even if the cloud briefly flags `s_uoff` (e.g. while the cloud relay takes over the DTU's uplink on adapter start) |
 | `warn.gridUnstable` | boolean | Grid voltage unstable |
 | `warn.gridFault` | boolean | Grid fault / grid abnormal |
 | `warn.deviceAlarm` | boolean | Inverter alarm — an inverter has an active fault (e.g. "PVx no input" when a DC string is disconnected). The same condition surfaces locally and faster under `alarms.lastCode`/`alarms.lastMessage` |

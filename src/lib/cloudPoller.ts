@@ -414,7 +414,7 @@ class CloudPoller {
 		// Station details run BEFORE the realtime states on a slow poll: they cache the
 		// station's UTC offset that setStationRealtimeStates needs to convert data_time.
 		if (slowPoll) {
-			await this.pollStationDetails(stationId, deviceId, data);
+			await this.pollStationDetails(stationId, deviceId, data, online);
 		}
 		await this.setStationRealtimeStates(stationId, deviceId, data, online);
 
@@ -495,6 +495,7 @@ class CloudPoller {
 		stationId: number,
 		deviceId: string,
 		realtimeData: Awaited<ReturnType<CloudConnection["getStationRealtime"]>>,
+		online: boolean,
 	): Promise<void> {
 		try {
 			const details = await this.cloud.getStationDetails(stationId);
@@ -552,6 +553,16 @@ class CloudPoller {
 			const wd = details.warn_data ?? realtimeData.warn_data;
 			const wdSource = details.warn_data ? "station/find" : realtimeData.warn_data ? "realtime (home)" : "absent";
 			this.adapter.log.debug(`[diag] station ${stationId} warn_data: ${wdSource}`);
+			// Cross-check s_uoff against data freshness: the cloud briefly flags s_uoff=true when
+			// the DTU's native cloud link is bumped (e.g. our relay taking over on adapter start),
+			// even though the station keeps uploading. A station with fresh realtime data is
+			// demonstrably NOT offline, so trust freshness over a transient/stale s_uoff flag.
+			const stationOffline = online ? false : wd?.s_uoff;
+			if (online && wd?.s_uoff) {
+				this.adapter.log.debug(
+					`[diag] station ${stationId}: s_uoff=true but realtime data is fresh → reporting stationOffline=false`,
+				);
+			}
 			await Promise.all([
 				w("info.stationName", details.name || null),
 				w("info.stationId", stationId),
@@ -567,7 +578,7 @@ class CloudPoller {
 				// Income calculations require a price > 0; otherwise skip so we don't create a meaningless 0-state.
 				w("grid.todayIncome", price ? Math.round(toKwh(realtimeData.today_eq) * price * 100) / 100 : null),
 				w("grid.totalIncome", price ? Math.round(toKwh(realtimeData.total_eq) * price * 100) / 100 : null),
-				w("warn.stationOffline", wd?.s_uoff),
+				w("warn.stationOffline", stationOffline),
 				w("warn.gridUnstable", wd?.s_ustable),
 				w("warn.gridFault", wd?.g_warn),
 				w("warn.deviceAlarm", wd?.l3_warn),

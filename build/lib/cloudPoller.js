@@ -252,7 +252,7 @@ class CloudPoller {
         }
         const slowPoll = isSlowPoll || cameOnline;
         if (slowPoll) {
-            await this.pollStationDetails(stationId, deviceId, data);
+            await this.pollStationDetails(stationId, deviceId, data, online);
         }
         await this.setStationRealtimeStates(stationId, deviceId, data, online);
         if (slowPoll) {
@@ -293,7 +293,7 @@ class CloudPoller {
             w("info.lastDataTime", stationWallClockToEpoch(data.last_data_time, offsetMs), 0x00),
         ]);
     }
-    async pollStationDetails(stationId, deviceId, realtimeData) {
+    async pollStationDetails(stationId, deviceId, realtimeData, online) {
         try {
             const details = await this.cloud.getStationDetails(stationId);
             const w = (suffix, value) => this.writeStationState(deviceId, suffix, value);
@@ -332,6 +332,10 @@ class CloudPoller {
             const wd = details.warn_data ?? realtimeData.warn_data;
             const wdSource = details.warn_data ? "station/find" : realtimeData.warn_data ? "realtime (home)" : "absent";
             this.adapter.log.debug(`[diag] station ${stationId} warn_data: ${wdSource}`);
+            const stationOffline = online ? false : wd?.s_uoff;
+            if (online && wd?.s_uoff) {
+                this.adapter.log.debug(`[diag] station ${stationId}: s_uoff=true but realtime data is fresh → reporting stationOffline=false`);
+            }
             await Promise.all([
                 w("info.stationName", details.name || null),
                 w("info.stationId", stationId),
@@ -346,7 +350,7 @@ class CloudPoller {
                 w("grid.currency", details.money_unit || null),
                 w("grid.todayIncome", price ? Math.round(toKwh(realtimeData.today_eq) * price * 100) / 100 : null),
                 w("grid.totalIncome", price ? Math.round(toKwh(realtimeData.total_eq) * price * 100) / 100 : null),
-                w("warn.stationOffline", wd?.s_uoff),
+                w("warn.stationOffline", stationOffline),
                 w("warn.gridUnstable", wd?.s_ustable),
                 w("warn.gridFault", wd?.g_warn),
                 w("warn.deviceAlarm", wd?.l3_warn),
