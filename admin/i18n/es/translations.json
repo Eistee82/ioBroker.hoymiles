@@ -26,5 +26,6 @@
     "tabLocal": "Conexión local",
     "testCloudLoginButton": "Probar login en la nube",
     "testCloudLoginHelp": "Ejecuta las cuatro fases del login (region_c, pre-insp, login, probe) e informa v y presencia de salt de pre-insp, si el login produjo un token y qué perfil asigna la sonda (installer / home). El resultado se muestra en una ventana emergente y también se escribe en el log del adaptador — útil para informes de errores en el foro.",
-    "testConnectionButton": "Probar conexión"
+    "testConnectionButton": "Probar conexión",
+    "email@example.com": "email@example.com"
 }

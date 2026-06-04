@@ -51,7 +51,7 @@ Login ist ein einzelner v3-Flow plus anschließender Profil-Probe (`region_c →
 - **pre-insp + login** entscheiden die Auth-Variante. Hoymiles hat 2026 alle Konten auf Argon2id (`v=3 + Salt`) vereinheitlicht — Installer-, Enduser- und Home-Konten nutzen heute dieselbe Argon2id-Challenge (Parameter aus der S-Miles-Home-Android-App: `t=3, m=32 MiB, p=1, hashLen=32, V13`). `v` ist damit kein Profil-Signal mehr. Die klassische `md5hex(password).sha256base64(password)`-Challenge bleibt als Fallback für Regionen, die noch `v=2` ausliefern.
 - **probe** (`/pvm/.../select_by_page`) entscheidet anschließend, welche Daten-API der Server für dieses Konto freigibt:
   - probe akzeptiert → **installer**-Profil — das Konto funktioniert auf `global.hoymiles.com` und nutzt die volle `/pvm/...`-Web-API inkl. `latitude`/`longitude`/`address`/`local_time`/`status`/`warn_data` und Firmware-Versionsstrings.
-  - probe abgelehnt (Server: *„can only be used for logging in to the S-Miles Home app"*) → **home**-Profil — vom Server auf `/pvmc/.../*_c` beschränkt. Diese Surface liefert die obigen Felder nicht, dafür aber Rückspeise-/Eigenverbrauchs-Energie und Strom-Tarif. Für die fehlenden Felder legt der Adapter **keine** States an — sie erscheinen nur, wenn die jeweilige Antwort den Wert tatsächlich enthält.
+  - probe abgelehnt (Server: *„can only be used for logging in to the S-Miles Home app"*) → **home**-Profil — vom Server auf `/pvmc/.../*_c` beschränkt. Diese Surface liefert die obigen Felder nicht, dafür aber Rückspeise-/Eigenverbrauchs-Energie und Strom-Tarif. Für die fehlenden Felder legt der Adapter **keine** States an — sie erscheinen nur, wenn die jeweilige Antwort den Wert tatsächlich enthält. `latitude` / `longitude` / `address` werden für Home-Konten zusätzlich über den `pvm-ext/station-ak/find`-Endpoint nachgeladen, den auch die S-Miles-Home-App selbst nutzt — damit funktioniert die Wetter-Abfrage.
 
 > **Hinweis:** `dataeu.hoymiles.com:10081` ist der EU-Cloud-Relay-Server, an den DTUs ihre Daten pushen — **kein** User-Login-Server. Der Adapter regelt das Cloud-Relay automatisch (siehe *Cloud-Relay*).
 
@@ -245,6 +245,20 @@ PV-Channels werden dynamisch basierend auf dem Wechselrichter-Modell erstellt (1
 
 > **Wetter-Icon-Codes:** Die Codes folgen der [OpenWeatherMap-Konvention](https://openweathermap.org/weather-conditions). Um das Icon als Bild anzuzeigen: `https://openweathermap.org/img/wn/{icon}@2x.png`
 
+### `station-<id>.warn.*` — Anlagen-Warnungen (Cloud)
+
+Netz- und Zähler-Warnflags aus dem Cloud-Datensatz `station/find`. Alle boolesch — `true` bedeutet, die Bedingung ist gerade aktiv. Bei Installer-Konten kommen die Flags aus `station/find`; bei S-Miles-Home-Konten (wo `find_c` sie auslässt) fällt der Adapter auf die `realtime_c`-Antwort zurück. Dieser Fallback-Block trägt sechs der Flags — aber **nicht** `warn.powerLimited`, das es nur im Installer-Datensatz `station/find` gibt — daher bleibt `warn.powerLimited` bei Home-Konten auch bei aktiver Drosselung `false`. Die States erscheinen erst, sobald die Cloud aus einer der beiden Quellen einen `warn_data`-Block liefert.
+
+| State | Typ | Beschreibung |
+|-------|-----|--------------|
+| `warn.stationOffline` | boolean | Anlage offline / Netzspannung weg |
+| `warn.gridUnstable` | boolean | Netzspannung instabil |
+| `warn.gridFault` | boolean | Netzfehler / Netz-Anomalie |
+| `warn.deviceAlarm` | boolean | Wechselrichter-Alarm — ein Wechselrichter hat eine aktive Störung (z. B. „PVx kein Eingang", wenn ein DC-Strang gezogen wird). Dieselbe Bedingung erscheint lokal und schneller unter `alarms.lastCode`/`alarms.lastMessage` |
+| `warn.deviceIdWarning` | boolean | Geräte-ID-Warnung (ID-Konflikt / Diebstahlschutz) |
+| `warn.meterFault` | boolean | Zählerfehler / Zähler-Warnung |
+| `warn.powerLimited` | boolean | Leistungsreduktion aktiv (Drosselung / Leistungslimit). **Nur Installer-Konten** — bei Home-Konten nicht geliefert |
+
 ### `<dtuSerial>.alarms.*` — Alarmdaten (pro DTU, lokal)
 
 | Datenpunkt | Typ | Beschreibung |
@@ -357,3 +371,13 @@ Protokoll-Reverse-Engineering durch die Community:
 - Prüfe E-Mail und Passwort des S-Miles Kontos
 - Stelle sicher, dass du dich unter https://global.hoymiles.com/website/login einloggen kannst
 - Bei einem dauerhaften Authentifizierungsfehler (falsche Zugangsdaten, gesperrtes Konto) stoppt der Adapter den Wiederholungs-Loop, um weitere Kontosperren zu vermeiden. Der Fehler wird nach `info.cloudLastError` geschrieben und eine ioBroker-Alert-Notification (Scope `hoymiles`, Kategorie `cloudAuth`) ausgelöst. Korrigiere die Zugangsdaten und speichere die Konfiguration, um den State zu löschen und Wiederholungsversuche fortzusetzen.
+
+### Einen Fehler melden
+
+Damit aus „geht nicht" etwas Behebbares wird, erzeugt der Adapter ein gezieltes, **anonymisiertes** Diagnose-Log:
+
+1. Öffne im ioBroker-Admin die Instanz-Einstellungen des Adapters und setze das **Log-Level** auf `debug`.
+2. Starte die Instanz neu und lass sie ein paar Minuten laufen (ein bis zwei Cloud-Poll-Zyklen).
+3. Exportiere das Log und filtere die Zeilen mit der Markierung `[diag]` heraus.
+
+Die `[diag]`-Zeilen enthalten die rohen Cloud-API-Antworten (Login-Ablauf, Anlagenliste/-details, Gerätebaum, Echtzeit, Firmware) sowie die Entscheidungs-Ergebnisse des Adapters. DTU-/Wechselrichter-Seriennummern und die Konto-E-Mail werden durch stabile Hash-Tokens ersetzt, GPS-Koordinaten / Adresse / Anlagenname werden geschwärzt — die `[diag]`-Zeilen sind also gefahrlos in einem öffentlichen Forum-Bugreport postbar. (Andere, nicht mit `[diag]` markierte Debug-Zeilen können weiterhin die echte Seriennummer enthalten — schick daher gezielt die `[diag]`-Zeilen.)

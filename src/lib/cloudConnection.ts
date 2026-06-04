@@ -1,19 +1,29 @@
-import { postJson, postBinary } from "./httpClient.js";
+import { postJson, postBinary, HttpError } from "./httpClient.js";
 import { parseChartResponse } from "./chartParser.js";
 import {
 	TOKEN_MAX_AGE_MS,
 	ENSURE_TOKEN_TIMEOUT_MS,
 	CLOUD_HOST_DEFAULT,
 	CLOUD_HOST_EU,
+	CLOUD_DC_HOSTS,
 	IAM_PRE_INSPECT_PATH,
 	IAM_LOGIN_V3_PATH,
 	IAM_REGION_PATH,
 	PROFILE_PROBE_PATH,
+	STATION_AK_FIND_PATH,
 	APP_USER_AGENT_PREFIX,
 	APP_VERSION,
 	APP_TID,
 } from "./constants.js";
-import { errorMessage, withTimeout, buildCredentialChallenges, buildArgon2Challenge } from "./utils.js";
+import {
+	errorMessage,
+	withTimeout,
+	buildCredentialChallenges,
+	buildArgon2Challenge,
+	anonymize,
+	sanitizeForLog,
+	safeJsonStringify,
+} from "./utils.js";
 
 /**
  * Cloud profile, determined by an authoritative probe against `/pvm/.../select_by_page`
@@ -147,6 +157,23 @@ interface CloudRealtimeData {
 	clp: number;
 	is_balance?: boolean;
 	is_reflux?: boolean;
+	/** Station wall-clock time ("YYYY-MM-DD HH:mm:ss"). Present on `realtime_c` (home), absent on installer. */
+	local_time?: string;
+	/**
+	 * Station-level grid/meter warning flags. Present on `realtime_c` (home — the
+	 * `find_c` details payload omits it), absent on the installer realtime response
+	 * (which carries warn_data in `station/find` instead).
+	 */
+	warn_data?: {
+		s_uoff?: boolean;
+		s_ustable?: boolean;
+		s_uid?: boolean;
+		l3_warn?: boolean;
+		g_warn?: boolean;
+		me_warn?: boolean;
+		pw_off?: boolean;
+		[key: string]: unknown;
+	};
 	[key: string]: unknown;
 }
 
@@ -164,7 +191,8 @@ interface CloudStationDetails {
 		module_max_power: number;
 		[key: string]: unknown;
 	};
-	warn_data: {
+	/** Station-level grid/meter warning flags. Absent on the home `find_c` record. */
+	warn_data?: {
 		s_uoff: boolean;
 		s_ustable: boolean;
 		s_uid: boolean;
@@ -175,8 +203,11 @@ interface CloudStationDetails {
 		[key: string]: unknown;
 	};
 	create_at: string;
-	timezone: { tz_name: string; offset: number };
-	local_time: string;
+	// `timezone` carries only a display name — the cloud exposes no machine-readable UTC
+	// offset anywhere in its station/realtime responses (verified against the S-Miles app).
+	timezone: { tz_name: string };
+	/** Station wall-clock time ("YYYY-MM-DD HH:mm:ss"), station-local zone. */
+	local_time?: string;
 	[key: string]: unknown;
 }
 
@@ -200,10 +231,40 @@ interface WeatherData {
 	sunset: number;
 }
 
+/**
+ * Response shape of `/pvm-ext/api/0/station-ak/find` — the supplementary endpoint
+ * the S-Miles Home app uses to fetch lat/lon/address for a station whose `find_c`
+ * record does not carry these fields. Verified against the balcony APK's `WeatherHelper`.
+ */
+interface CloudStationExtInfo {
+	id?: number;
+	latitude?: string;
+	longitude?: string;
+	address?: string;
+	[key: string]: unknown;
+}
+
+/** Per-device firmware entry from `upgrade/compare`. */
+interface FirmwareDevice {
+	/** Device serial (matches DTU sn for dev_type=1, inverter sn for dev_type=3). */
+	sn: string;
+	/** 1 = DTU, 3 = inverter. */
+	devType: number;
+	/** Packed integer current version. Format depends on devType (see formatDtuVersion/formatSwVersion). */
+	currentVer: number;
+	/** Packed integer target version. */
+	targetVer: number;
+	/** 1 when target > current (upgrade available). */
+	isUpgrade: number;
+}
+
 interface FirmwareStatus {
+	/** 1 when any device on this DTU has an upgrade available. */
 	upgrade: number;
 	done: number;
 	tid: string;
+	/** Per-device version details. Empty for the Web/installer endpoint which doesn't expose them. */
+	devices: FirmwareDevice[];
 }
 
 /**
@@ -247,6 +308,20 @@ class CloudConnection {
 	private profile: CloudProfile | null;
 	/** Last data-center returned by region_c (null = not yet queried, -1 = account unknown). */
 	private lastDc: number | null;
+	/**
+	 * Per-station data-center, populated by `getStationList()` from the `dc` field
+	 * each list entry carries. Drives `getStationHost()` so that station-scoped calls
+	 * (`find`, `select_device_of_tree`, realtime, firmware) route to the station's home
+	 * region — required because account-region replication is not guaranteed.
+	 */
+	private stationDcMap: Map<number, number>;
+	/**
+	 * Per-station access key from `select_by_page`. Required by the
+	 * `pvm-ext/station-ak/find` endpoint (Home-profile lat/lon/address).
+	 */
+	private stationAkMap: Map<number, string>;
+	/** Endpoint labels already dumped by `logResponseSample` — keeps the diag dump to once each. */
+	private loggedSamples: Set<string>;
 
 	private assertStationId(stationId: number): void {
 		if (!stationId || stationId <= 0) {
@@ -271,6 +346,26 @@ class CloudConnection {
 		this.baseUrl = CLOUD_HOST_DEFAULT;
 		this.profile = null;
 		this.lastDc = null;
+		this.stationDcMap = new Map();
+		this.stationAkMap = new Map();
+		this.loggedSamples = new Set();
+	}
+
+	/**
+	 * One-time anonymized debug dump of a raw cloud API response. Lets a forum bug
+	 * report carry the actual response structure (field names, `local_time`, `warn_data`,
+	 * `extend_data`, …) without leaking serials, coordinates, address or tokens — see
+	 * `sanitizeForLog`. Dumped once per `label` per session to keep the log readable.
+	 *
+	 * @param label - Stable endpoint label, e.g. `station-details`.
+	 * @param payload - Raw parsed response.
+	 */
+	private logResponseSample(label: string, payload: unknown): void {
+		if (this.loggedSamples.has(label)) {
+			return;
+		}
+		this.loggedSamples.add(label);
+		this.log(`[diag] ${label} response: ${safeJsonStringify(sanitizeForLog(payload), 20000)}`);
 	}
 
 	/** Currently active API base URL (changes if region_c redirects to a regional host). */
@@ -312,6 +407,30 @@ class CloudConnection {
 		return this.profile === "home" ? CLOUD_HOST_DEFAULT : this.baseUrl;
 	}
 
+	/**
+	 * Resolve the host for a station-scoped call. Falls back to the account-default
+	 * host when the station's `dc` is unknown or unmapped — so legacy code paths that
+	 * call station endpoints before `getStationList()` still work.
+	 *
+	 * @param stationId - Cloud station ID
+	 */
+	private getStationHost(stationId: number): string {
+		const dc = this.stationDcMap.get(stationId);
+		if (dc != null && CLOUD_DC_HOSTS[dc]) {
+			return CLOUD_DC_HOSTS[dc];
+		}
+		return this.getDataHost();
+	}
+
+	/**
+	 * Access key cached from the station listing; needed for `pvm-ext/station-ak/find`.
+	 *
+	 * @param stationId - Cloud station ID
+	 */
+	getStationAk(stationId: number): string | undefined {
+		return this.stationAkMap.get(stationId);
+	}
+
 	// --- Auth ---
 
 	/**
@@ -331,7 +450,7 @@ class CloudConnection {
 	 * v0 fallback was removed in 2026 — server uniformly rejects it as "app version is low".
 	 */
 	async login(): Promise<string> {
-		this.log(`Cloud login start (host=${this.baseUrl}, user=${this.user})`);
+		this.log(`[diag] Cloud login start (host=${this.baseUrl}, user=${anonymize(this.user, "acct")})`);
 
 		// Phase 1: region_c — sets baseUrl + dc. Non-fatal on failure (we still try
 		// v3 against the default host; dc=0 in the UA is a safe default).
@@ -355,7 +474,7 @@ class CloudConnection {
 			this.tokenTime = 0;
 			throw err;
 		}
-		this.log(`Cloud login success: profile=${this.profile} dc=${this.lastDc ?? "n/a"} host=${this.baseUrl}`);
+		this.log(`[diag] Cloud login success: profile=${this.profile} dc=${this.lastDc ?? "n/a"} host=${this.baseUrl}`);
 		return token;
 	}
 
@@ -365,7 +484,7 @@ class CloudConnection {
 	 * have a token, because pre-insp.v no longer maps 1:1 to the data-API surface.
 	 *
 	 * @returns Session token on success, or null if status=0 but data.token is empty
-	 * @throws CloudAuthError on permanent server-side rejection (wrong password, account locked)
+	 * @throws {CloudAuthError} on permanent server-side rejection (wrong password, account locked)
 	 */
 	private async tryLoginV3(): Promise<string | null> {
 		// Auth endpoints stay on the regional login host (this.baseUrl), separate from the
@@ -381,7 +500,7 @@ class CloudConnection {
 
 		const ch = salt ? await buildArgon2Challenge(this.credentialInput, salt) : this.credentials[0]; // Legacy md5/sha — same body the web portal sends.
 
-		this.log(`Cloud pre-insp: v=${v ?? "?"} saltPresent=${!!salt} dc=${preData.dc ?? "n/a"}`);
+		this.log(`[diag] Cloud pre-insp: v=${v ?? "?"} saltPresent=${!!salt} dc=${preData.dc ?? "n/a"}`);
 
 		const result = await this._post<{ token?: string }>(
 			IAM_LOGIN_V3_PATH,
@@ -399,26 +518,42 @@ class CloudConnection {
 	/**
 	 * Probe which data-API surface the account is allowed on. Hits `/pvm/.../select_by_page`
 	 * against `this.baseUrl` (regional host) — Web/Installer accounts get status=0, home
-	 * accounts get rejected by the server ("can only be used for logging in to the S-Miles
-	 * Home app" or similar). This replaces the pre-insp.v profile inference, which broke
-	 * after Hoymiles unified all accounts onto Argon2id in 2026.
+	 * accounts get rejected by the server. This replaces the pre-insp.v profile inference,
+	 * which broke after Hoymiles unified all accounts onto Argon2id in 2026.
+	 *
+	 * The rejection arrives in one of two shapes, BOTH meaning "home":
+	 * - HTTP 200 with a non-zero JSON `status` ("can only be used for logging in to the
+	 *   S-Miles Home app" or similar), or
+	 * - an HTTP 403 — the live cloud forbids Home accounts on the `/pvm/` web API outright.
+	 *   This is NOT a transport error; it is the definitive profile signal and must not
+	 *   abort the login (that bug locked every S-Miles Home account out completely).
 	 *
 	 * Must run AFTER token assignment — the endpoint requires authentication.
 	 *
-	 * @throws on transport/network errors. Caller must roll back token state.
+	 * @throws {Error} on genuine transport/network errors (timeout, DNS, 5xx). Caller rolls back token state.
 	 */
 	private async probeDataProfile(): Promise<CloudProfile> {
-		const result = await this._post<{ list?: unknown[] }>(
-			PROFILE_PROBE_PATH,
-			{ page: 1, page_size: 1 },
-			this.baseUrl,
-		);
-		if (result.status === "0") {
-			this.log(`Cloud profile probe: /pvm accepted → installer`);
-			return "installer";
+		try {
+			const result = await this._post<{ list?: unknown[] }>(
+				PROFILE_PROBE_PATH,
+				{ page: 1, page_size: 1 },
+				this.baseUrl,
+			);
+			if (result.status === "0") {
+				this.log(`[diag] Cloud profile probe: /pvm accepted → installer`);
+				return "installer";
+			}
+			this.log(
+				`[diag] Cloud profile probe: /pvm rejected (status=${result.status} msg="${result.message ?? ""}") → home`,
+			);
+			return "home";
+		} catch (err) {
+			if (err instanceof HttpError && err.statusCode === 403) {
+				this.log(`[diag] Cloud profile probe: /pvm returned HTTP 403 → home`);
+				return "home";
+			}
+			throw err;
 		}
-		this.log(`Cloud profile probe: /pvm rejected (status=${result.status} msg="${result.message ?? ""}") → home`);
-		return "home";
 	}
 
 	/**
@@ -432,22 +567,22 @@ class CloudConnection {
 			const result = await this._post<RegionData>(IAM_REGION_PATH, { email: this.user }, this.baseUrl);
 			if (result.status !== "0" || !result.data) {
 				this.log(
-					`Cloud region_c: status=${result.status} message="${result.message ?? ""}" — keeping host ${this.baseUrl}`,
+					`[diag] Cloud region_c: status=${result.status} message="${result.message ?? ""}" — keeping host ${this.baseUrl}`,
 				);
 				return;
 			}
 			const { login_url, dc } = result.data;
 			this.lastDc = typeof dc === "number" ? dc : null;
 			if (login_url && login_url !== this.baseUrl) {
-				this.log(`Cloud region_c: switching base URL ${this.baseUrl} → ${login_url} (dc=${dc})`);
+				this.log(`[diag] Cloud region_c: switching base URL ${this.baseUrl} → ${login_url} (dc=${dc})`);
 				this.baseUrl = login_url;
 			} else if (login_url) {
-				this.log(`Cloud region_c: confirmed host ${this.baseUrl} (dc=${dc})`);
+				this.log(`[diag] Cloud region_c: confirmed host ${this.baseUrl} (dc=${dc})`);
 			} else {
-				this.log(`Cloud region_c: empty login_url, dc=${dc} — keeping host ${this.baseUrl}`);
+				this.log(`[diag] Cloud region_c: empty login_url, dc=${dc} — keeping host ${this.baseUrl}`);
 			}
 		} catch (err) {
-			this.log(`Cloud region_c: ${errorMessage(err)} — keeping host ${this.baseUrl}`);
+			this.log(`[diag] Cloud region_c: ${errorMessage(err)} — keeping host ${this.baseUrl}`);
 		}
 	}
 
@@ -569,7 +704,24 @@ class CloudConnection {
 						profile: accepted ? "installer" : "home",
 					});
 				} catch (err) {
-					attempts.push({ flow: "probe", host: this.baseUrl, ok: false, message: errorMessage(err) });
+					// HTTP 403 is not a probe failure — it is the server's "home" verdict.
+					if (err instanceof HttpError && err.statusCode === 403) {
+						attempts.push({
+							flow: "probe",
+							host: this.baseUrl,
+							ok: true,
+							status: "403",
+							message: err.message,
+							profile: "home",
+						});
+					} else {
+						attempts.push({
+							flow: "probe",
+							host: this.baseUrl,
+							ok: false,
+							message: errorMessage(err),
+						});
+					}
 				}
 			}
 		} finally {
@@ -607,6 +759,8 @@ class CloudConnection {
 	disconnect(): void {
 		this.token = null;
 		this.profile = null;
+		this.stationDcMap.clear();
+		this.stationAkMap.clear();
 	}
 
 	// --- Data endpoints ---
@@ -624,14 +778,23 @@ class CloudConnection {
 			page: 1,
 			page_size: 100,
 		});
+		this.logResponseSample("station-list", result);
 		if (result.status !== "0") {
 			throw new Error(`Station list failed: ${result.message}`);
 		}
 		const rawList = result.data?.list ?? [];
+		this.stationDcMap.clear();
+		this.stationAkMap.clear();
 		return rawList.map(entry => {
 			// home: id arrives as `sid`. Preserve everything else so future fields stay accessible.
 			const id = typeof entry.id === "number" ? entry.id : typeof entry.sid === "number" ? entry.sid : 0;
-			return { ...entry, id, name: typeof entry.name === "string" ? entry.name : "" } as CloudStation;
+			if (id && typeof entry.dc === "number") {
+				this.stationDcMap.set(id, entry.dc);
+			}
+			if (id && typeof entry.ak === "string" && entry.ak) {
+				this.stationAkMap.set(id, entry.ak);
+			}
+			return { ...entry, id, name: typeof entry.name === "string" ? entry.name : "" };
 		});
 	}
 
@@ -650,10 +813,54 @@ class CloudConnection {
 		const path = isHome ? "/pvmc/api/0/station/find_c" : "/pvm/api/0/station/find";
 		const body = isHome ? { sid: stationId } : { id: stationId };
 		const result = await this._post(path, body);
+		this.logResponseSample("station-details", result);
 		if (result.status !== "0") {
 			throw new Error(`Station details failed: ${result.message}`);
 		}
 		return assertData<CloudStationDetails>(result.data, "Station details");
+	}
+
+	/**
+	 * Fetch supplementary station info (lat/lon/address) via the `pvm-ext` endpoint
+	 * the Home app uses. Required for Home-profile accounts because `find_c` does
+	 * not include coordinates, which leaves the weather pipeline empty.
+	 *
+	 * Needs the station's `ak` from `getStationList()`; returns `null` if `ak` is
+	 * not cached. Routes via the station's DC host like other station-scoped calls.
+	 *
+	 * @param stationId - Station ID
+	 */
+	async getStationExtInfo(stationId: number): Promise<CloudStationExtInfo | null> {
+		this.assertStationId(stationId);
+		const ak = this.stationAkMap.get(stationId);
+		if (!ak) {
+			return null;
+		}
+		await this.ensureToken();
+		const body = { sid: stationId, ak };
+		// The S-Miles app routes this call via the station's `dc` host (DCManager in the
+		// decompiled APK). We try the station-DC host first because that's where the real
+		// per-station lat/lon lives. If the token isn't accepted there (HTTP 4xx — account
+		// doesn't span regions), fall back to the account host so we don't break installs
+		// where region replication actually works.
+		const stationHost = this.getStationHost(stationId);
+		const accountHost = this.getDataHost();
+		const hosts = stationHost === accountHost ? [stationHost] : [stationHost, accountHost];
+		let lastError: Error | null = null;
+		for (const host of hosts) {
+			try {
+				const result = await this._post<CloudStationExtInfo>(STATION_AK_FIND_PATH, body, host);
+				this.logResponseSample("station-ext-info", result);
+				if (result.status !== "0") {
+					throw new Error(`Station ext-info failed: ${result.message}`);
+				}
+				return assertData<CloudStationExtInfo>(result.data, "Station ext-info");
+			} catch (err) {
+				lastError = err instanceof Error ? err : new Error(String(err));
+				this.log(`[diag] Station ext-info on ${host} failed: ${lastError.message}`);
+			}
+		}
+		throw lastError ?? new Error("Station ext-info failed");
 	}
 
 	/**
@@ -673,6 +880,9 @@ class CloudConnection {
 		const path = isHome ? "/pvmc/api/0/station/select_device_c" : "/pvm/api/0/station/select_device_of_tree";
 		const body = isHome ? { sid: stationId } : { id: stationId };
 		const result = await this._post(path, body);
+		// Dump the RAW response (before normalizeHomeTreeNode) so a home `_c` tree's
+		// real shape — `devices[]`, `extend_data.soft_num` — is visible in bug reports.
+		this.logResponseSample("device-tree", result);
 		if (result.status !== "0") {
 			throw new Error(`Device tree failed: ${result.message}`);
 		}
@@ -713,7 +923,9 @@ class CloudConnection {
 			});
 			return await parseChartResponse(rawBuf, this.log);
 		} catch (err) {
-			this.log(`Micro chart error: ${err instanceof Error ? err.stack || err.message : errorMessage(err)}`);
+			this.log(
+				`[diag] Micro chart error: ${err instanceof Error ? err.stack || err.message : errorMessage(err)}`,
+			);
 			return null;
 		}
 	}
@@ -759,7 +971,7 @@ class CloudConnection {
 			});
 			return await parseChartResponse(rawBuf, this.log);
 		} catch (err) {
-			this.log(`Module chart error: ${errorMessage(err)}`);
+			this.log(`[diag] Module chart error: ${errorMessage(err)}`);
 			return null;
 		}
 	}
@@ -781,6 +993,7 @@ class CloudConnection {
 				? "/pvmc/api/0/station_data/count_station_real_data_c"
 				: "/pvm-data/api/0/station/data/count_station_real_data";
 		const result = await this._post<CloudRealtimeData>(path, { sid: stationId });
+		this.logResponseSample("station-realtime", result);
 		if (result.status !== "0") {
 			throw new Error(`Realtime data failed: ${result.message}`);
 		}
@@ -828,19 +1041,44 @@ class CloudConnection {
 			// web shape:
 			upgrade?: number;
 			done?: number;
-			// home shape:
-			list?: Array<{ sn?: string; is_upgrade?: number; target_ver?: number; current_ver?: number }>;
+			// home shape (also observed on the web endpoint with the `list` field present):
+			list?: Array<{
+				sn?: string;
+				dev_type?: number;
+				is_upgrade?: number;
+				target_ver?: number;
+				current_ver?: number;
+			}>;
 		}>(path, { sid: stationId, dtu_sn: dtuSn });
+		this.logResponseSample("firmware-compare", result);
 		if (result.status !== "0") {
 			throw new Error(`Firmware check failed: ${result.message}`);
 		}
 		const data = result.data;
+		// Both endpoints return entries like { sn:"id:xxxx", dev_type, is_upgrade, current_ver, target_ver }
+		// — strip the "id:" prefix so callers can match the unprefixed DTU serials they hold.
+		const devices: FirmwareDevice[] = (data?.list ?? [])
+			.filter(e => typeof e?.sn === "string")
+			.map(e => ({
+				sn: (e.sn as string).replace(/^id:/, ""),
+				devType: e.dev_type ?? 0,
+				currentVer: e.current_ver ?? 0,
+				targetVer: e.target_ver ?? 0,
+				isUpgrade: e.is_upgrade ?? 0,
+			}));
 		if (isHome) {
-			// _c shape: per-device list. "upgrade" = ANY device on this DTU has is_upgrade>0.
-			const anyUpgrade = (data?.list ?? []).some(e => (e?.is_upgrade ?? 0) > 0);
-			return { upgrade: anyUpgrade ? 1 : 0, done: 0, tid: data?.tid ?? "" };
+			// _c shape: "upgrade" = ANY device on this DTU has is_upgrade>0.
+			const anyUpgrade = devices.some(d => d.isUpgrade > 0);
+			return { upgrade: anyUpgrade ? 1 : 0, done: 0, tid: data?.tid ?? "", devices };
 		}
-		return assertData<FirmwareStatus>(data ?? { upgrade: 0, done: 0, tid: "" }, "Firmware status");
+		// Web/installer shape carries top-level upgrade/done; keep the list as well if the server
+		// included it (recent firmware-compare responses do).
+		return {
+			upgrade: data?.upgrade ?? (devices.some(d => d.isUpgrade > 0) ? 1 : 0),
+			done: data?.done ?? 0,
+			tid: data?.tid ?? "",
+			devices,
+		};
 	}
 
 	// --- HTTP helpers ---

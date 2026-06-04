@@ -388,7 +388,7 @@ class CloudManager {
 				name: stationName,
 				statusStates: { onlineId: "info.stationStatus" },
 				icon: "hoymiles.png",
-			} as ioBroker.DeviceCommon,
+			},
 			native: { stationId },
 		});
 

@@ -1,10 +1,14 @@
 import assert from "node:assert";
 import {
+	anonymize,
 	clearTimer,
+	deriveStationTzOffsetMs,
 	errorMessage,
 	logOnError,
 	mapLimit,
 	safeJsonStringify,
+	sanitizeForLog,
+	stationWallClockToEpoch,
 	unixSeconds,
 	withTimeout,
 } from "../build/lib/utils.js";
@@ -323,5 +327,163 @@ describe("safeJsonStringify", function () {
 		const smallData = [1, 2, 3];
 		const result = safeJsonStringify(smallData);
 		assert.strictEqual(result, JSON.stringify(smallData));
+	});
+});
+
+// ============================================================
+// deriveStationTzOffsetMs
+// ============================================================
+describe("deriveStationTzOffsetMs", function () {
+	/**
+	 * Build a wall-clock string offsetH hours ahead of the current real UTC time.
+	 *
+	 * @param offsetH - Hours the simulated station is ahead of UTC (may be fractional/negative).
+	 */
+	function wallClock(offsetH) {
+		return new Date(Date.now() + offsetH * 3600000).toISOString().slice(0, 19).replace("T", " ");
+	}
+
+	it("returns +2h for a station 2 hours ahead of UTC (CEST)", function () {
+		assert.strictEqual(deriveStationTzOffsetMs(wallClock(2)), 2 * 3600000);
+	});
+
+	it("returns 0 for a station on UTC", function () {
+		assert.strictEqual(deriveStationTzOffsetMs(wallClock(0)), 0);
+	});
+
+	it("returns a negative offset for a station behind UTC", function () {
+		assert.strictEqual(deriveStationTzOffsetMs(wallClock(-5)), -5 * 3600000);
+	});
+
+	it("resolves a :30 offset (rounded to 15min)", function () {
+		assert.strictEqual(deriveStationTzOffsetMs(wallClock(5.5)), 5.5 * 3600000);
+	});
+
+	it("returns null for empty/nullish/garbage input", function () {
+		assert.strictEqual(deriveStationTzOffsetMs(""), null);
+		assert.strictEqual(deriveStationTzOffsetMs(undefined), null);
+		assert.strictEqual(deriveStationTzOffsetMs(null), null);
+		assert.strictEqual(deriveStationTzOffsetMs("not-a-date"), null);
+	});
+
+	it("accepts multiple candidates and takes the first usable one", function () {
+		// First candidate empty/invalid → second wins (S-Miles Home: local_time absent in details, present in realtime).
+		assert.strictEqual(deriveStationTzOffsetMs(undefined, wallClock(2)), 2 * 3600000);
+		assert.strictEqual(deriveStationTzOffsetMs("", wallClock(2)), 2 * 3600000);
+		assert.strictEqual(deriveStationTzOffsetMs("not-a-date", wallClock(2)), 2 * 3600000);
+		// First candidate valid → stops there (ignores subsequent candidates).
+		assert.strictEqual(deriveStationTzOffsetMs(wallClock(-3), wallClock(2)), -3 * 3600000);
+		// All candidates unusable → null.
+		assert.strictEqual(deriveStationTzOffsetMs(null, undefined, ""), null);
+	});
+});
+
+// ============================================================
+// stationWallClockToEpoch
+// ============================================================
+describe("stationWallClockToEpoch", function () {
+	it("subtracts the station offset to land on the real UTC instant", function () {
+		// 14:30 station-local in a UTC+2 zone == 12:30:00Z.
+		const epoch = stationWallClockToEpoch("2026-05-15 14:30:00", 2 * 3600000);
+		assert.strictEqual(epoch, Date.parse("2026-05-15T12:30:00Z"));
+	});
+
+	it("is an identity (parse-as-UTC) when offset is 0", function () {
+		const epoch = stationWallClockToEpoch("2026-05-15 14:30:00", 0);
+		assert.strictEqual(epoch, Date.parse("2026-05-15T14:30:00Z"));
+	});
+
+	it("returns null for empty/nullish/garbage input", function () {
+		assert.strictEqual(stationWallClockToEpoch("", 0), null);
+		assert.strictEqual(stationWallClockToEpoch(undefined, 0), null);
+		assert.strictEqual(stationWallClockToEpoch(null, 0), null);
+		assert.strictEqual(stationWallClockToEpoch("garbage", 0), null);
+	});
+});
+
+// ============================================================
+// anonymize
+// ============================================================
+describe("anonymize", function () {
+	it("maps the same input to the same token (stable / correlatable)", function () {
+		assert.strictEqual(anonymize("DTU1234567890", "dtu"), anonymize("DTU1234567890", "dtu"));
+	});
+
+	it("maps different inputs to different tokens", function () {
+		assert.notStrictEqual(anonymize("DTU-A", "dtu"), anonymize("DTU-B", "dtu"));
+	});
+
+	it("never contains the original value", function () {
+		const serial = "112233445566";
+		const token = anonymize(serial, "sn");
+		assert.ok(!token.includes(serial), "token must not leak the original serial");
+	});
+
+	it("uses the given prefix and a short hex hash", function () {
+		assert.match(anonymize("user@example.com", "acct"), /^acct:[0-9a-f]{8}$/);
+	});
+
+	it("returns '<prefix>:none' for empty/nullish input", function () {
+		assert.strictEqual(anonymize("", "sn"), "sn:none");
+		assert.strictEqual(anonymize(undefined, "sn"), "sn:none");
+		assert.strictEqual(anonymize(null, "acct"), "acct:none");
+	});
+});
+
+// ============================================================
+// sanitizeForLog
+// ============================================================
+describe("sanitizeForLog", function () {
+	it("redacts address, name, token and phone but keeps the structure", function () {
+		const out = sanitizeForLog({
+			name: "Max Mustermann Balkon",
+			address: "Hauptstr. 1",
+			token: "secret-abc",
+			mobile: "+49 170 1234567",
+			status: "0",
+		});
+		assert.strictEqual(out.name, "<redacted>");
+		assert.strictEqual(out.address, "<redacted>");
+		assert.strictEqual(out.token, "<redacted>");
+		assert.strictEqual(out.mobile, "<redacted>");
+		assert.strictEqual(out.status, "0", "non-sensitive fields are kept verbatim");
+	});
+
+	it("anonymizes serial fields to a stable token", function () {
+		const a = sanitizeForLog({ sn: "INV-123", dtu_sn: "DTU-999" });
+		const b = sanitizeForLog({ sn: "INV-123", dtu_sn: "DTU-999" });
+		assert.strictEqual(a.sn, b.sn, "same serial → same token");
+		assert.ok(!String(a.sn).includes("INV-123"), "serial must not leak");
+		assert.notStrictEqual(a.sn, a.dtu_sn);
+	});
+
+	it("hides real coordinates but keeps a 0.0 placeholder (diagnostic)", function () {
+		assert.strictEqual(sanitizeForLog({ latitude: "48.137" }).latitude, "<geo>");
+		assert.strictEqual(sanitizeForLog({ longitude: 11.575 }).longitude, "<geo>");
+		assert.strictEqual(sanitizeForLog({ latitude: "0.0" }).latitude, "0.0", "0/0 placeholder stays visible");
+	});
+
+	it("keeps warn_data flags and timestamps verbatim", function () {
+		const out = sanitizeForLog({
+			data_time: "2026-05-15 14:30:00",
+			local_time: "2026-05-15 16:30:00",
+			warn_data: { s_uoff: false, g_warn: true },
+		});
+		assert.strictEqual(out.data_time, "2026-05-15 14:30:00");
+		assert.strictEqual(out.local_time, "2026-05-15 16:30:00");
+		assert.deepStrictEqual(out.warn_data, { s_uoff: false, g_warn: true });
+	});
+
+	it("recurses into nested objects and arrays", function () {
+		const out = sanitizeForLog({ data: { list: [{ sn: "A1", model_no: "HMS-800W-2T" }] } });
+		assert.ok(!String(out.data.list[0].sn).includes("A1"), "nested serial must be anonymized");
+		assert.strictEqual(out.data.list[0].model_no, "HMS-800W-2T", "nested non-sensitive field kept");
+	});
+
+	it("leaves empty/nullish sensitive values untouched and passes primitives through", function () {
+		assert.strictEqual(sanitizeForLog({ address: "" }).address, "");
+		assert.strictEqual(sanitizeForLog({ token: null }).token, null);
+		assert.strictEqual(sanitizeForLog("plain-string"), "plain-string");
+		assert.strictEqual(sanitizeForLog(42), 42);
 	});
 });

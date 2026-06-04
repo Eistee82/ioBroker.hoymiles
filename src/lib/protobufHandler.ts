@@ -215,7 +215,7 @@ class ProtobufHandler {
 	decodePayload(proto: string, name: string, payload: Buffer): Record<string, unknown> {
 		const type = this.getType(proto, name);
 		const msg = type.decode(payload);
-		return type.toObject(msg, { longs: Number, defaults: true }) as Record<string, unknown>;
+		return type.toObject(msg, { longs: Number, defaults: true });
 	}
 
 	/** Get next sequence number (0-60000, wraps around like the app). */

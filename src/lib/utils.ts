@@ -8,6 +8,137 @@ export function unixSeconds(): number {
 }
 
 /**
+ * Anonymize an identifier (DTU/inverter serial, account e-mail) for debug logs that
+ * may be shared in a public forum bug report. Returns a short, STABLE token — the same
+ * input always yields the same token so log lines stay correlatable, but the original
+ * value cannot be recovered. Empty input yields `<prefix>:none`.
+ *
+ * @param value - Identifier to mask.
+ * @param prefix - Short tag for the token (e.g. "sn", "acct").
+ */
+export function anonymize(value: string | undefined | null, prefix = "id"): string {
+	if (!value) {
+		return `${prefix}:none`;
+	}
+	const hash = crypto.createHash("sha256").update(String(value)).digest("hex").slice(0, 8);
+	return `${prefix}:${hash}`;
+}
+
+/** Response keys whose values are personal or secret — redacted from shareable logs. */
+const LOG_REDACT_KEYS = new Set([
+	"address",
+	"name",
+	"station_name",
+	"plant_name",
+	"nickname",
+	"nick_name",
+	"owner_name",
+	"token",
+	"ak",
+	"access_key",
+	"password",
+	"pwd",
+	"ch",
+	"mobile",
+	"phone",
+	"tel",
+]);
+/** Response keys holding device/account identifiers — replaced with a stable anonymized token. */
+const LOG_ANON_KEYS = new Set(["sn", "dtu_sn", "dtusn", "serial", "serial_number", "user", "username", "email"]);
+/** Response keys holding geo coordinates — real values hidden, 0/placeholder kept (diagnostic). */
+const LOG_GEO_KEYS = new Set(["latitude", "longitude", "lat", "lon", "lng"]);
+
+/**
+ * Deep-copy an API payload with personal and secret values removed, so a cloud response
+ * can be written to a debug log that is safe to share in a public forum bug report.
+ * Serials become stable anonymized tokens (still correlatable across lines); coordinates,
+ * address, names and tokens are redacted; everything else (status, timestamps, warn_data
+ * flags, version strings, …) is kept verbatim so the response stays diagnosable.
+ *
+ * @param value - Arbitrary parsed-JSON value.
+ */
+export function sanitizeForLog(value: unknown): unknown {
+	if (Array.isArray(value)) {
+		return value.map(sanitizeForLog);
+	}
+	if (value && typeof value === "object") {
+		const out: Record<string, unknown> = {};
+		for (const [key, v] of Object.entries(value as Record<string, unknown>)) {
+			const lk = key.toLowerCase();
+			if (LOG_ANON_KEYS.has(lk)) {
+				out[key] = typeof v === "string" && v ? anonymize(v, "id") : v;
+			} else if (LOG_REDACT_KEYS.has(lk)) {
+				out[key] = v ? "<redacted>" : v;
+			} else if (LOG_GEO_KEYS.has(lk)) {
+				const n = typeof v === "number" ? v : parseFloat(String(v));
+				out[key] = !Number.isNaN(n) && n === 0 ? v : v ? "<geo>" : v;
+			} else {
+				out[key] = sanitizeForLog(v);
+			}
+		}
+		return out;
+	}
+	return value;
+}
+
+/**
+ * Parse a Hoymiles cloud wall-clock string ("YYYY-MM-DD HH:mm:ss", no zone) as if
+ * it were UTC. Returns the epoch in ms, or NaN when the string is unparseable.
+ *
+ * @param str - Wall-clock string from the cloud API.
+ */
+function parseWallClockAsUtc(str: string): number {
+	return Date.parse(`${str.trim().replace(" ", "T")}Z`);
+}
+
+/**
+ * Derive a station's UTC offset (ms) by comparing the server-reported wall-clock
+ * `local_time` against the host's real UTC clock. Rounded to 15-minute steps so
+ * request latency / minor clock skew don't perturb it, while still resolving every
+ * real-world zone (including the :30 and :45 offsets).
+ *
+ * The Hoymiles cloud delivers `data_time` / `last_data_time` / `create_at` in the
+ * station's local zone but exposes no machine-readable UTC offset. The Web/Installer
+ * API ships `local_time` in `station/find`; the S-Miles Home `find_c` endpoint omits
+ * it from the details payload but includes it on the station-realtime response. Pass
+ * both as candidates — the first non-empty parseable one wins.
+ *
+ * @param candidates - One or more station wall-clock strings ("YYYY-MM-DD HH:mm:ss").
+ * @returns Offset in ms (local = UTC + offset), or null if no candidate is usable.
+ */
+export function deriveStationTzOffsetMs(...candidates: Array<string | undefined | null>): number | null {
+	for (const candidate of candidates) {
+		if (!candidate) {
+			continue;
+		}
+		const asUtc = parseWallClockAsUtc(candidate);
+		if (Number.isNaN(asUtc)) {
+			continue;
+		}
+		const offsetMs = Math.round((asUtc - Date.now()) / 900000) * 900000;
+		return offsetMs === 0 ? 0 : offsetMs; // normalize -0 (host clock a few ms ahead of a UTC station)
+	}
+	return null;
+}
+
+/**
+ * Convert a station-local wall-clock string to a UTC epoch (ms) by subtracting the
+ * station's UTC offset. Use for `data_time` / `last_data_time` / `create_at`, which
+ * the Hoymiles cloud returns in the station's local zone (not UTC).
+ *
+ * @param wallClock - Wall-clock string ("YYYY-MM-DD HH:mm:ss"), or empty/nullish.
+ * @param offsetMs - Station UTC offset from `deriveStationTzOffsetMs`.
+ * @returns UTC epoch in ms, or null when `wallClock` is empty/unparseable.
+ */
+export function stationWallClockToEpoch(wallClock: string | undefined | null, offsetMs: number): number | null {
+	if (!wallClock) {
+		return null;
+	}
+	const asUtc = parseWallClockAsUtc(wallClock);
+	return Number.isNaN(asUtc) ? null : asUtc - offsetMs;
+}
+
+/**
  * Safely extract an error message from an unknown catch value.
  *
  * @param err - The caught value (may not be an Error instance)
