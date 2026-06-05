@@ -126,6 +126,13 @@ class DeviceContext {
 	/** Last fully-read grid-profile blob (big-endian), cached to answer cloud-relay reads. */
 	private gridBlob: Buffer | null = null;
 	/**
+	 * DTU/inverter serials exactly as the DTU sent them in the local DevConfigFetch response
+	 * (`dtu_sn`/`dev_sn` are `bytes`, not an ASCII serial). Echoed verbatim into the cloud
+	 * grid-profile upload so the cloud can match it to the pending read. `null` until read.
+	 */
+	private gridDtuSn: Buffer | null = null;
+	private gridDevSn: Buffer | null = null;
+	/**
 	 * Transaction id of an in-flight cloud grid-profile read (action 41). Set when we ack the
 	 * command; the grid file (0x22 0x0e) is uploaded only once the cloud acks our status
 	 * (0x23 0x06), mirroring the real DTU's handshake. `null` when no read is pending.
@@ -616,7 +623,7 @@ class DeviceContext {
 	 */
 	private serveGridProfileToCloud(tid: number): void {
 		const relay = this.cloudRelay;
-		if (!relay || !this.protobuf || !this.gridBlob || !this.inverterSn) {
+		if (!relay || !this.protobuf || !this.gridBlob || !this.gridDtuSn || !this.gridDevSn) {
 			this.adapter.log.debug(`[${this.deviceId}] grid-profile cloud-serve skipped (relay/blob/sn missing)`);
 			return;
 		}
@@ -658,21 +665,22 @@ class DeviceContext {
 
 	/**
 	 * Upload the cached grid file to the cloud (0x22 0x0e, `DevConfigFetchReqDTO`). The blob is
-	 * byte-swapped from the locally-read big-endian order to the cloud's little-endian order.
+	 * byte-swapped from the locally-read big-endian order to the cloud's little-endian order, and
+	 * `dtu_sn`/`dev_sn` echo the raw serial bytes the DTU sent (they are `bytes`, not ASCII).
 	 *
 	 * @param tid - Transaction id from the originating command (echoed back).
 	 */
 	private sendGridProfileFile(tid: number): void {
 		const relay = this.cloudRelay;
-		if (!relay || !this.protobuf || !this.gridBlob || !this.inverterSn) {
+		if (!relay || !this.protobuf || !this.gridBlob || !this.gridDtuSn || !this.gridDevSn) {
 			this.adapter.log.debug(`[${this.deviceId}] grid-profile file send skipped (relay/blob/sn missing)`);
 			return;
 		}
 		relay.sendFrame(
 			this.protobuf.encodeGridProfileResponse(
 				unixSeconds(),
-				this.dtuSerial,
-				this.inverterSn,
+				this.gridDtuSn,
+				this.gridDevSn,
 				tid,
 				byteSwap16(this.gridBlob),
 			),
@@ -1545,7 +1553,16 @@ class DeviceContext {
 			// relay serves the exact 112-byte cloud format, not 114 bytes (which the app can't show).
 			const blob = assembled.subarray(0, assembled.length - 2);
 			this.gridBlob = blob; // cache (big-endian, no trailer) to answer cloud-relay grid-profile reads
+			// Cache the DTU/inverter serials exactly as the DTU sent them (raw bytes) so the cloud
+			// grid-profile upload can echo them verbatim — see serveGridProfileToCloud.
+			const dtuSnBytes = obj.dtuSn as Uint8Array | undefined;
+			const devSnBytes = obj.devSn as Uint8Array | undefined;
+			this.gridDtuSn = dtuSnBytes && dtuSnBytes.length ? Buffer.from(dtuSnBytes) : null;
+			this.gridDevSn = devSnBytes && devSnBytes.length ? Buffer.from(devSnBytes) : null;
 			this.adapter.log.debug(`[${this.deviceId || this.host}] [diag] grid profile blob: ${blob.toString("hex")}`);
+			this.adapter.log.debug(
+				`[${this.deviceId || this.host}] [diag] grid profile sns: dtu=${this.gridDtuSn?.toString("hex") ?? "-"} dev=${this.gridDevSn?.toString("hex") ?? "-"}`,
+			);
 			const decoded = decodeGridProfile(blob);
 			const entries: Array<[string, ioBroker.StateValue]> = [["gridProfile.standard", decoded.standard]];
 			for (const [key, val] of Object.entries(decoded.values)) {
@@ -1680,6 +1697,8 @@ class DeviceContext {
 			this.cloudRelay = null;
 		}
 		this.pendingGridServeTid = null;
+		this.gridDtuSn = null;
+		this.gridDevSn = null;
 		// Unsubscribe from writable states
 		if (this.deviceId) {
 			for (const stateId of WRITABLE_STATES) {

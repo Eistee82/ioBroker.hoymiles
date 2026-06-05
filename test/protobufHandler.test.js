@@ -763,15 +763,18 @@ describe("protobufHandler – additional decode methods", function () {
 	describe("cloud-relay grid-profile responses", function () {
 		it("encodeGridProfileResponse round-trips via 0x22 0x0e (DevConfigFetchReqDTO)", function () {
 			const data = Buffer.from("00030120", "hex"); // little-endian sample blob
-			const frame = handler.encodeGridProfileResponse(1700000000, "DTU123", "MI456", 9999, data);
+			// dtu_sn/dev_sn are bytes (raw serial), not ASCII strings — echo what the DTU sent
+			const dtuSn = Buffer.from("4143A01CEDE4", "hex");
+			const devSn = Buffer.from("1412A01CEDE4", "hex");
+			const frame = handler.encodeGridProfileResponse(1700000000, dtuSn, devSn, 9999, data);
 			const parsed = handler.parseResponse(frame);
 			assert.strictEqual(parsed.cmdHigh, 0x22);
 			assert.strictEqual(parsed.cmdLow, 0x0e);
 			const ReqDTO = handler.protos.DevConfig.lookupType("DevConfigFetchReqDTO");
 			const obj = ReqDTO.toObject(ReqDTO.decode(parsed.payload), { longs: Number });
 			assert.strictEqual(Buffer.from(obj.data).toString("hex"), "00030120");
-			assert.strictEqual(obj.dtuSn, "DTU123");
-			assert.strictEqual(obj.devSn, "MI456");
+			assert.strictEqual(Buffer.from(obj.dtuSn).toString("hex"), dtuSn.toString("hex"));
+			assert.strictEqual(Buffer.from(obj.devSn).toString("hex"), devSn.toString("hex"));
 			assert.strictEqual(obj.transactionId, 9999);
 			assert.strictEqual(obj.totalPackages, 1);
 			assert.strictEqual(obj.currentPackage, 1);
@@ -783,7 +786,13 @@ describe("protobufHandler – additional decode methods", function () {
 				"000301200a00fc0830071e003b0b01000b041e00e209001088138e1201001e1401000020010003305802e209a30792138e120040d0071000085001009c13900110009c137413027001001027008000005b082c01b70841099d092c01009000005f0000b00000f401a1ff02a000000000",
 				"hex",
 			);
-			const frame = handler.encodeGridProfileResponse(1700000000, "DTU", "MI", 1, leBlob);
+			const frame = handler.encodeGridProfileResponse(
+				1700000000,
+				Buffer.from("4143A01CEDE4", "hex"),
+				Buffer.from("1412A01CEDE4", "hex"),
+				1,
+				leBlob,
+			);
 			const ReqDTO = handler.protos.DevConfig.lookupType("DevConfigFetchReqDTO");
 			const obj = ReqDTO.toObject(ReqDTO.decode(handler.parseResponse(frame).payload), { longs: Number });
 			assert.strictEqual(obj.crc, 20325);

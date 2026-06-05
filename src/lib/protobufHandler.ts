@@ -697,13 +697,23 @@ class ProtobufHandler {
 	 * Encode a device-config (grid-profile) upload (cloud tag 0x22 0x0e, `DevConfigFetchReqDTO`).
 	 * The `data` blob must be little-endian (cloud byte order — see {@link byteSwap16}).
 	 *
+	 * `dtu_sn`/`dev_sn` are `bytes` in the real protocol (not strings): the DTU sends the raw
+	 * serial bytes, so pass back the exact bytes read locally rather than an ASCII serial — the
+	 * cloud matches the upload to the pending request by these bytes.
+	 *
 	 * @param timestamp - Unix timestamp in seconds
-	 * @param dtuSn - DTU serial number
-	 * @param devSn - Micro-inverter serial number
+	 * @param dtuSn - DTU serial as raw bytes (echo what the DTU sent locally)
+	 * @param devSn - Micro-inverter serial as raw bytes (echo what the DTU sent locally)
 	 * @param tid - Transaction id from the originating command
 	 * @param data - Little-endian grid-file blob
 	 */
-	encodeGridProfileResponse(timestamp: number, dtuSn: string, devSn: string, tid: number, data: Uint8Array): Buffer {
+	encodeGridProfileResponse(
+		timestamp: number,
+		dtuSn: Uint8Array,
+		devSn: Uint8Array,
+		tid: number,
+		data: Uint8Array,
+	): Buffer {
 		const ReqDTO = this.getType("DevConfig", "DevConfigFetchReqDTO");
 		const msg = ReqDTO.create({
 			requestTime: timestamp,

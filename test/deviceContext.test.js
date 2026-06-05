@@ -4732,6 +4732,8 @@ describe("deviceContext – handleHistPower decode error", function () {
 describe("deviceContext – cloud grid-profile handshake ordering", function () {
 	let handler;
 	const RAW_BLOB = Buffer.from([0x03, 0x00, 0x20, 0x00, 0x0a, 0x08]); // even length, big-endian
+	const GRID_DTU_SN = Buffer.from("4143A01CEDE4", "hex"); // raw serial bytes (dtu_sn is bytes)
+	const GRID_DEV_SN = Buffer.from("1412A01CEDE4", "hex"); // raw serial bytes (dev_sn is bytes)
 
 	before(async function () {
 		this.timeout(10000);
@@ -4773,6 +4775,9 @@ describe("deviceContext – cloud grid-profile handshake ordering", function () 
 		ctx.dtuSerial = "4143A01CEDE4";
 		ctx["inverterSn"] = "1412A01CEDE4";
 		ctx["gridBlob"] = Buffer.from(RAW_BLOB);
+		// dtu_sn/dev_sn are echoed verbatim from the local read as raw bytes
+		ctx["gridDtuSn"] = Buffer.from(GRID_DTU_SN);
+		ctx["gridDevSn"] = Buffer.from(GRID_DEV_SN);
 		return { ctx, sent };
 	}
 
@@ -4814,7 +4819,7 @@ describe("deviceContext – cloud grid-profile handshake ordering", function () 
 		]);
 	});
 
-	it("grid file echoes the command tid and the byte-swapped blob", function () {
+	it("grid file echoes the command tid, the byte-swapped blob and the raw serial bytes", function () {
 		const { ctx, sent } = makeCtx();
 		ctx["handleCloudCommand"](actionCmd(41, 43981));
 		ctx["handleCloudCommand"](statusAck(41, 43981));
@@ -4825,6 +4830,21 @@ describe("deviceContext – cloud grid-profile handshake ordering", function () 
 		const obj = ReqDTO.toObject(ReqDTO.decode(parsed.payload), { longs: Number, defaults: true });
 		assert.strictEqual(Number(obj.transactionId), 43981);
 		assert.deepStrictEqual(Buffer.from(obj.data), byteSwap16(Buffer.from(RAW_BLOB)));
+		// dtu_sn/dev_sn are echoed verbatim as the raw bytes the DTU sent (not ASCII serials)
+		assert.deepStrictEqual(Buffer.from(obj.dtuSn), GRID_DTU_SN);
+		assert.deepStrictEqual(Buffer.from(obj.devSn), GRID_DEV_SN);
+	});
+
+	it("does not upload the grid file when the DTU serials were not cached", function () {
+		const { ctx, sent } = makeCtx();
+		ctx["gridDtuSn"] = null;
+		ctx["gridDevSn"] = null;
+		ctx["handleCloudCommand"](actionCmd(41, 7));
+		ctx["handleCloudCommand"](statusAck(41, 7));
+		assert.ok(
+			!sent.some(f => f[2] === 0x22 && f[3] === 0x0e),
+			"no grid file without cached serials",
+		);
 	});
 
 	it("ignores a stray status-ack when no grid-profile read is pending", function () {

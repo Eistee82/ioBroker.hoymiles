@@ -15,8 +15,8 @@ message DevConfigFetchReqDTO {
     int32 rule_id = 3;
     bytes data = 4;
     int32 crc = 5;
-    string dtu_sn = 6;
-    string dev_sn = 7;
+    bytes dtu_sn = 6;
+    bytes dev_sn = 7;
     bytes cfg_data = 8;
     int32 cfg_crc = 9;
     int32 total_packages = 10;

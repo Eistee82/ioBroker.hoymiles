@@ -65,6 +65,8 @@ class DeviceContext {
     inverterSn;
     gridChunks = new Map();
     gridBlob = null;
+    gridDtuSn = null;
+    gridDevSn = null;
     pendingGridServeTid = null;
     pendingResponse;
     slowPollQueue;
@@ -402,7 +404,7 @@ class DeviceContext {
     }
     serveGridProfileToCloud(tid) {
         const relay = this.cloudRelay;
-        if (!relay || !this.protobuf || !this.gridBlob || !this.inverterSn) {
+        if (!relay || !this.protobuf || !this.gridBlob || !this.gridDtuSn || !this.gridDevSn) {
             this.adapter.log.debug(`[${this.deviceId}] grid-profile cloud-serve skipped (relay/blob/sn missing)`);
             return;
         }
@@ -428,11 +430,11 @@ class DeviceContext {
     }
     sendGridProfileFile(tid) {
         const relay = this.cloudRelay;
-        if (!relay || !this.protobuf || !this.gridBlob || !this.inverterSn) {
+        if (!relay || !this.protobuf || !this.gridBlob || !this.gridDtuSn || !this.gridDevSn) {
             this.adapter.log.debug(`[${this.deviceId}] grid-profile file send skipped (relay/blob/sn missing)`);
             return;
         }
-        relay.sendFrame(this.protobuf.encodeGridProfileResponse(unixSeconds(), this.dtuSerial, this.inverterSn, tid, byteSwap16(this.gridBlob)));
+        relay.sendFrame(this.protobuf.encodeGridProfileResponse(unixSeconds(), this.gridDtuSn, this.gridDevSn, tid, byteSwap16(this.gridBlob)));
         this.adapter.log.info(`[${this.deviceId}] served grid profile to cloud via relay (tid=${tid})`);
     }
     serveVersionToCloud(tid) {
@@ -1058,7 +1060,12 @@ class DeviceContext {
             }
             const blob = assembled.subarray(0, assembled.length - 2);
             this.gridBlob = blob;
+            const dtuSnBytes = obj.dtuSn;
+            const devSnBytes = obj.devSn;
+            this.gridDtuSn = dtuSnBytes && dtuSnBytes.length ? Buffer.from(dtuSnBytes) : null;
+            this.gridDevSn = devSnBytes && devSnBytes.length ? Buffer.from(devSnBytes) : null;
             this.adapter.log.debug(`[${this.deviceId || this.host}] [diag] grid profile blob: ${blob.toString("hex")}`);
+            this.adapter.log.debug(`[${this.deviceId || this.host}] [diag] grid profile sns: dtu=${this.gridDtuSn?.toString("hex") ?? "-"} dev=${this.gridDevSn?.toString("hex") ?? "-"}`);
             const decoded = decodeGridProfile(blob);
             const entries = [["gridProfile.standard", decoded.standard]];
             for (const [key, val] of Object.entries(decoded.values)) {
@@ -1164,6 +1171,8 @@ class DeviceContext {
             this.cloudRelay = null;
         }
         this.pendingGridServeTid = null;
+        this.gridDtuSn = null;
+        this.gridDevSn = null;
         if (this.deviceId) {
             for (const stateId of WRITABLE_STATES) {
                 this.adapter.unsubscribeStates(`${this.deviceId}.${stateId}`);
