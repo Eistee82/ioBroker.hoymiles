@@ -65,6 +65,7 @@ class DeviceContext {
     inverterSn;
     gridChunks = new Map();
     gridBlob = null;
+    pendingGridServeTid = null;
     pendingResponse;
     slowPollQueue;
     slowPollIndex;
@@ -375,6 +376,10 @@ class DeviceContext {
             return;
         }
         try {
+            if (cmd.cmdHigh === 0x23 && cmd.cmdLow === 0x06) {
+                this.handleCloudStatusAck(cmd.payload);
+                return;
+            }
             if (!(cmd.cmdHigh === 0x23 && cmd.cmdLow === 0x05)) {
                 this.adapter.log.debug(`[${this.deviceId}] [diag] cloud command 0x${cmd.cmdHigh.toString(16)} 0x${cmd.cmdLow.toString(16)} — not handled`);
                 return;
@@ -404,7 +409,30 @@ class DeviceContext {
         const ts = unixSeconds();
         relay.sendFrame(this.protobuf.encodeCloudCommandAck(ts, this.dtuSerial, 41, tid));
         relay.sendFrame(this.protobuf.encodeCloudCommandStatus(ts, this.dtuSerial, 41, tid));
-        relay.sendFrame(this.protobuf.encodeGridProfileResponse(ts, this.dtuSerial, this.inverterSn, tid, byteSwap16(this.gridBlob)));
+        this.pendingGridServeTid = tid;
+        this.adapter.log.debug(`[${this.deviceId}] grid-profile read: ack+status sent, awaiting cloud status-ack (tid=${tid})`);
+    }
+    handleCloudStatusAck(payload) {
+        if (!this.protobuf || this.pendingGridServeTid === null) {
+            return;
+        }
+        const StatusRes = this.protobuf.getType("CommandPB", "CommandStatusResDTO");
+        const obj = StatusRes.toObject(StatusRes.decode(payload), { longs: Number, defaults: true });
+        const action = Number(obj.action) || 0;
+        if (action !== 0 && action !== 41) {
+            return;
+        }
+        const tid = this.pendingGridServeTid;
+        this.pendingGridServeTid = null;
+        this.sendGridProfileFile(tid);
+    }
+    sendGridProfileFile(tid) {
+        const relay = this.cloudRelay;
+        if (!relay || !this.protobuf || !this.gridBlob || !this.inverterSn) {
+            this.adapter.log.debug(`[${this.deviceId}] grid-profile file send skipped (relay/blob/sn missing)`);
+            return;
+        }
+        relay.sendFrame(this.protobuf.encodeGridProfileResponse(unixSeconds(), this.dtuSerial, this.inverterSn, tid, byteSwap16(this.gridBlob)));
         this.adapter.log.info(`[${this.deviceId}] served grid profile to cloud via relay (tid=${tid})`);
     }
     serveVersionToCloud(tid) {
@@ -1135,6 +1163,7 @@ class DeviceContext {
             this.cloudRelay.disconnect();
             this.cloudRelay = null;
         }
+        this.pendingGridServeTid = null;
         if (this.deviceId) {
             for (const stateId of WRITABLE_STATES) {
                 this.adapter.unsubscribeStates(`${this.deviceId}.${stateId}`);

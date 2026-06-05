@@ -1,6 +1,8 @@
 import assert from "node:assert";
 import DeviceContext, { WRITABLE_STATES } from "../build/lib/deviceContext.js";
 import { COMMANDS } from "../build/lib/commandHandler.js";
+import { ProtobufHandler } from "../build/lib/protobufHandler.js";
+import { byteSwap16 } from "../build/lib/gridProfile.js";
 
 // ============================================================
 // deviceContext – WRITABLE_STATES constant
@@ -4717,5 +4719,117 @@ describe("deviceContext – handleHistPower decode error", function () {
 
 		await ctx["handleHistPower"](Buffer.alloc(0));
 		assert.ok(warnMsg.includes("hist decode boom"), "Should log HistPower decode error");
+	});
+});
+
+// ============================================================
+// deviceContext – cloud grid-profile handshake ordering
+// ============================================================
+// The relay must mirror the real DTU's handshake when the cloud reads the grid
+// profile (action 41): ack (0x22 0x05) + status (0x22 0x06) first, then the grid
+// file (0x22 0x0e) ONLY after the cloud acks the status with 0x23 0x06. Sending
+// the file up front makes the cloud display "no data".
+describe("deviceContext – cloud grid-profile handshake ordering", function () {
+	let handler;
+	const RAW_BLOB = Buffer.from([0x03, 0x00, 0x20, 0x00, 0x0a, 0x08]); // even length, big-endian
+
+	before(async function () {
+		this.timeout(10000);
+		handler = new ProtobufHandler();
+		await handler.loadProtos();
+	});
+
+	function makeCtx() {
+		const adapter = {
+			log: { info: () => {}, warn: () => {}, debug: () => {}, error: () => {} },
+			setStateAsync: async () => {},
+			extendObjectAsync: async () => {},
+			setInterval: () => undefined,
+			clearInterval: () => {},
+			setTimeout: () => undefined,
+			clearTimeout: () => {},
+			subscribeStates: () => {},
+			unsubscribeStates: () => {},
+			devices: new Map(),
+			matchLocalDeviceToCloud: () => {},
+			onRelayDataSent: () => {},
+			onLocalConnected: () => {},
+			onLocalDisconnected: () => {},
+			onSendTimeUpdated: () => {},
+			updateConnectionState: async () => {},
+		};
+		const sent = [];
+		const ctx = new DeviceContext({
+			adapter,
+			protobuf: handler,
+			host: "192.168.1.1",
+			enableLocal: false,
+			enableCloud: false,
+			enableCloudRelay: true,
+			dataInterval: 15,
+			slowPollFactor: 6,
+		});
+		ctx.cloudRelay = { sendFrame: b => sent.push(b) };
+		ctx.dtuSerial = "4143A01CEDE4";
+		ctx["inverterSn"] = "1412A01CEDE4";
+		ctx["gridBlob"] = Buffer.from(RAW_BLOB);
+		return { ctx, sent };
+	}
+
+	const tags = sent => sent.map(f => [f[2], f[3]]);
+
+	function actionCmd(action, tid) {
+		const ResDTO = handler.getType("CommandPB", "CommandResDTO");
+		const payload = ResDTO.encode(ResDTO.create({ action, tid })).finish();
+		return { cmdHigh: 0x23, cmdLow: 0x05, seq: 1, payload: Buffer.from(payload) };
+	}
+
+	function statusAck(action, tid) {
+		const StatusRes = handler.getType("CommandPB", "CommandStatusResDTO");
+		const payload = StatusRes.encode(StatusRes.create({ action, tid })).finish();
+		return { cmdHigh: 0x23, cmdLow: 0x06, seq: 2, payload: Buffer.from(payload) };
+	}
+
+	it("on action 41 sends ack (0x22 0x05) + status (0x22 0x06) but NOT the grid file yet", function () {
+		const { ctx, sent } = makeCtx();
+		ctx["handleCloudCommand"](actionCmd(41, 12345));
+		assert.deepStrictEqual(tags(sent), [
+			[0x22, 0x05],
+			[0x22, 0x06],
+		]);
+		assert.ok(
+			!tags(sent).some(([, low]) => low === 0x0e),
+			"grid file (0x22 0x0e) must not be sent before the status-ack",
+		);
+	});
+
+	it("sends the grid file (0x22 0x0e) only after the cloud status-ack (0x23 0x06)", function () {
+		const { ctx, sent } = makeCtx();
+		ctx["handleCloudCommand"](actionCmd(41, 12345));
+		ctx["handleCloudCommand"](statusAck(41, 12345));
+		assert.deepStrictEqual(tags(sent), [
+			[0x22, 0x05],
+			[0x22, 0x06],
+			[0x22, 0x0e],
+		]);
+	});
+
+	it("grid file echoes the command tid and the byte-swapped blob", function () {
+		const { ctx, sent } = makeCtx();
+		ctx["handleCloudCommand"](actionCmd(41, 43981));
+		ctx["handleCloudCommand"](statusAck(41, 43981));
+		const fileFrame = sent.find(f => f[2] === 0x22 && f[3] === 0x0e);
+		assert.ok(fileFrame, "grid file frame present");
+		const parsed = handler.parseResponse(fileFrame);
+		const ReqDTO = handler.getType("DevConfig", "DevConfigFetchReqDTO");
+		const obj = ReqDTO.toObject(ReqDTO.decode(parsed.payload), { longs: Number, defaults: true });
+		assert.strictEqual(Number(obj.transactionId), 43981);
+		assert.deepStrictEqual(Buffer.from(obj.data), byteSwap16(Buffer.from(RAW_BLOB)));
+	});
+
+	it("ignores a stray status-ack when no grid-profile read is pending", function () {
+		const { ctx, sent } = makeCtx();
+		ctx["handleCloudCommand"](statusAck(41, 999));
+		assert.strictEqual(sent.length, 0);
 	});
 });

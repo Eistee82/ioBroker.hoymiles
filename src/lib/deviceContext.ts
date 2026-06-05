@@ -125,6 +125,12 @@ class DeviceContext {
 	private readonly gridChunks: Map<number, Buffer> = new Map();
 	/** Last fully-read grid-profile blob (big-endian), cached to answer cloud-relay reads. */
 	private gridBlob: Buffer | null = null;
+	/**
+	 * Transaction id of an in-flight cloud grid-profile read (action 41). Set when we ack the
+	 * command; the grid file (0x22 0x0e) is uploaded only once the cloud acks our status
+	 * (0x23 0x06), mirroring the real DTU's handshake. `null` when no read is pending.
+	 */
+	private pendingGridServeTid: number | null = null;
 
 	/** Pending response resolver for request-response pairing. */
 	private pendingResponse: { cmdKey: string; resolve: () => void; timer: ioBroker.Timeout | undefined } | null;
@@ -567,6 +573,13 @@ class DeviceContext {
 			return;
 		}
 		try {
+			// The cloud acks our command-status with 0x23 0x06 (CommandStatusResDTO). For a
+			// grid-profile read the real DTU uploads the grid file (0x22 0x0e) only after this
+			// status-ack, so complete a pending read here rather than up front.
+			if (cmd.cmdHigh === 0x23 && cmd.cmdLow === 0x06) {
+				this.handleCloudStatusAck(cmd.payload);
+				return;
+			}
 			// Cloud action commands arrive as 0x23 0x05 (CommandResDTO with an action code).
 			if (!(cmd.cmdHigh === 0x23 && cmd.cmdLow === 0x05)) {
 				this.adapter.log.debug(
@@ -593,9 +606,11 @@ class DeviceContext {
 	}
 
 	/**
-	 * Answer a cloud grid-profile read (action 41) over the relay: ack (0x22 0x05) + status
-	 * (0x22 0x06) + the grid file (0x22 0x0e, blob byte-swapped to the cloud's little-endian
-	 * order). Uses the last locally-read profile blob.
+	 * Begin answering a cloud grid-profile read (action 41) over the relay: send ack (0x22 0x05)
+	 * + status (0x22 0x06) and arm the pending serve. The grid file (0x22 0x0e) itself is sent
+	 * later from {@link handleCloudStatusAck}, once the cloud acks this status with 0x23 0x06 —
+	 * the real DTU follows the same order, and uploading the file up front makes the cloud show
+	 * "no data".
 	 *
 	 * @param tid - Transaction id from the originating command (echoed back).
 	 */
@@ -608,9 +623,54 @@ class DeviceContext {
 		const ts = unixSeconds();
 		relay.sendFrame(this.protobuf.encodeCloudCommandAck(ts, this.dtuSerial, 41, tid));
 		relay.sendFrame(this.protobuf.encodeCloudCommandStatus(ts, this.dtuSerial, 41, tid));
+		this.pendingGridServeTid = tid;
+		this.adapter.log.debug(
+			`[${this.deviceId}] grid-profile read: ack+status sent, awaiting cloud status-ack (tid=${tid})`,
+		);
+	}
+
+	/**
+	 * Handle the cloud's status acknowledgement (0x23 0x06, `CommandStatusResDTO`). When it
+	 * confirms a pending grid-profile read, upload the grid file (0x22 0x0e) now — the real DTU
+	 * sends it only after this ack. The pending guard (set only for action 41) keeps the
+	 * status-ack of an unrelated command (e.g. the version query) from triggering an upload.
+	 *
+	 * @param payload - `CommandStatusResDTO` payload from the cloud.
+	 */
+	private handleCloudStatusAck(payload: Buffer): void {
+		if (!this.protobuf || this.pendingGridServeTid === null) {
+			return;
+		}
+		const StatusRes = this.protobuf.getType("CommandPB", "CommandStatusResDTO");
+		const obj = StatusRes.toObject(StatusRes.decode(payload), { longs: Number, defaults: true }) as Record<
+			string,
+			unknown
+		>;
+		const action = Number(obj.action) || 0;
+		// A status-ack carrying a different, known action is not ours — leave the read pending.
+		if (action !== 0 && action !== 41) {
+			return;
+		}
+		const tid = this.pendingGridServeTid;
+		this.pendingGridServeTid = null;
+		this.sendGridProfileFile(tid);
+	}
+
+	/**
+	 * Upload the cached grid file to the cloud (0x22 0x0e, `DevConfigFetchReqDTO`). The blob is
+	 * byte-swapped from the locally-read big-endian order to the cloud's little-endian order.
+	 *
+	 * @param tid - Transaction id from the originating command (echoed back).
+	 */
+	private sendGridProfileFile(tid: number): void {
+		const relay = this.cloudRelay;
+		if (!relay || !this.protobuf || !this.gridBlob || !this.inverterSn) {
+			this.adapter.log.debug(`[${this.deviceId}] grid-profile file send skipped (relay/blob/sn missing)`);
+			return;
+		}
 		relay.sendFrame(
 			this.protobuf.encodeGridProfileResponse(
-				ts,
+				unixSeconds(),
 				this.dtuSerial,
 				this.inverterSn,
 				tid,
@@ -1619,6 +1679,7 @@ class DeviceContext {
 			this.cloudRelay.disconnect();
 			this.cloudRelay = null;
 		}
+		this.pendingGridServeTid = null;
 		// Unsubscribe from writable states
 		if (this.deviceId) {
 			for (const stateId of WRITABLE_STATES) {
