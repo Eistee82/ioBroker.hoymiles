@@ -348,7 +348,7 @@ class ProtobufHandler {
             dtuSn,
             devSn,
             totalPackages: 1,
-            currentPackage: 1,
+            ruleType: 1,
         });
         return this.buildMessage(0x22, 0x0e, ReqDTO.encode(msg).finish());
     }

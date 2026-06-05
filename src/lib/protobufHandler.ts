@@ -723,7 +723,10 @@ class ProtobufHandler {
 			dtuSn,
 			devSn,
 			totalPackages: 1,
-			currentPackage: 1,
+			// The real DTU closes the single-package grid-file upload with rule_type=1 (field 12)
+			// and does NOT set current_package (field 11) — verified against a packet capture of
+			// a working read. Sending current_package instead leaves the cloud stuck at 1%.
+			ruleType: 1,
 		});
 		return this.buildMessage(0x22, 0x0e, ReqDTO.encode(msg).finish());
 	}

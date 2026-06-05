@@ -777,7 +777,9 @@ describe("protobufHandler – additional decode methods", function () {
 			assert.strictEqual(Buffer.from(obj.devSn).toString("hex"), devSn.toString("hex"));
 			assert.strictEqual(obj.transactionId, 9999);
 			assert.strictEqual(obj.totalPackages, 1);
-			assert.strictEqual(obj.currentPackage, 1);
+			// real DTU closes the single-package upload with rule_type=1, not current_package
+			assert.strictEqual(obj.ruleType, 1);
+			assert.ok(!obj.currentPackage, "current_package must not be set (real DTU uses rule_type)");
 			assert.strictEqual(obj.crc, crc16(data), "crc must be CRC-16/Modbus over the data blob");
 		});
 
