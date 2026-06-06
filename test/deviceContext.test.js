@@ -19,7 +19,7 @@ describe("deviceContext – WRITABLE_STATES", function () {
 		assert.ok(WRITABLE_STATES.includes("dtu.reboot"));
 		assert.ok(WRITABLE_STATES.includes("inverter.lock"));
 		assert.ok(WRITABLE_STATES.includes("config.serverSendTime"));
-		assert.ok(WRITABLE_STATES.includes("config.zeroExportEnable"));
+		assert.ok(WRITABLE_STATES.includes("config.limitPowerMyPower"));
 	});
 
 	it("all writable states have a matching COMMANDS entry", function () {

@@ -16,7 +16,6 @@ describe("commandHandler – COMMANDS", function () {
 		"inverter.cleanWarnings",
 		"inverter.cleanGroundingFault",
 		"inverter.lock",
-		"config.zeroExportEnable",
 		"config.serverSendTime",
 		"config.limitPowerMyPower",
 	];
@@ -27,8 +26,8 @@ describe("commandHandler – COMMANDS", function () {
 		}
 	});
 
-	it("has exactly 12 commands", function () {
-		assert.strictEqual(Object.keys(COMMANDS).length, 12);
+	it("has exactly 11 commands", function () {
+		assert.strictEqual(Object.keys(COMMANDS).length, 11);
 	});
 
 	it("all commands have encode and log functions", function () {
@@ -43,7 +42,7 @@ describe("commandHandler – COMMANDS", function () {
 		for (const key of buttons) {
 			assert.strictEqual(COMMANDS[key].button, true, `${key} should be a button`);
 		}
-		const nonButtons = ["inverter.powerLimit", "inverter.active", "inverter.lock", "config.zeroExportEnable"];
+		const nonButtons = ["inverter.powerLimit", "inverter.active", "inverter.lock", "config.limitPowerMyPower"];
 		for (const key of nonButtons) {
 			assert.ok(!COMMANDS[key].button, `${key} should not be a button`);
 		}

@@ -46,10 +46,6 @@ const COMMANDS = {
         encode: (v, ts, pb) => (v ? pb.encodeLockInverter(ts) : pb.encodeUnlockInverter(ts)),
         log: v => (v ? "Locking inverter" : "Unlocking inverter"),
     },
-    "config.zeroExportEnable": {
-        encode: (v, ts, pb) => pb.encodeSetConfig(ts, { zeroExportEnable: v ? 1 : 0 }),
-        log: v => `Setting zero export: ${v ? "enabled" : "disabled"}`,
-    },
     "config.serverSendTime": {
         validate: v => (!v || v < 1 ? "Server send time must be a positive number (minutes)" : null),
         encode: (v, ts, pb) => pb.encodeSetConfig(ts, { serverSendTime: Number(v) }),
