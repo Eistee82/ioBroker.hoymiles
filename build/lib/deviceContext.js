@@ -802,7 +802,7 @@ class DeviceContext {
         const entries = [["dtu.serialNumber", info.dtuSn]];
         if (info.dtuInfo) {
             const di = info.dtuInfo;
-            entries.push(["dtu.swVersion", formatDtuVersion(di.swVersion)], ["dtu.hwVersion", formatDtuVersion(di.hwVersion).replace("V", "H")], ["dtu.rssi", di.signalStrength], ["dtu.connState", di.errorCode], ["dtu.stepTime", di.dtuStepTime], ["dtu.accessModel", di.accessModel], ["dtu.communicationTime", di.communicationTime * 1000], ["dtu.wifiVersion", di.wifiVersion]);
+            entries.push(["dtu.swVersion", formatDtuVersion(di.swVersion)], ["dtu.hwVersion", formatDtuVersion(di.hwVersion).replace("V", "H")], ["dtu.rssi", di.signalStrength], ["dtu.connState", di.errorCode], ["dtu.stepTime", di.dtuStepTime], ["dtu.rfHwVersion", di.dtuRfHwVersion], ["dtu.rfSwVersion", di.dtuRfSwVersion], ["dtu.accessModel", di.accessModel], ["dtu.communicationTime", di.communicationTime * 1000], ["dtu.wifiVersion", di.wifiVersion], ["dtu.mode485", di.dtu485Mode], ["dtu.sub1gFrequencyBand", di.sub1gFrequencyBand]);
         }
         await this.setStates(entries, true);
     }
@@ -906,11 +906,21 @@ class DeviceContext {
                 ["config.wifiSsid", config.wifiSsid],
                 ["config.wifiRssi", config.wifiRssi],
                 ["config.zeroExportEnable", !!config.zeroExportEnable],
+                ["config.zeroExport433Addr", config.zeroExport433Addr],
+                ["config.meterKind", config.meterKind],
+                ["config.meterInterface", config.meterInterface],
                 ["config.netDhcpSwitch", config.dhcpSwitch],
                 ["config.dtuApSsid", config.dtuApSsid],
                 ["config.netmodeSelect", config.netmodeSelect],
+                ["config.channelSelect", config.channelSelect],
+                ["config.sub1gSweepSwitch", config.sub1gSweepSwitch],
+                ["config.sub1gWorkChannel", config.sub1gWorkChannel],
                 ["config.invType", config.invType],
+                ["config.netIpAddress", config.ipAddress],
+                ["config.netSubnetMask", config.subnetMask],
+                ["config.netGateway", config.gateway],
                 ["config.wifiIpAddress", config.wifiIpAddress],
+                ["config.netMacAddress", config.macAddress],
                 ["config.wifiMacAddress", config.wifiMacAddress],
             ], true);
             if (config.serverDomain && config.serverPort) {
