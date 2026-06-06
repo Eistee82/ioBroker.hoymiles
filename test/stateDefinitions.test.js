@@ -168,6 +168,16 @@ describe("stateDefinitions – station", function () {
 		assert.ok(writableIds.includes("dtu.reboot"), "Missing writable dtu.reboot");
 		assert.ok(writableIds.includes("inverter.lock"), "Missing writable inverter.lock");
 		assert.ok(writableIds.includes("config.serverSendTime"), "Missing writable config.serverSendTime");
+		assert.ok(writableIds.includes("config.limitPowerMyPower"), "Missing writable config.limitPowerMyPower");
+	});
+
+	it("config.limitPowerMyPower state has correct definition", function () {
+		const def = states.find(s => s.id === "config.limitPowerMyPower");
+		assert.ok(def, "config.limitPowerMyPower must exist in states");
+		assert.strictEqual(def.type, "number", "type must be number");
+		assert.strictEqual(def.write, true, "must be writable");
+		assert.strictEqual(def.min, 2, "min must be 2");
+		assert.strictEqual(def.max, 100, "max must be 100");
 	});
 
 	it("station states are all read-only", function () {

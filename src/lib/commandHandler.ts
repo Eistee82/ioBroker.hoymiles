@@ -1,6 +1,6 @@
 import type { ProtobufHandler } from "./protobufHandler.js";
 import type DtuConnection from "./dtuConnection.js";
-import { POWER_LIMIT_MIN, POWER_LIMIT_MAX } from "./constants.js";
+import { POWER_LIMIT_MIN, POWER_LIMIT_MAX, SCALE_POWER } from "./constants.js";
 import { unixSeconds } from "./utils.js";
 
 interface CommandContext {
@@ -76,6 +76,17 @@ const COMMANDS: Record<string, CommandDefinition> = {
 		validate: v => (!v || v < 1 ? "Server send time must be a positive number (minutes)" : null),
 		encode: (v, ts, pb) => pb.encodeSetConfig(ts, { serverSendTime: Number(v) }),
 		log: v => `Setting cloud send interval to ${v}min`,
+	},
+	// Persistent power limit (SetConfig limit_power_mypower → DTU flash). Survives a power
+	// cycle. Uses the same 0.1%-unit scaling as the runtime limit. For frequent/dynamic
+	// limiting (zero-export) use inverter.powerLimit instead (runtime, no flash write).
+	"config.limitPowerMyPower": {
+		validate: v =>
+			v < POWER_LIMIT_MIN || v > POWER_LIMIT_MAX
+				? `Power limit must be between ${POWER_LIMIT_MIN} and ${POWER_LIMIT_MAX}`
+				: null,
+		encode: (v, ts, pb) => pb.encodeSetConfig(ts, { limitPowerMypower: Math.round(Number(v) * SCALE_POWER) }),
+		log: v => `Setting persistent power limit to ${v}% (stored in DTU)`,
 	},
 };
 

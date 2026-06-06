@@ -75,6 +75,7 @@ const WRITABLE_STATES = [
 	"inverter.lock",
 	"config.zeroExportEnable",
 	"config.serverSendTime",
+	"config.limitPowerMyPower",
 	"dtu.reboot",
 ];
 
@@ -406,6 +407,10 @@ class DeviceContext {
 			}),
 		);
 
+		// Remove states/channels that no longer exist in the definitions (e.g. after an
+		// adapter update that renamed or dropped a state) so they disappear from the tree.
+		await this.cleanupObsoleteObjects();
+
 		// Subscribe to writable states for this device
 		for (const stateId of WRITABLE_STATES) {
 			this.adapter.subscribeStates(`${this.deviceId}.${stateId}`);
@@ -413,6 +418,50 @@ class DeviceContext {
 
 		this.statesCreated = true;
 		this.adapter.log.info(`[${this.deviceId}] Device states created`);
+	}
+
+	/**
+	 * Delete states/channels under this device that are no longer part of the current
+	 * definitions. Keeps dynamically-created objects (PV channels, meter, history) and
+	 * everything still listed in `states`/`channels`. Runs once after state creation so
+	 * obsolete entries from older adapter versions vanish on update.
+	 */
+	private async cleanupObsoleteObjects(): Promise<void> {
+		const knownStates = new Set(states.map(d => d.id));
+		const knownChannels = new Set(channels.map(c => c.id));
+		const isKnown = (rel: string): boolean =>
+			knownStates.has(rel) ||
+			knownChannels.has(rel) ||
+			/^pv\d+(\.|$)/.test(rel) || // dynamic PV channels + states
+			rel === "meter" ||
+			rel.startsWith("meter.") || // dynamic meter channel
+			rel === "history" ||
+			rel.startsWith("history."); // dynamic history channel
+
+		const prefix = `${this.adapter.namespace}.${this.deviceId}.`;
+		try {
+			const removed: string[] = [];
+			for (const kind of ["state", "channel"] as const) {
+				const view = await this.adapter.getObjectViewAsync("system", kind, {
+					startkey: prefix,
+					endkey: `${prefix}香`,
+				});
+				for (const row of view.rows) {
+					const rel = row.id.slice(prefix.length);
+					if (rel && !isKnown(rel)) {
+						await this.adapter.delObjectAsync(row.id, { recursive: true });
+						removed.push(rel);
+					}
+				}
+			}
+			if (removed.length) {
+				this.adapter.log.info(
+					`[${this.deviceId}] Removed ${removed.length} obsolete object(s): ${removed.join(", ")}`,
+				);
+			}
+		} catch (e) {
+			this.adapter.log.debug(`[${this.deviceId}] Obsolete-object cleanup skipped: ${errorMessage(e)}`);
+		}
 	}
 
 	/**
@@ -1287,7 +1336,9 @@ class DeviceContext {
 
 			await this.setStates(
 				[
-					["inverter.powerLimit", config.limitPower / SCALE_POWER],
+					// limit_power_mypower is the DTU-stored (persistent) limit — expose it as the
+					// persistent state, not the runtime inverter.powerLimit setpoint.
+					["config.limitPowerMyPower", config.limitPower / SCALE_POWER],
 					["config.serverDomain", config.serverDomain],
 					["config.serverPort", config.serverPort],
 					["config.serverSendTime", config.serverSendTime],

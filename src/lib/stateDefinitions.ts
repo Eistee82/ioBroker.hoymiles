@@ -184,6 +184,15 @@ const states: StateDefinition[] = [
 		write: true,
 		source: "local",
 	}),
+	// Persistent power limit stored in the DTU (SetConfig limit_power_mypower). Survives a
+	// power cycle because the DTU re-applies it to the inverter on startup. For dynamic
+	// zero-export use inverter.powerLimit (runtime, RAM-only) instead — see README.
+	n("config.limitPowerMyPower", "Persistent power limit", "Persistentes Leistungslimit", "level", "%", {
+		write: true,
+		min: 2,
+		max: 100,
+		source: "local",
+	}),
 	s("config.wifiSsid", "WiFi SSID", "WLAN SSID", "text", { source: "local" }),
 	n("config.wifiRssi", "WiFi RSSI", "WLAN Signalstärke", "value", "dBm", { source: "local" }),
 	b("config.zeroExportEnable", "Zero export enabled", "Nulleinspeisung aktiviert", "switch.enable", {

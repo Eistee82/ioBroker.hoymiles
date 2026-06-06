@@ -131,6 +131,12 @@ const states = [
         write: true,
         source: "local",
     }),
+    n("config.limitPowerMyPower", "Persistent power limit", "Persistentes Leistungslimit", "level", "%", {
+        write: true,
+        min: 2,
+        max: 100,
+        source: "local",
+    }),
     s("config.wifiSsid", "WiFi SSID", "WLAN SSID", "text", { source: "local" }),
     n("config.wifiRssi", "WiFi RSSI", "WLAN Signalstärke", "value", "dBm", { source: "local" }),
     b("config.zeroExportEnable", "Zero export enabled", "Nulleinspeisung aktiviert", "switch.enable", {

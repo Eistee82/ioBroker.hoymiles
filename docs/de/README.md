@@ -165,7 +165,7 @@ PV-Channels werden dynamisch basierend auf dem Wechselrichter-Modell erstellt (1
 | `inverter.hwVersion` | string | — | nein | Hardware-Version |
 | `inverter.swVersion` | string | — | nein | Software-Version |
 | `inverter.temperature` | number | °C | nein | Temperatur |
-| `inverter.powerLimit` | number | % | **ja** | Leistungslimit (2-100%, lokal) |
+| `inverter.powerLimit` | number | % | **ja** | Leistungslimit **Laufzeit** (RAM-only am Inverter, ideal für Nulleinspeisung — kein NVM-Verschleiß; 2-100%, lokal) |
 | `inverter.activePowerLimit` | number | % | nein | Aktives Leistungslimit (live, lokal) |
 | `inverter.active` | boolean | — | **ja** | Wechselrichter ein/aus (lokal) |
 | `inverter.reboot` | boolean | — | **ja** | Wechselrichter neustarten (lokal) |
@@ -281,6 +281,7 @@ Netz- und Zähler-Warnflags aus dem Cloud-Datensatz `station/find`. Alle boolesc
 | `config.serverDomain` | string | — | nein | Cloud-Server Domain |
 | `config.serverPort` | number | — | nein | Cloud-Server Port |
 | `config.serverSendTime` | number | min | **ja** | Cloud-Sendeintervall (Minuten) |
+| `config.limitPowerMyPower` | number | % | **ja** | **Persistentes** Leistungslimit (in der DTU gespeichert, übersteht Neustart; 2-100%, lokal). Für dauerhafte Begrenzung — für dynamische Nulleinspeisung stattdessen `inverter.powerLimit` nutzen |
 | `config.wifiSsid` | string | — | nein | WLAN SSID |
 | `config.wifiRssi` | number | dBm | nein | WLAN Signalstärke |
 | `config.zeroExportEnable` | boolean | — | **ja** | Nulleinspeisung aktiviert |

@@ -1464,12 +1464,14 @@ describe("deviceContext – handleConfigData", function () {
 		const newCalls = calls.slice(callsBefore);
 
 		const stateIds = newCalls.map(c => c[0]);
-		assert.ok(stateIds.includes("TEST1234.inverter.powerLimit"), "Should write inverter.powerLimit");
+		// limitPower from GetConfig is now written as config.limitPowerMyPower (persistent, DTU-stored)
+		// rather than inverter.powerLimit (runtime setpoint) — see handleConfigData change.
+		assert.ok(stateIds.includes("TEST1234.config.limitPowerMyPower"), "Should write config.limitPowerMyPower");
 		assert.ok(stateIds.includes("TEST1234.config.serverDomain"), "Should write config.serverDomain");
 		assert.ok(stateIds.includes("TEST1234.config.wifiSsid"), "Should write config.wifiSsid");
 
-		// powerLimit = 8000 / 10 = 800
-		const powerLimitCall = newCalls.find(c => c[0] === "TEST1234.inverter.powerLimit");
+		// limitPower = 8000 / 10 = 800
+		const powerLimitCall = newCalls.find(c => c[0] === "TEST1234.config.limitPowerMyPower");
 		assert.strictEqual(powerLimitCall[1], 800);
 
 		// cloudServerDomain should be set
@@ -4841,10 +4843,7 @@ describe("deviceContext – cloud grid-profile handshake ordering", function () 
 		ctx["gridDevSn"] = null;
 		ctx["handleCloudCommand"](actionCmd(41, 7));
 		ctx["handleCloudCommand"](statusAck(41, 7));
-		assert.ok(
-			!sent.some(f => f[2] === 0x22 && f[3] === 0x0e),
-			"no grid file without cached serials",
-		);
+		assert.ok(!sent.some(f => f[2] === 0x22 && f[3] === 0x0e), "no grid file without cached serials");
 	});
 
 	it("ignores a stray status-ack when no grid-profile read is pending", function () {

@@ -30,6 +30,7 @@ const WRITABLE_STATES = [
     "inverter.lock",
     "config.zeroExportEnable",
     "config.serverSendTime",
+    "config.limitPowerMyPower",
     "dtu.reboot",
 ];
 class DeviceContext {
@@ -251,11 +252,46 @@ class DeviceContext {
                 await this.adapter.setStateAsync(`${this.deviceId}.${def.id}`, defaultVal, true);
             }
         }));
+        await this.cleanupObsoleteObjects();
         for (const stateId of WRITABLE_STATES) {
             this.adapter.subscribeStates(`${this.deviceId}.${stateId}`);
         }
         this.statesCreated = true;
         this.adapter.log.info(`[${this.deviceId}] Device states created`);
+    }
+    async cleanupObsoleteObjects() {
+        const knownStates = new Set(states.map(d => d.id));
+        const knownChannels = new Set(channels.map(c => c.id));
+        const isKnown = (rel) => knownStates.has(rel) ||
+            knownChannels.has(rel) ||
+            /^pv\d+(\.|$)/.test(rel) ||
+            rel === "meter" ||
+            rel.startsWith("meter.") ||
+            rel === "history" ||
+            rel.startsWith("history.");
+        const prefix = `${this.adapter.namespace}.${this.deviceId}.`;
+        try {
+            const removed = [];
+            for (const kind of ["state", "channel"]) {
+                const view = await this.adapter.getObjectViewAsync("system", kind, {
+                    startkey: prefix,
+                    endkey: `${prefix}香`,
+                });
+                for (const row of view.rows) {
+                    const rel = row.id.slice(prefix.length);
+                    if (rel && !isKnown(rel)) {
+                        await this.adapter.delObjectAsync(row.id, { recursive: true });
+                        removed.push(rel);
+                    }
+                }
+            }
+            if (removed.length) {
+                this.adapter.log.info(`[${this.deviceId}] Removed ${removed.length} obsolete object(s): ${removed.join(", ")}`);
+            }
+        }
+        catch (e) {
+            this.adapter.log.debug(`[${this.deviceId}] Obsolete-object cleanup skipped: ${errorMessage(e)}`);
+        }
     }
     async createPvStates(pvCount, cloudOnly = false) {
         if (!this.deviceId) {
@@ -863,7 +899,7 @@ class DeviceContext {
             const config = this.protobuf.decodeGetConfig(payload);
             this.adapter.log.debug(`[${this.deviceId || this.host}] Config: server=${config.serverDomain}:${config.serverPort}, sendTime=${config.serverSendTime}min`);
             await this.setStates([
-                ["inverter.powerLimit", config.limitPower / SCALE_POWER],
+                ["config.limitPowerMyPower", config.limitPower / SCALE_POWER],
                 ["config.serverDomain", config.serverDomain],
                 ["config.serverPort", config.serverPort],
                 ["config.serverSendTime", config.serverSendTime],

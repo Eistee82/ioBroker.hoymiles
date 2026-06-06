@@ -165,7 +165,7 @@ PV channels are created dynamically based on the inverter model (1T = 1 channel,
 | `inverter.hwVersion` | string | — | no | Hardware version |
 | `inverter.swVersion` | string | — | no | Software version |
 | `inverter.temperature` | number | °C | no | Inverter temperature |
-| `inverter.powerLimit` | number | % | **yes** | Power limit (2-100%, local) |
+| `inverter.powerLimit` | number | % | **yes** | **Runtime** power limit (RAM-only on the inverter, ideal for zero-export — no NVM wear; 2-100%, local) |
 | `inverter.activePowerLimit` | number | % | no | Active power limit (live, local) |
 | `inverter.active` | boolean | — | **yes** | Turn inverter on/off (local) |
 | `inverter.reboot` | boolean | — | **yes** | Reboot inverter (button, local) |
@@ -281,6 +281,7 @@ Grid- and meter-level warning flags from the cloud's `station/find` record. All 
 | `config.serverDomain` | string | — | no | Cloud server domain |
 | `config.serverPort` | number | — | no | Cloud server port |
 | `config.serverSendTime` | number | min | **yes** | Cloud send interval (minutes) |
+| `config.limitPowerMyPower` | number | % | **yes** | **Persistent** power limit (stored in the DTU, survives a reboot; 2-100%, local). For a permanent cap — for dynamic zero-export use `inverter.powerLimit` instead |
 | `config.wifiSsid` | string | — | no | WiFi SSID |
 | `config.wifiRssi` | number | dBm | no | WiFi signal strength |
 | `config.zeroExportEnable` | boolean | — | **yes** | Zero export enabled |

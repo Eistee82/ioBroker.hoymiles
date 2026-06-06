@@ -1,4 +1,4 @@
-import { POWER_LIMIT_MIN, POWER_LIMIT_MAX } from "./constants.js";
+import { POWER_LIMIT_MIN, POWER_LIMIT_MAX, SCALE_POWER } from "./constants.js";
 import { unixSeconds } from "./utils.js";
 const COMMANDS = {
     "inverter.powerLimit": {
@@ -54,6 +54,13 @@ const COMMANDS = {
         validate: v => (!v || v < 1 ? "Server send time must be a positive number (minutes)" : null),
         encode: (v, ts, pb) => pb.encodeSetConfig(ts, { serverSendTime: Number(v) }),
         log: v => `Setting cloud send interval to ${v}min`,
+    },
+    "config.limitPowerMyPower": {
+        validate: v => v < POWER_LIMIT_MIN || v > POWER_LIMIT_MAX
+            ? `Power limit must be between ${POWER_LIMIT_MIN} and ${POWER_LIMIT_MAX}`
+            : null,
+        encode: (v, ts, pb) => pb.encodeSetConfig(ts, { limitPowerMypower: Math.round(Number(v) * SCALE_POWER) }),
+        log: v => `Setting persistent power limit to ${v}% (stored in DTU)`,
     },
 };
 async function executeCommand(stateId, state, ctx) {
