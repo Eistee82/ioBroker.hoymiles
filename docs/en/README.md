@@ -190,13 +190,9 @@ PV channels are created dynamically based on the inverter model (1T = 1 channel,
 | `dtu.wifiVersion` | string | — | WiFi version |
 | `dtu.fwUpdateAvailable` | boolean | — | Firmware update available (checked once daily via cloud) |
 | `dtu.stepTime` | number | s | Step time |
-| `dtu.rfHwVersion` | number | — | RF hardware version |
-| `dtu.rfSwVersion` | number | — | RF software version |
 | `dtu.accessModel` | number | — | Network access mode (0=GPRS, 1=WiFi, 2=Ethernet) |
 | `dtu.communicationTime` | number | — | Last communication (Unix timestamp) |
 | `dtu.connState` | number | — | DTU error code (0=OK) |
-| `dtu.mode485` | number | — | RS485 mode (0=Reflux/Auto, 1=Remote Control) |
-| `dtu.sub1gFrequencyBand` | number | — | Sub-1G frequency band |
 | `dtu.searchResult` | string | — | AutoSearch result (inverter serials, JSON) |
 
 ### `station-<id>.grid.*` — Station Aggregates (cloud)
@@ -285,22 +281,12 @@ Grid- and meter-level warning flags from the cloud's `station/find` record. All 
 | `config.wifiSsid` | string | — | no | WiFi SSID |
 | `config.wifiRssi` | number | dBm | no | WiFi signal strength |
 | `config.zeroExportEnable` | boolean | — | **yes** | Zero export enabled |
-| `config.zeroExport433Addr` | number | — | no | Zero export 433MHz sensor address |
-| `config.meterKind` | string | — | no | Meter type (0=None, 1=1-phase, 2=2-phase, 3=3-phase, 5=CT G3, 6=Meter 1S/1T G3, 7=Meter 2S/2T G3) |
-| `config.meterInterface` | string | — | no | Meter interface |
 | `config.invType` | number | — | no | Inverter type |
 | `config.netmodeSelect` | number | — | no | Network mode (0=GPRS, 1=WiFi, 2=Ethernet) |
 | `config.netDhcpSwitch` | number | — | no | DHCP enabled |
-| `config.netIpAddress` | string | — | no | Ethernet IP address |
-| `config.netSubnetMask` | string | — | no | Ethernet subnet mask |
-| `config.netGateway` | string | — | no | Ethernet gateway |
-| `config.netMacAddress` | string | — | no | Ethernet MAC address |
 | `config.wifiIpAddress` | string | — | no | WiFi IP address |
 | `config.wifiMacAddress` | string | — | no | WiFi MAC address |
 | `config.dtuApSsid` | string | — | no | DTU access point SSID |
-| `config.channelSelect` | number | — | no | Channel select |
-| `config.sub1gSweepSwitch` | number | — | no | Sub-1G sweep |
-| `config.sub1gWorkChannel` | number | — | no | Sub-1G work channel |
 
 ### `<dtuSerial>.gridProfile.*` — Grid Profile (per DTU, local)
 

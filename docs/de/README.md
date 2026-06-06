@@ -190,13 +190,9 @@ PV-Channels werden dynamisch basierend auf dem Wechselrichter-Modell erstellt (1
 | `dtu.wifiVersion` | string | — | WLAN-Version |
 | `dtu.fwUpdateAvailable` | boolean | — | Firmware-Update verfügbar (1x täglich via Cloud geprüft) |
 | `dtu.stepTime` | number | s | Schrittzeit |
-| `dtu.rfHwVersion` | number | — | RF Hardware-Version |
-| `dtu.rfSwVersion` | number | — | RF Software-Version |
 | `dtu.accessModel` | number | — | Netzwerk-Zugangsart (0=GPRS, 1=WiFi, 2=Ethernet) |
 | `dtu.communicationTime` | number | — | Letzte Kommunikation (Unix-Timestamp) |
 | `dtu.connState` | number | — | DTU Fehlercode (0=OK) |
-| `dtu.mode485` | number | — | RS485 Modus (0=Reflux/Auto, 1=Remote Control) |
-| `dtu.sub1gFrequencyBand` | number | — | Sub-1G Frequenzband |
 | `dtu.searchResult` | string | — | AutoSearch-Ergebnis (Wechselrichter-Seriennummern, JSON) |
 
 ### `station-<id>.grid.*` — Stations-Aggregate (Cloud)
@@ -285,22 +281,12 @@ Netz- und Zähler-Warnflags aus dem Cloud-Datensatz `station/find`. Alle boolesc
 | `config.wifiSsid` | string | — | nein | WLAN SSID |
 | `config.wifiRssi` | number | dBm | nein | WLAN Signalstärke |
 | `config.zeroExportEnable` | boolean | — | **ja** | Nulleinspeisung aktiviert |
-| `config.zeroExport433Addr` | number | — | nein | Nulleinspeisung 433MHz-Sensoradresse |
-| `config.meterKind` | string | — | nein | Zählertyp (0=Kein, 1=1-Phasen, 2=2-Phasen, 3=3-Phasen, 5=CT G3, 6=Meter 1S/1T G3, 7=Meter 2S/2T G3) |
-| `config.meterInterface` | string | — | nein | Zähler-Schnittstelle |
 | `config.invType` | number | — | nein | Wechselrichter-Typ |
 | `config.netmodeSelect` | number | — | nein | Netzwerkmodus (0=GPRS, 1=WiFi, 2=Ethernet) |
 | `config.netDhcpSwitch` | number | — | nein | DHCP aktiviert |
-| `config.netIpAddress` | string | — | nein | Ethernet IP-Adresse |
-| `config.netSubnetMask` | string | — | nein | Ethernet Subnetzmaske |
-| `config.netGateway` | string | — | nein | Ethernet Gateway |
-| `config.netMacAddress` | string | — | nein | Ethernet MAC-Adresse |
 | `config.wifiIpAddress` | string | — | nein | WLAN IP-Adresse |
 | `config.wifiMacAddress` | string | — | nein | WLAN MAC-Adresse |
 | `config.dtuApSsid` | string | — | nein | DTU Access-Point SSID |
-| `config.channelSelect` | number | — | nein | Kanalauswahl |
-| `config.sub1gSweepSwitch` | number | — | nein | Sub-1G Sweep |
-| `config.sub1gWorkChannel` | number | — | nein | Sub-1G Arbeitskanal |
 
 ### `<dtuSerial>.gridProfile.*` — Netzprofil (pro DTU, lokal)
 
