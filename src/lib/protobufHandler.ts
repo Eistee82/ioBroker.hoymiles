@@ -131,6 +131,19 @@ const arr = (v: unknown): Record<string, unknown>[] => (Array.isArray(v) ? (v as
 const scaled = (v: unknown, div: number): number => (div === 0 ? 0 : num(v) / div);
 
 /**
+ * Reinterpret a value as a signed 16-bit integer. The inverter packs signed quantities
+ * (e.g. temperature ×10) into unsigned-16 semantics, so values > 0x7FFF are negative
+ * (the S-Miles app does the same above the signed boundary). Works whether the field
+ * arrived as the raw unsigned-16 (e.g. 65531) or as an already-negative int (-5).
+ *
+ * @param v - Raw protobuf field value
+ */
+const s16 = (v: unknown): number => {
+	const n = num(v) & 0xffff;
+	return n >= 0x8000 ? n - 0x10000 : n;
+};
+
+/**
  * Convert a numeric serial number to uppercase hex string.
  *
  * @param v - Numeric serial number
@@ -279,6 +292,7 @@ class ProtobufHandler {
 			["APPHeartbeatPB", "HBReqDTO"],
 			["AlarmData", "WInfoReqDTO"],
 			["WarnData", "WarnReqDTO"],
+			["WarnData", "WarnResDTO"],
 			["AppGetHistPower", "AppGetHistPowerReqDTO"],
 			["EventData", "EventDataReqDTO"],
 			["AutoSearch", "AutoSearchResDTO"],
@@ -508,6 +522,28 @@ class ProtobufHandler {
 		});
 		const payload = ResDTO.encode(msg).finish();
 		return this.buildMessage(CMD.SET_CONFIG[0], CMD.SET_CONFIG[1], payload);
+	}
+
+	/**
+	 * Encode a WarnData request for a single warn-list package (paginated pull).
+	 *
+	 * The DTU replies (tag 0xa2 0x04) with a `WarnReqDTO` carrying `package_now`/`package_nub`.
+	 * To read a multi-package warn list, request package 0 first, then keep requesting
+	 * `package_now + 1` until `package_now + 1 === package_nub` — exactly as the S-Miles app does.
+	 *
+	 * @param timestamp - Unix timestamp in seconds
+	 * @param packageNow - 0-based index of the package to request
+	 */
+	encodeWarnDataRequest(timestamp: number, packageNow = 0): Buffer {
+		const ResDTO = this.getType("WarnData", "WarnResDTO");
+		const msg = ResDTO.create({
+			ymdHms: this.formatTimeYmdHms(),
+			packageNow,
+			offset: DTU_TIME_OFFSET,
+			time: timestamp,
+		});
+		const payload = ResDTO.encode(msg).finish();
+		return this.buildMessage(CMD.WARN_DATA[0], CMD.WARN_DATA[1], payload);
 	}
 
 	/**
@@ -762,7 +798,7 @@ class ProtobufHandler {
 				reactivePower: scaled(sgs.reactivePower, SCALE_POWER),
 				current: scaled(sgs.current, SCALE_CURRENT),
 				powerFactor: scaled(sgs.powerFactor, SCALE_POWER_FACTOR),
-				temperature: scaled(sgs.temperature, SCALE_TEMPERATURE),
+				temperature: scaled(s16(sgs.temperature), SCALE_TEMPERATURE),
 				warningNumber: num(sgs.warningNumber),
 				crcChecksum: num(sgs.crcChecksum),
 				linkStatus: num(sgs.linkStatus),
@@ -996,6 +1032,11 @@ class ProtobufHandler {
 		return {
 			dtuSn: (obj.dtuSn as string) || "",
 			timestamp: num(obj.time),
+			// package_nub = total packages (1 = single). package_now = 0-based index of this
+			// package. The DTU paginates long warn lists; the caller must pull each package.
+			packageNub: Math.max(num(obj.packageNub), 1),
+			packageNow: num(obj.packageNow),
+			warnDevice: num(obj.warnDevice),
 			warnings,
 		};
 	}
@@ -1019,7 +1060,7 @@ class ProtobufHandler {
 				gridVoltage: scaled(e.gridVoltage, SCALE_VOLTAGE),
 				gridFrequency: scaled(e.gridFrequency, SCALE_FREQUENCY),
 				gridPower: num(e.gridPower),
-				temperature: scaled(e.temperature, SCALE_TEMPERATURE),
+				temperature: scaled(s16(e.temperature), SCALE_TEMPERATURE),
 				miId: `${num(e.miId)}`,
 				startTimestamp: num(e.startTimestamp),
 			});

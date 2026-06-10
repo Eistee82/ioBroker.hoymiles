@@ -444,7 +444,7 @@ function getAlarmDescription(code, lang) {
     lang = lang || "en";
     const entry = ALARM_CODES[code];
     if (!entry) {
-        return `Unknown code: ${code}`;
+        return lang === "de" ? `Unbekannter Code: ${code}` : `Unknown code: ${code}`;
     }
     return entry[lang] || entry.en;
 }

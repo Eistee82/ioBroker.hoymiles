@@ -155,6 +155,7 @@ PV-Channels werden dynamisch basierend auf dem Wechselrichter-Modell erstellt (1
 | `pvX.current` | number | A | Panel-Strom |
 | `pvX.dailyEnergy` | number | kWh | Tagesenergie (nur lokal) |
 | `pvX.totalEnergy` | number | kWh | Gesamtenergie (nur lokal) |
+| `pvX.errorCode` | number | | Fehlercode pro Strang, 0 im Normalbetrieb (nur lokal) |
 
 ### `<dtuSerial>.inverter.*` — Wechselrichter-Status & Steuerung (pro DTU)
 
@@ -165,7 +166,7 @@ PV-Channels werden dynamisch basierend auf dem Wechselrichter-Modell erstellt (1
 | `inverter.hwVersion` | string | — | nein | Hardware-Version |
 | `inverter.swVersion` | string | — | nein | Software-Version |
 | `inverter.temperature` | number | °C | nein | Temperatur |
-| `inverter.powerLimit` | number | % | **ja** | Leistungslimit **Laufzeit** (RAM-only am Inverter, ideal für Nulleinspeisung — kein NVM-Verschleiß; 2-100%, lokal) |
+| `inverter.powerLimit` | number | % | **ja** | **Laufzeit**-Leistungslimit (RAM-only, **kein Flash-/NVM-Verschleiß — sekündliches Schreiben unbedenklich**). **Mit diesem Datenpunkt lässt sich eine Nulleinspeisung realisieren** / dynamische Drosselung. 2-100%, lokal |
 | `inverter.activePowerLimit` | number | % | nein | Aktives Leistungslimit (live, lokal) |
 | `inverter.active` | boolean | — | **ja** | Wechselrichter ein/aus (lokal) |
 | `inverter.reboot` | boolean | — | **ja** | Wechselrichter neustarten (lokal) |
@@ -174,9 +175,10 @@ PV-Channels werden dynamisch basierend auf dem Wechselrichter-Modell erstellt (1
 | `inverter.cleanWarnings` | boolean | — | **ja** | Warnungen löschen (lokal) |
 | `inverter.cleanGroundingFault` | boolean | — | **ja** | Erdungsfehler löschen (lokal) |
 | `inverter.lock` | boolean | — | **ja** | Wechselrichter sperren/entsperren (lokal) |
-| `inverter.warnCount` | number | — | nein | Aktiver Warnungscode (lokal) |
-| `inverter.warnMessage` | string | — | nein | Aktive Warnungsmeldung (lokal) |
+| `inverter.warnCount` | number | — | nein | SGSMO-Feld `warning_number`, Rohwert (lokal) — kein dokumentierter Warn-Code |
+| `inverter.warnMessage` | string | — | nein | Aktive Warnungsmeldung aus der WCode-Alarmliste (lokal) |
 | `inverter.linkStatus` | number | — | nein | Verbindungsstatus |
+| `inverter.modulationIndexSignal` | number | — | nein | SGSMO #20, roher gepackter Wert (Modulationsindex + Signal; genaue Dekodierung noch unbestätigt, lokal) |
 
 ### `<dtuSerial>.dtu.*` — DTU-Information (pro DTU, nur lokal)
 
@@ -272,12 +274,15 @@ Netz- und Zähler-Warnflags aus dem Cloud-Datensatz `station/find`. Alle boolesc
 
 ### `<dtuSerial>.config.*` — DTU-Konfiguration (pro DTU, lokal)
 
+> ⚠️ **WARNUNG — `config.*`-Datenpunkte (besonders `config.limitPowerMyPower`) NIEMALS häufig oder in einer automatisierten Schleife schreiben.** Jeder Schreibvorgang programmiert den **internen Flash der integrierten DTU** (das WiFi-Modul im HMS-xT). Flash hat eine begrenzte Lebensdauer (≈ einige zehntausend Zyklen); wiederholtes hochfrequentes Schreiben — z. B. eine sekündliche Nulleinspeisungs-Schleife — nutzt ihn ab und kann das **Gerät dauerhaft zerstören (bricken)**. Diese Datenpunkte nur für gelegentliche, dauerhafte Einstellungen verwenden.
+> **Für dynamische / häufige Leistungsbegrenzung (Nulleinspeisung) stattdessen `inverter.powerLimit` nutzen** — ein Laufzeit-Befehl im RAM, **ohne Flash-Schreibvorgang und ohne Verschleiß**, sekündliches Schreiben unbedenklich.
+
 | Datenpunkt | Typ | Einheit | Schreibbar | Beschreibung |
 |------------|-----|---------|------------|--------------|
 | `config.serverDomain` | string | — | nein | Cloud-Server Domain |
 | `config.serverPort` | number | — | nein | Cloud-Server Port |
-| `config.serverSendTime` | number | min | **ja** | Cloud-Sendeintervall (Minuten) |
-| `config.limitPowerMyPower` | number | % | **ja** | **Persistentes** Leistungslimit (in der DTU gespeichert, übersteht Neustart; 2-100%, lokal). Für dauerhafte Begrenzung — für dynamische Nulleinspeisung stattdessen `inverter.powerLimit` nutzen |
+| `config.serverSendTime` | number | min | **ja** | Cloud-Sendeintervall (Minuten). ⚠️ Persistent (DTU-Flash) — nicht häufig schreiben, siehe Warnung oben |
+| `config.limitPowerMyPower` | number | % | **ja** | **Persistentes** Leistungslimit (im DTU-Flash gespeichert, übersteht Neustart; 2-100%, lokal). ⚠️ **Nur für dauerhafte Begrenzung — niemals in einer Schleife schreiben (nutzt DTU-Flash ab). Für dynamische Nulleinspeisung `inverter.powerLimit` nutzen** (siehe Warnung oben) |
 | `config.wifiSsid` | string | — | nein | WLAN SSID |
 | `config.wifiRssi` | number | dBm | nein | WLAN Signalstärke (echtes dBm, z.B. −65) |
 | `config.invType` | number | — | nein | Wechselrichter-Typ |

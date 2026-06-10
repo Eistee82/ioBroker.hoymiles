@@ -155,6 +155,7 @@ PV channels are created dynamically based on the inverter model (1T = 1 channel,
 | `pvX.current` | number | A | Panel current |
 | `pvX.dailyEnergy` | number | kWh | Daily energy (local only) |
 | `pvX.totalEnergy` | number | kWh | Total energy (local only) |
+| `pvX.errorCode` | number | | Per-string error code, 0 in normal operation (local only) |
 
 ### `<dtuSerial>.inverter.*` — Inverter Status & Control (per DTU)
 
@@ -165,7 +166,7 @@ PV channels are created dynamically based on the inverter model (1T = 1 channel,
 | `inverter.hwVersion` | string | — | no | Hardware version |
 | `inverter.swVersion` | string | — | no | Software version |
 | `inverter.temperature` | number | °C | no | Inverter temperature |
-| `inverter.powerLimit` | number | % | **yes** | **Runtime** power limit (RAM-only on the inverter, ideal for zero-export — no NVM wear; 2-100%, local) |
+| `inverter.powerLimit` | number | % | **yes** | **Runtime** power limit (RAM-only, **no flash/NVM wear — safe to write every second**). **Use this state to realize zero-export (Nulleinspeisung)** / dynamic curtailment. 2-100%, local |
 | `inverter.activePowerLimit` | number | % | no | Active power limit (live, local) |
 | `inverter.active` | boolean | — | **yes** | Turn inverter on/off (local) |
 | `inverter.reboot` | boolean | — | **yes** | Reboot inverter (button, local) |
@@ -174,9 +175,10 @@ PV channels are created dynamically based on the inverter model (1T = 1 channel,
 | `inverter.cleanWarnings` | boolean | — | **yes** | Clean warnings (button, local) |
 | `inverter.cleanGroundingFault` | boolean | — | **yes** | Clean grounding fault (button, local) |
 | `inverter.lock` | boolean | — | **yes** | Lock/unlock inverter (local) |
-| `inverter.warnCount` | number | — | no | Active warning code (local) |
-| `inverter.warnMessage` | string | — | no | Active warning message (local) |
+| `inverter.warnCount` | number | — | no | SGSMO `warning_number` field, raw value (local) — not a documented warn code |
+| `inverter.warnMessage` | string | — | no | Active warning message from the WCode alarm list (local) |
 | `inverter.linkStatus` | number | — | no | Link status |
+| `inverter.modulationIndexSignal` | number | — | no | SGSMO #20, raw packed value (modulation index + signal; exact decode not yet confirmed, local) |
 
 ### `<dtuSerial>.dtu.*` — DTU Information (per DTU, local only)
 
@@ -272,12 +274,15 @@ Grid- and meter-level warning flags from the cloud's `station/find` record. All 
 
 ### `<dtuSerial>.config.*` — DTU Configuration (per DTU, local)
 
+> ⚠️ **WARNING — never write `config.*` states (especially `config.limitPowerMyPower`) frequently or in an automated loop.** Each write programs the **internal flash of the integrated DTU** (the WiFi module inside the HMS-xT). Flash endurance is finite (≈ tens of thousands of cycles); repeated high-frequency writes — e.g. a per-second zero-export loop — wear it out and can **permanently brick the device**. Use these states only for occasional, permanent settings.
+> **For dynamic / frequent power limiting (zero-export), use `inverter.powerLimit` instead** — a runtime, RAM-only command with **no flash write and no wear**, safe to update every second.
+
 | State | Type | Unit | Writable | Description |
 |-------|------|------|----------|-------------|
 | `config.serverDomain` | string | — | no | Cloud server domain |
 | `config.serverPort` | number | — | no | Cloud server port |
-| `config.serverSendTime` | number | min | **yes** | Cloud send interval (minutes) |
-| `config.limitPowerMyPower` | number | % | **yes** | **Persistent** power limit (stored in the DTU, survives a reboot; 2-100%, local). For a permanent cap — for dynamic zero-export use `inverter.powerLimit` instead |
+| `config.serverSendTime` | number | min | **yes** | Cloud send interval (minutes). ⚠️ Persistent (DTU flash) — do not write frequently, see warning above |
+| `config.limitPowerMyPower` | number | % | **yes** | **Persistent** power limit (stored in DTU flash, survives a reboot; 2-100%, local). ⚠️ **Permanent cap only — never write in a loop (wears DTU flash). For dynamic zero-export use `inverter.powerLimit`** (see warning above) |
 | `config.wifiSsid` | string | — | no | WiFi SSID |
 | `config.wifiRssi` | number | dBm | no | WiFi signal strength (real dBm, e.g. −65) |
 | `config.invType` | number | — | no | Inverter type |

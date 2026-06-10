@@ -18,6 +18,7 @@ const PV_FIELDS_BASE = [
 const PV_FIELDS_LOCAL_ONLY = [
     { suffix: "dailyEnergy", en: "daily energy", de: "Tagesenergie", role: "value.energy", unit: "kWh" },
     { suffix: "totalEnergy", en: "total energy", de: "Gesamtenergie", role: "value.energy", unit: "kWh" },
+    { suffix: "errorCode", en: "error code", de: "Fehlercode", role: "value", unit: "" },
 ];
 const WRITABLE_STATES = [
     "inverter.powerLimit",
@@ -64,6 +65,7 @@ class DeviceContext {
     dataInterval;
     inverterSn;
     gridChunks = new Map();
+    warnChunks = new Map();
     gridBlob = null;
     gridDtuSn = null;
     gridDevSn = null;
@@ -732,9 +734,9 @@ class DeviceContext {
             ];
             if (data.sgs.length > 0) {
                 const sgs = data.sgs[0];
-                entries.push(["grid.power", sgs.activePower], ["grid.voltage", sgs.voltage], ["grid.current", sgs.current], ["grid.frequency", sgs.frequency], ["grid.reactivePower", sgs.reactivePower], ["grid.powerFactor", sgs.powerFactor], ["inverter.temperature", sgs.temperature], ["inverter.warnCount", sgs.warningNumber], ["inverter.warnMessage", sgs.warningNumber > 0 ? getAlarmDescription(sgs.warningNumber, "en") : ""], ...(sgs.linkStatus
+                entries.push(["grid.power", sgs.activePower], ["grid.voltage", sgs.voltage], ["grid.current", sgs.current], ["grid.frequency", sgs.frequency], ["grid.reactivePower", sgs.reactivePower], ["grid.powerFactor", sgs.powerFactor], ["inverter.temperature", sgs.temperature], ["inverter.warnCount", sgs.warningNumber], ...(sgs.linkStatus
                     ? [["inverter.linkStatus", sgs.linkStatus]]
-                    : []), ["inverter.serialNumber", sgs.serialNumber], ["inverter.activePowerLimit", sgs.powerLimit]);
+                    : []), ["inverter.serialNumber", sgs.serialNumber], ["inverter.activePowerLimit", sgs.powerLimit], ["inverter.modulationIndexSignal", sgs.modulationIndexSignal]);
             }
             for (const pv of data.pv) {
                 const pvIndex = pv.portNumber - 1;
@@ -742,7 +744,7 @@ class DeviceContext {
                     continue;
                 }
                 const prefix = `pv${pvIndex}`;
-                entries.push([`${prefix}.power`, pv.power], [`${prefix}.voltage`, pv.voltage], [`${prefix}.current`, pv.current], [`${prefix}.dailyEnergy`, whToKwh(pv.energyDaily)], [`${prefix}.totalEnergy`, Math.round(pv.energyTotal / 100) / 10]);
+                entries.push([`${prefix}.power`, pv.power], [`${prefix}.voltage`, pv.voltage], [`${prefix}.current`, pv.current], [`${prefix}.dailyEnergy`, whToKwh(pv.energyDaily)], [`${prefix}.totalEnergy`, Math.round(pv.energyTotal / 100) / 10], [`${prefix}.errorCode`, pv.errorCode]);
             }
             if (data.meter.length > 0) {
                 if (!this.meterStatesCreated) {
@@ -926,8 +928,8 @@ class DeviceContext {
             this.adapter.log.warn(`[${this.deviceId || this.host}] Error decoding Config: ${errorMessage(err)}`);
         }
     }
-    async handleAlarmData(payload) {
-        const normalize = (e) => ({
+    static normalizeAlarm(e) {
+        return {
             sn: e.sn,
             code: e.code,
             num: e.num,
@@ -938,22 +940,48 @@ class DeviceContext {
             descriptionEn: e.descriptionEn || getAlarmDescription(e.code, "en"),
             descriptionDe: e.descriptionDe || getAlarmDescription(e.code, "de"),
             active: e.endTime === 0,
-        });
-        let alarms = [];
+        };
+    }
+    async handleAlarmData(payload) {
         try {
             const data = this.protobuf.decodeAlarmData(payload);
-            alarms = data.alarms.map(normalize);
+            await this.finalizeAlarms(data.alarms.map(DeviceContext.normalizeAlarm));
+            return;
         }
         catch {
-            try {
-                const data = this.protobuf.decodeWarnData(payload);
-                alarms = data.warnings.map(normalize);
-            }
-            catch (err) {
-                this.adapter.log.warn(`[${this.deviceId || this.host}] Error decoding AlarmData/WarnData: ${errorMessage(err)}`);
-                return;
-            }
         }
+        let data;
+        try {
+            data = this.protobuf.decodeWarnData(payload);
+        }
+        catch (err) {
+            this.adapter.log.warn(`[${this.deviceId || this.host}] Error decoding AlarmData/WarnData: ${errorMessage(err)}`);
+            return;
+        }
+        const total = data.packageNub;
+        const now = data.packageNow;
+        const pageAlarms = data.warnings.map(DeviceContext.normalizeAlarm);
+        if (total <= 1) {
+            this.warnChunks.clear();
+            await this.finalizeAlarms(pageAlarms);
+            return;
+        }
+        if (now === 0) {
+            this.warnChunks.clear();
+        }
+        this.warnChunks.set(now, pageAlarms);
+        this.adapter.log.debug(`[${this.deviceId || this.host}] Warn list package ${now + 1}/${total} (${pageAlarms.length} entries)`);
+        if (now + 1 < total) {
+            this.connection
+                ?.send(this.protobuf.encodeWarnDataRequest(unixSeconds(), now + 1))
+                .catch(e => this.adapter.log.debug(`[${this.deviceId || this.host}] warn next-pkg failed: ${errorMessage(e)}`));
+            return;
+        }
+        const assembled = [...this.warnChunks.keys()].sort((a, b) => a - b).flatMap(k => this.warnChunks.get(k));
+        this.warnChunks.clear();
+        await this.finalizeAlarms(assembled);
+    }
+    async finalizeAlarms(alarms) {
         if (alarms.length === 0) {
             this.adapter.log.debug(`[${this.deviceId || this.host}] Alarm list query returned no active alarms`);
         }
@@ -961,11 +989,13 @@ class DeviceContext {
             this.adapter.log.debug(`[${this.deviceId || this.host}] Alarms received: ${alarms.length} entries`);
         }
         const activeAlarms = alarms.filter(a => a.active);
+        const latestActive = activeAlarms[activeAlarms.length - 1];
         const entries = [
             ["alarms.count", alarms.length],
             ["alarms.activeCount", activeAlarms.length],
             ["alarms.hasActive", activeAlarms.length > 0],
             ["alarms.json", safeJsonStringify(alarms)],
+            ["inverter.warnMessage", latestActive ? latestActive.descriptionEn : ""],
         ];
         if (alarms.length > 0) {
             const last = alarms[alarms.length - 1];

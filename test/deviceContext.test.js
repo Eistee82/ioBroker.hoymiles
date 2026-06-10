@@ -832,9 +832,9 @@ describe("deviceContext – createPvStates", function () {
 		await ctx.createPvStates(2);
 		const newCalls = extendCalls.slice(callsBefore);
 
-		// 2 PV inputs: each gets 1 channel + 5 states (power, voltage, current, dailyEnergy, totalEnergy)
-		// = 2 * (1 + 5) = 12
-		assert.strictEqual(newCalls.length, 12, `Expected 12 extendObject calls, got ${newCalls.length}`);
+		// 2 PV inputs: each gets 1 channel + 6 states (power, voltage, current, dailyEnergy, totalEnergy, errorCode)
+		// = 2 * (1 + 6) = 14
+		assert.strictEqual(newCalls.length, 14, `Expected 14 extendObject calls, got ${newCalls.length}`);
 
 		// Verify channel creation
 		assert.ok(newCalls[0][0].endsWith("pv0"), "First call should create pv0 channel");
@@ -899,8 +899,8 @@ describe("deviceContext – createPvStates", function () {
 		const newCalls = extendCalls.slice(callsBefore);
 
 		// Loop uses this.pvCount (clamped to MAX_PV_PORTS = 6)
-		// 6 PVs × (1 channel + 5 states) = 36 calls
-		assert.strictEqual(newCalls.length, 36, "Should create exactly 36 objects for 6 clamped PV ports");
+		// 6 PVs × (1 channel + 6 states) = 42 calls
+		assert.strictEqual(newCalls.length, 42, "Should create exactly 42 objects for 6 clamped PV ports");
 		assert.strictEqual(ctx["pvCount"], 6, "pvCount should be clamped to 6");
 	});
 });
@@ -1359,6 +1359,9 @@ describe("deviceContext – handleAlarmData", function () {
 				throw new Error("not alarm format");
 			},
 			decodeWarnData: () => ({
+				packageNub: 1,
+				packageNow: 0,
+				warnDevice: 1,
 				warnings: [{ sn: "INV1", code: 2001, num: 1, startTime: 1700000000, endTime: 0, data1: 0, data2: 0 }],
 			}),
 		};
@@ -1381,6 +1384,72 @@ describe("deviceContext – handleAlarmData", function () {
 
 		const countCall = newCalls.find(c => c[0] === "TEST1234.alarms.count");
 		assert.strictEqual(countCall[1], 1);
+	});
+
+	it("accumulates a paginated WarnData list and requests follow-up packages", async function () {
+		const { calls, adapter } = createTrackingAdapter();
+		// Two packages, each with one warning. package_now is 0-based, package_nub = 2.
+		const pages = [
+			{
+				packageNub: 2,
+				packageNow: 0,
+				warnDevice: 1,
+				warnings: [{ sn: "INV1", code: 101, num: 1, startTime: 1700000000, endTime: 0, data1: 0, data2: 0 }],
+			},
+			{
+				packageNub: 2,
+				packageNow: 1,
+				warnDevice: 1,
+				warnings: [{ sn: "INV1", code: 102, num: 2, startTime: 1700000000, endTime: 0, data1: 0, data2: 0 }],
+			},
+		];
+		let decodeCall = 0;
+		const sentRequests = [];
+		const mockProtobuf = {
+			decodeAlarmData: () => {
+				throw new Error("not alarm format");
+			},
+			decodeWarnData: () => pages[decodeCall++],
+			encodeWarnDataRequest: (_ts, packageNow) => {
+				sentRequests.push(packageNow);
+				return Buffer.from([packageNow]);
+			},
+		};
+
+		const ctx = new DeviceContext({
+			adapter,
+			protobuf: mockProtobuf,
+			host: "192.168.1.1",
+			enableLocal: false,
+			enableCloud: false,
+			enableCloudRelay: false,
+			dataInterval: 15,
+			slowPollFactor: 6,
+		});
+		await ctx.initFromSerial("TEST1234");
+		ctx.connection = { connected: true, send: async () => {} };
+
+		// First package: must NOT write states yet, but must request package 1.
+		const before1 = calls.length;
+		await ctx["handleAlarmData"](Buffer.alloc(0));
+		const after1 = calls.slice(before1);
+		assert.ok(
+			!after1.some(c => c[0] === "TEST1234.alarms.count"),
+			"First package must not finalize alarm states yet",
+		);
+		assert.deepStrictEqual(sentRequests, [1], "Must request the next package (index 1)");
+
+		// Second (last) package: now finalize with BOTH warnings merged.
+		const before2 = calls.length;
+		await ctx["handleAlarmData"](Buffer.alloc(0));
+		const after2 = calls.slice(before2);
+		const countCall = after2.find(c => c[0] === "TEST1234.alarms.count");
+		assert.strictEqual(countCall[1], 2, "Both packages' warnings must be present after the last package");
+
+		const jsonCall = after2.find(c => c[0] === "TEST1234.alarms.json");
+		const codes = JSON.parse(jsonCall[1]).map(a => a.code);
+		assert.deepStrictEqual(codes, [101, 102], "Warnings assembled in package order");
+		assert.deepStrictEqual(sentRequests, [1], "Last package must not request a further package");
 	});
 });
 
@@ -2084,7 +2153,7 @@ describe("deviceContext – createPvStates extended", function () {
 		};
 	}
 
-	it("creates 1 PV input with 5 fields (local mode)", async function () {
+	it("creates 1 PV input with 6 fields (local mode)", async function () {
 		const { extendCalls, adapter } = createTrackingAdapter();
 		const ctx = new DeviceContext({
 			adapter,
@@ -2100,8 +2169,8 @@ describe("deviceContext – createPvStates extended", function () {
 		const callsBefore = extendCalls.length;
 		await ctx.createPvStates(1);
 		const newCalls = extendCalls.slice(callsBefore);
-		// 1 PV: 1 channel + 5 states = 6
-		assert.strictEqual(newCalls.length, 6, `Expected 6 calls for 1 PV, got ${newCalls.length}`);
+		// 1 PV: 1 channel + 6 states = 7
+		assert.strictEqual(newCalls.length, 7, `Expected 7 calls for 1 PV, got ${newCalls.length}`);
 	});
 
 	it("creates 4 PV inputs with correct channel names", async function () {
@@ -2120,8 +2189,8 @@ describe("deviceContext – createPvStates extended", function () {
 		const callsBefore = extendCalls.length;
 		await ctx.createPvStates(4);
 		const newCalls = extendCalls.slice(callsBefore);
-		// 4 PVs * (1 channel + 5 states) = 24
-		assert.strictEqual(newCalls.length, 24, `Expected 24 calls, got ${newCalls.length}`);
+		// 4 PVs * (1 channel + 6 states) = 28
+		assert.strictEqual(newCalls.length, 28, `Expected 28 calls, got ${newCalls.length}`);
 		// Check channel names
 		const channels = newCalls.filter(c => c[1].type === "channel");
 		assert.strictEqual(channels.length, 4);

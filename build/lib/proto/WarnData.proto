@@ -16,3 +16,13 @@ message WarnReqDTO {
     int32 warn_device = 5;
     repeated WarnMO warns = 6;
 }
+
+// App -> DTU request for a single warn-list package (paginated pull). The DTU answers
+// with a WarnReqDTO carrying package_now/package_nub. Field numbers verified against the
+// S-Miles app (WarnData.WarnResDTO): ymd_hms=1, package_now=2, offset=4, time=5.
+message WarnResDTO {
+    bytes ymd_hms = 1;
+    int32 package_now = 2;
+    int32 offset = 4;
+    int32 time = 5;
+}

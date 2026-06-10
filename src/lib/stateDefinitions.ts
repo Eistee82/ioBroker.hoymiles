@@ -118,9 +118,29 @@ const states: StateDefinition[] = [
 		source: "local",
 	}),
 	b("inverter.lock", "Lock inverter", "Wechselrichter sperren", "switch", { write: true, source: "local" }),
-	n("inverter.warnCount", "Active warning code", "Aktiver Warnungscode", "value", "", { source: "local" }),
-	s("inverter.warnMessage", "Active warning message", "Aktive Warnungsmeldung", "text", { source: "local" }),
+	n("inverter.warnCount", "SGSMO warning_number (raw value)", "SGSMO-Feld warning_number (Rohwert)", "value", "", {
+		source: "local",
+	}),
+	s(
+		"inverter.warnMessage",
+		"Active warning message (from WCode alarm list)",
+		"Aktive Warnungsmeldung (aus WCode-Alarmliste)",
+		"text",
+		{ source: "local" },
+	),
 	n("inverter.linkStatus", "Link status", "Verbindungsstatus", "value", ""),
+	// SGSMO field #20 ("modulation_index_signal"): packed value 0x00XX00YY (two bytes that vary with
+	// operation). Exact decode/scaling not yet firmware-confirmed → expose raw until verified.
+	n(
+		"inverter.modulationIndexSignal",
+		"Modulation index / signal (raw, packed)",
+		"Modulationsindex / Signal (roh, gepackt)",
+		"value",
+		"",
+		{
+			source: "local",
+		},
+	),
 	s("inverter.model", "Model", "Modell", "text", { source: "cloud" }),
 
 	// === DTU ===

@@ -61,6 +61,9 @@ const PV_FIELDS_BASE = [
 const PV_FIELDS_LOCAL_ONLY = [
 	{ suffix: "dailyEnergy", en: "daily energy", de: "Tagesenergie", role: "value.energy", unit: "kWh" },
 	{ suffix: "totalEnergy", en: "total energy", de: "Gesamtenergie", role: "value.energy", unit: "kWh" },
+	// PvMO.error_code (field 8): per-string fault code, 0 in normal operation. Raw value
+	// (no scaling) — firmware-confirmed field, decoded but previously unexposed.
+	{ suffix: "errorCode", en: "error code", de: "Fehlercode", role: "value", unit: "" },
 ] as const;
 
 /** Writable state IDs that need subscriptions (relative to device prefix). */
@@ -77,6 +80,20 @@ const WRITABLE_STATES = [
 	"config.limitPowerMyPower",
 	"dtu.reboot",
 ];
+
+/** A normalized alarm/warning entry ready to be written to states. */
+interface NormalizedAlarm {
+	sn: string;
+	code: number;
+	num: number;
+	startTime: number;
+	endTime: number;
+	data1: number;
+	data2: number;
+	descriptionEn: string;
+	descriptionDe: string;
+	active: boolean;
+}
 
 /** Manages a single DTU device: connection, polling, state updates, and commands. */
 class DeviceContext {
@@ -123,6 +140,8 @@ class DeviceContext {
 	private inverterSn: string;
 	/** Grid-profile chunk accumulator: package index → raw data bytes. */
 	private readonly gridChunks: Map<number, Buffer> = new Map();
+	/** Paginated warn-list accumulator: package index (0-based) → normalized alarms of that package. */
+	private readonly warnChunks: Map<number, NormalizedAlarm[]> = new Map();
 	/** Last fully-read grid-profile blob (big-endian), cached to answer cloud-relay reads. */
 	private gridBlob: Buffer | null = null;
 	/**
@@ -1108,14 +1127,20 @@ class DeviceContext {
 					["grid.reactivePower", sgs.reactivePower],
 					["grid.powerFactor", sgs.powerFactor],
 					["inverter.temperature", sgs.temperature],
+					// SGSMO.warning_number (#10) is NOT a warn code: the S-Miles app never maps it to
+					// alarm text (its realtime view reads voltage/frequency/power/temperature only),
+					// and the proto names it like WNum (count), not WCode. The authoritative warn
+					// codes come via AlarmData/WarnData.WCode and are surfaced as inverter.warnMessage
+					// in handleAlarmData(). Keep this only as the raw SGSMO value.
 					["inverter.warnCount", sgs.warningNumber],
-					["inverter.warnMessage", sgs.warningNumber > 0 ? getAlarmDescription(sgs.warningNumber, "en") : ""],
 					// Only write linkStatus if present (proto3 omits default 0, which is indistinguishable from "not sent")
 					...(sgs.linkStatus
 						? [["inverter.linkStatus", sgs.linkStatus] as [string, ioBroker.StateValue]]
 						: []),
 					["inverter.serialNumber", sgs.serialNumber],
 					["inverter.activePowerLimit", sgs.powerLimit],
+					// SGSMO #20: packed (two bytes), exact decode not yet confirmed → raw
+					["inverter.modulationIndexSignal", sgs.modulationIndexSignal],
 				);
 			}
 
@@ -1131,6 +1156,7 @@ class DeviceContext {
 					[`${prefix}.current`, pv.current],
 					[`${prefix}.dailyEnergy`, whToKwh(pv.energyDaily)],
 					[`${prefix}.totalEnergy`, Math.round(pv.energyTotal / 100) / 10], // double normalization: round at Wh precision, then → kWh
+					[`${prefix}.errorCode`, pv.errorCode],
 				);
 			}
 
@@ -1364,31 +1390,18 @@ class DeviceContext {
 		}
 	}
 
-	private async handleAlarmData(payload: Buffer): Promise<void> {
-		interface AlarmInfo {
-			sn: string;
-			code: number;
-			num: number;
-			startTime: number;
-			endTime: number;
-			data1: number;
-			data2: number;
-			descriptionEn: string;
-			descriptionDe: string;
-			active: boolean;
-		}
-
-		const normalize = (e: {
-			sn: string;
-			code: number;
-			num: number;
-			startTime: number;
-			endTime: number;
-			data1: number;
-			data2: number;
-			descriptionEn?: string;
-			descriptionDe?: string;
-		}): AlarmInfo => ({
+	private static normalizeAlarm(e: {
+		sn: string;
+		code: number;
+		num: number;
+		startTime: number;
+		endTime: number;
+		data1: number;
+		data2: number;
+		descriptionEn?: string;
+		descriptionDe?: string;
+	}): NormalizedAlarm {
+		return {
 			sn: e.sn,
 			code: e.code,
 			num: e.num,
@@ -1399,25 +1412,73 @@ class DeviceContext {
 			descriptionEn: e.descriptionEn || getAlarmDescription(e.code, "en"),
 			descriptionDe: e.descriptionDe || getAlarmDescription(e.code, "de"),
 			active: e.endTime === 0,
-		});
+		};
+	}
 
-		let alarms: AlarmInfo[] = [];
-
+	private async handleAlarmData(payload: Buffer): Promise<void> {
+		// AlarmData (WInfoReqDTO) is always a single packet — finalize immediately.
 		try {
 			const data = this.protobuf.decodeAlarmData(payload);
-			alarms = data.alarms.map(normalize);
+			await this.finalizeAlarms(data.alarms.map(DeviceContext.normalizeAlarm));
+			return;
 		} catch {
-			try {
-				const data = this.protobuf.decodeWarnData(payload);
-				alarms = data.warnings.map(normalize);
-			} catch (err) {
-				this.adapter.log.warn(
-					`[${this.deviceId || this.host}] Error decoding AlarmData/WarnData: ${errorMessage(err)}`,
-				);
-				return;
-			}
+			// Not the AlarmData format → try the (paginated) WarnData format below.
 		}
 
+		let data;
+		try {
+			data = this.protobuf.decodeWarnData(payload);
+		} catch (err) {
+			this.adapter.log.warn(
+				`[${this.deviceId || this.host}] Error decoding AlarmData/WarnData: ${errorMessage(err)}`,
+			);
+			return;
+		}
+
+		const total = data.packageNub;
+		const now = data.packageNow;
+		const pageAlarms = data.warnings.map(DeviceContext.normalizeAlarm);
+
+		// Single-package list → finalize directly (no accumulation needed).
+		if (total <= 1) {
+			this.warnChunks.clear();
+			await this.finalizeAlarms(pageAlarms);
+			return;
+		}
+
+		// Multi-package list: the DTU paginates and we must pull every package, then
+		// assemble — mirroring the S-Miles app. package_now is 0-based, package_nub is the
+		// total. Reset the accumulator on the first package so a new query starts clean.
+		if (now === 0) {
+			this.warnChunks.clear();
+		}
+		this.warnChunks.set(now, pageAlarms);
+		this.adapter.log.debug(
+			`[${this.deviceId || this.host}] Warn list package ${now + 1}/${total} (${pageAlarms.length} entries)`,
+		);
+
+		// More packages outstanding → request the next one and wait for it.
+		if (now + 1 < total) {
+			this.connection
+				?.send(this.protobuf.encodeWarnDataRequest(unixSeconds(), now + 1))
+				.catch(e =>
+					this.adapter.log.debug(`[${this.deviceId || this.host}] warn next-pkg failed: ${errorMessage(e)}`),
+				);
+			return;
+		}
+
+		// Last package received → assemble all packages in order and finalize.
+		const assembled = [...this.warnChunks.keys()].sort((a, b) => a - b).flatMap(k => this.warnChunks.get(k)!);
+		this.warnChunks.clear();
+		await this.finalizeAlarms(assembled);
+	}
+
+	/**
+	 * Write the assembled alarm list to the alarm states.
+	 *
+	 * @param alarms - The complete, normalized alarm list (all packages merged).
+	 */
+	private async finalizeAlarms(alarms: NormalizedAlarm[]): Promise<void> {
 		if (alarms.length === 0) {
 			this.adapter.log.debug(`[${this.deviceId || this.host}] Alarm list query returned no active alarms`);
 		} else {
@@ -1426,11 +1487,14 @@ class DeviceContext {
 
 		const activeAlarms = alarms.filter(a => a.active);
 
+		const latestActive = activeAlarms[activeAlarms.length - 1];
 		const entries: Array<[string, ioBroker.StateValue]> = [
 			["alarms.count", alarms.length],
 			["alarms.activeCount", activeAlarms.length],
 			["alarms.hasActive", activeAlarms.length > 0],
 			["alarms.json", safeJsonStringify(alarms)],
+			// Authoritative warn message from the WCode-based alarm list (same source the S-Miles app uses)
+			["inverter.warnMessage", latestActive ? latestActive.descriptionEn : ""],
 		];
 
 		if (alarms.length > 0) {
