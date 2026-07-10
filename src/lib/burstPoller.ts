@@ -1,7 +1,8 @@
 import type CloudConnection from "./cloudConnection.js";
-import type { BurstInverter } from "./cloudConnection.js";
+import type { BurstInverter, BurstStationPower } from "./cloudConnection.js";
 import type DeviceContext from "./deviceContext.js";
 import { BURST_MIN_INTERVAL_MS, BURST_MAX_INTERVAL_MS, BURST_URI_REFRESH_MS } from "./constants.js";
+import { stationStateMap, buildStateCommon } from "./stateDefinitions.js";
 import { anonymize, errorMessage } from "./utils.js";
 
 interface BurstPollerOptions {
@@ -9,6 +10,11 @@ interface BurstPollerOptions {
 	adapter: ioBroker.Adapter;
 	devices: Map<string, DeviceContext>;
 	stationDevices: Set<number>;
+	/**
+	 * Shared set of station ids the burst is actively streaming. The cloud poller reads it to
+	 * yield `station-<id>.grid.power` to the burst (avoids the slow poller overwriting live values).
+	 */
+	burstActiveStations: Set<number>;
 }
 
 /** Per-inverter routing info: which DTU state-tree the burst values belong to. */
@@ -48,7 +54,10 @@ class BurstPoller {
 	private readonly adapter: ioBroker.Adapter;
 	private readonly devices: Map<string, DeviceContext>;
 	private readonly stationDevices: Set<number>;
+	private readonly burstActiveStations: Set<number>;
 	private readonly stations: Map<number, StationBurst>;
+	/** Station-state object ids already created via `writeStationState` (avoids re-issuing extendObject). */
+	private readonly stationStateObjects: Set<string>;
 	private stopped: boolean;
 
 	/**
@@ -59,7 +68,9 @@ class BurstPoller {
 		this.adapter = options.adapter;
 		this.devices = options.devices;
 		this.stationDevices = options.stationDevices;
+		this.burstActiveStations = options.burstActiveStations;
 		this.stations = new Map();
+		this.stationStateObjects = new Set();
 		this.stopped = false;
 	}
 
@@ -82,6 +93,7 @@ class BurstPoller {
 		this.stopped = true;
 		for (const sb of this.stations.values()) {
 			sb.stopped = true;
+			this.burstActiveStations.delete(sb.stationId);
 			for (const t of sb.targets.values()) {
 				t.dev.burstActive = false;
 			}
@@ -131,6 +143,7 @@ class BurstPoller {
 		for (const t of targets.values()) {
 			t.dev.burstActive = true;
 		}
+		this.burstActiveStations.add(stationId);
 		const sb: StationBurst = {
 			stationId,
 			uri,
@@ -175,6 +188,14 @@ class BurstPoller {
 			const quality: ioBroker.STATE_QUALITY[keyof ioBroker.STATE_QUALITY] = data.con === 1 ? 0x00 : 0x42;
 			for (const inv of data.mis ?? []) {
 				await this.writeInverter(sb, inv, quality);
+			}
+
+			// Station-level power flow (m:0), aggregated live across all inverters of the station.
+			// The first poll after opening the stream sometimes omits `power` — just skip it then.
+			const stationData = await this.cloud.pollRealtimeBurst(sb.uri, { m: 0, t: 1 });
+			if (stationData.power) {
+				const sq: ioBroker.STATE_QUALITY[keyof ioBroker.STATE_QUALITY] = stationData.con === 1 ? 0x00 : 0x42;
+				await this.writeStation(sb.stationId, stationData.power, sq);
 			}
 
 			// Server tells us when to poll next; clamp to sane bounds.
@@ -234,6 +255,62 @@ class BurstPoller {
 		this.adapter.log.debug(
 			`Burst ${anonymize(sn, "dtu")}: pac=${inv.pac}W pv=[${strings.slice(0, target.dev.pvCount).join(",")}]`,
 		);
+	}
+
+	/**
+	 * Write the station-level realtime power flow (burst m:0) to `station-<id>.grid.*`. `power.pv`
+	 * feeds `grid.power` (the aggregate live generation); grid/load/battery flow and PV utilization
+	 * go to their own states (non-zero only on metered/battery systems).
+	 *
+	 * @param stationId - Cloud station id.
+	 * @param power - The `power` object from a burst m:0 response.
+	 * @param quality - ioBroker state quality (0x00 live, 0x42 stale).
+	 */
+	private async writeStation(
+		stationId: number,
+		power: BurstStationPower,
+		quality: ioBroker.STATE_QUALITY[keyof ioBroker.STATE_QUALITY],
+	): Promise<void> {
+		const deviceId = `station-${stationId}`;
+		const ws = (suffix: string, val: number): Promise<void> =>
+			this.writeStationState(deviceId, suffix, val, quality);
+		await Promise.all([
+			ws("grid.power", power.pv),
+			ws("grid.gridPower", power.grid),
+			ws("grid.loadPower", power.load),
+			ws("grid.batteryPower", power.bat),
+			ws("grid.pvUtilization", power.pvr),
+		]);
+	}
+
+	/**
+	 * Set a station state, creating its object on demand from `stationStateMap`. Object creation is
+	 * cached per full id so subsequent writes are a plain setState.
+	 *
+	 * @param deviceId - `station-<id>`.
+	 * @param suffix - State suffix (a key in `stationStateMap`).
+	 * @param val - Value to write.
+	 * @param quality - ioBroker state quality.
+	 */
+	private async writeStationState(
+		deviceId: string,
+		suffix: string,
+		val: number,
+		quality: ioBroker.STATE_QUALITY[keyof ioBroker.STATE_QUALITY],
+	): Promise<void> {
+		const fullId = `${deviceId}.${suffix}`;
+		if (!this.stationStateObjects.has(fullId)) {
+			const def = stationStateMap.get(suffix);
+			if (def) {
+				await this.adapter.extendObjectAsync(fullId, {
+					type: "state",
+					common: buildStateCommon(def),
+					native: {},
+				});
+			}
+			this.stationStateObjects.add(fullId);
+		}
+		await this.adapter.setStateAsync(fullId, { val, ack: true, q: quality });
 	}
 }
 

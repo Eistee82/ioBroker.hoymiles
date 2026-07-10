@@ -89,7 +89,13 @@ describe("BurstPoller – start() station discovery", function () {
 			["DTU_CLOUD", makeDevice({ dtuSerial: "DTU_CLOUD", connection: null })],
 		]);
 
-		const poller = new BurstPoller({ cloud, adapter, devices, stationDevices: new Set([1]) });
+		const poller = new BurstPoller({
+			cloud,
+			adapter,
+			devices,
+			stationDevices: new Set([1]),
+			burstActiveStations: new Set(),
+		});
 		await poller.start();
 		const body = await polled;
 
@@ -114,7 +120,13 @@ describe("BurstPoller – start() station discovery", function () {
 			["DTU_LOCAL_ONLY", makeDevice({ dtuSerial: "DTU_LOCAL_ONLY", connection: { connected: true } })],
 		]);
 
-		const poller = new BurstPoller({ cloud, adapter, devices, stationDevices: new Set([1]) });
+		const poller = new BurstPoller({
+			cloud,
+			adapter,
+			devices,
+			stationDevices: new Set([1]),
+			burstActiveStations: new Set(),
+		});
 		await poller.start();
 
 		assert.strictEqual(uriCalled, false, "getRealtimeUri must not be called when no target inverters exist");
@@ -132,7 +144,13 @@ describe("BurstPoller – start() station discovery", function () {
 			pollRealtimeBurst: async () => ({ mis: [], dly: 5000 }),
 		};
 
-		const poller = new BurstPoller({ cloud, adapter, devices: new Map(), stationDevices: new Set([1]) });
+		const poller = new BurstPoller({
+			cloud,
+			adapter,
+			devices: new Map(),
+			stationDevices: new Set([1]),
+			burstActiveStations: new Set(),
+		});
 		await assert.doesNotReject(() => poller.start());
 		assert.strictEqual(poller.stations.size, 0);
 		poller.stop();
@@ -150,7 +168,13 @@ describe("BurstPoller – start() station discovery", function () {
 
 		const devices = new Map([["DTU_CLOUD", makeDevice({ dtuSerial: "DTU_CLOUD" })]]);
 
-		const poller = new BurstPoller({ cloud, adapter, devices, stationDevices: new Set([1]) });
+		const poller = new BurstPoller({
+			cloud,
+			adapter,
+			devices,
+			stationDevices: new Set([1]),
+			burstActiveStations: new Set(),
+		});
 		await assert.doesNotReject(() => poller.start());
 		assert.strictEqual(poller.stations.size, 0, "station must not be tracked when uri fetch fails");
 		poller.stop();
@@ -187,7 +211,13 @@ describe("BurstPoller – writeInverter", function () {
 		const dev = makeDevice({ dtuSerial: "DTU1", pvCount: 2 });
 		const devices = new Map([["DTU1", dev]]);
 
-		const poller = new BurstPoller({ cloud, adapter, devices, stationDevices: new Set([1]) });
+		const poller = new BurstPoller({
+			cloud,
+			adapter,
+			devices,
+			stationDevices: new Set([1]),
+			burstActiveStations: new Set(),
+		});
 		await poller.start();
 		await writesDone;
 
@@ -231,13 +261,59 @@ describe("BurstPoller – writeInverter", function () {
 		};
 
 		const devices = new Map([["DTU1", makeDevice({ dtuSerial: "DTU1", pvCount: 2 })]]);
-		const poller = new BurstPoller({ cloud, adapter, devices, stationDevices: new Set([1]) });
+		const poller = new BurstPoller({
+			cloud,
+			adapter,
+			devices,
+			stationDevices: new Set([1]),
+			burstActiveStations: new Set(),
+		});
 		await poller.start();
 		await writesDone;
 		poller.stop();
 
 		const byId = Object.fromEntries(calls.map(([id, val]) => [id, val]));
 		assert.strictEqual(byId["DTU1.grid.power"].q, 0x42);
+	});
+
+	it("writes the station power flow from m:0 and marks the station burst-active", async function () {
+		const { adapter, calls } = createTrackingAdapter();
+		let resolveStation;
+		const stationDone = new Promise(r => (resolveStation = r));
+		const trackedSetState = adapter.setStateAsync;
+		adapter.setStateAsync = async (id, val) => {
+			await trackedSetState(id, val);
+			if (id === "station-1.grid.pvUtilization") {
+				resolveStation();
+			}
+		};
+
+		const burstActiveStations = new Set();
+		const cloud = {
+			getDeviceTree: async () => [dtuNode("DTU1", ["INV1"])],
+			getRealtimeUri: async () => "https://eurt.example.com/rds/api/0/burst/get?k=abc&t=1",
+			pollRealtimeBurst: async (uri, body) => {
+				if (body.m === 0) {
+					return { con: 1, dly: 3000, power: { pv: 500, pvr: 62.5, grid: -100, load: 400, bat: 0, sp: 0 } };
+				}
+				return { mis: [{ sn: "INV1", pac: 500, p1: 250, p2: 250, p3: 0, p4: 0 }], dly: 3000, con: 1 };
+			},
+		};
+		const devices = new Map([["DTU1", makeDevice({ dtuSerial: "DTU1", pvCount: 2 })]]);
+		const poller = new BurstPoller({ cloud, adapter, devices, stationDevices: new Set([1]), burstActiveStations });
+		await poller.start();
+		await stationDone;
+
+		assert.strictEqual(burstActiveStations.has(1), true, "station must be flagged burst-active");
+		poller.stop();
+		assert.strictEqual(burstActiveStations.has(1), false, "stop() releases the station flag");
+
+		const byId = Object.fromEntries(calls.map(([id, val]) => [id, val]));
+		assert.deepStrictEqual(byId["station-1.grid.power"], { val: 500, ack: true, q: 0x00 });
+		assert.deepStrictEqual(byId["station-1.grid.gridPower"], { val: -100, ack: true, q: 0x00 });
+		assert.deepStrictEqual(byId["station-1.grid.loadPower"], { val: 400, ack: true, q: 0x00 });
+		assert.deepStrictEqual(byId["station-1.grid.batteryPower"], { val: 0, ack: true, q: 0x00 });
+		assert.deepStrictEqual(byId["station-1.grid.pvUtilization"], { val: 62.5, ack: true, q: 0x00 });
 	});
 
 	it("creates additional PV states on demand when an active string exceeds the known pvCount", async function () {
@@ -262,7 +338,13 @@ describe("BurstPoller – writeInverter", function () {
 		});
 		const devices = new Map([["DTU2", dev]]);
 
-		const poller = new BurstPoller({ cloud, adapter, devices, stationDevices: new Set([1]) });
+		const poller = new BurstPoller({
+			cloud,
+			adapter,
+			devices,
+			stationDevices: new Set([1]),
+			burstActiveStations: new Set(),
+		});
 		await poller.start();
 		const args = await created;
 		poller.stop();
@@ -303,7 +385,13 @@ describe("BurstPoller – reschedule and stop()", function () {
 
 		const devices = new Map([["DTU3", makeDevice({ dtuSerial: "DTU3" })]]);
 
-		const poller = new BurstPoller({ cloud, adapter, devices, stationDevices: new Set([1]) });
+		const poller = new BurstPoller({
+			cloud,
+			adapter,
+			devices,
+			stationDevices: new Set([1]),
+			burstActiveStations: new Set(),
+		});
 		await poller.start();
 		await scheduled;
 
@@ -335,7 +423,13 @@ describe("BurstPoller – reschedule and stop()", function () {
 
 		const devices = new Map([["DTU4", makeDevice({ dtuSerial: "DTU4" })]]);
 
-		const poller = new BurstPoller({ cloud, adapter, devices, stationDevices: new Set([1]) });
+		const poller = new BurstPoller({
+			cloud,
+			adapter,
+			devices,
+			stationDevices: new Set([1]),
+			burstActiveStations: new Set(),
+		});
 		await poller.start();
 		await scheduled;
 		poller.stop();
@@ -363,7 +457,13 @@ describe("BurstPoller – reschedule and stop()", function () {
 
 		const devices = new Map([["DTU5", makeDevice({ dtuSerial: "DTU5" })]]);
 
-		const poller = new BurstPoller({ cloud, adapter, devices, stationDevices: new Set([1]) });
+		const poller = new BurstPoller({
+			cloud,
+			adapter,
+			devices,
+			stationDevices: new Set([1]),
+			burstActiveStations: new Set(),
+		});
 		await poller.start();
 		await scheduled;
 		poller.stop();
@@ -393,7 +493,13 @@ describe("BurstPoller – reschedule and stop()", function () {
 
 		const devices = new Map([["DTU6", makeDevice({ dtuSerial: "DTU6" })]]);
 
-		const poller = new BurstPoller({ cloud, adapter, devices, stationDevices: new Set([1]) });
+		const poller = new BurstPoller({
+			cloud,
+			adapter,
+			devices,
+			stationDevices: new Set([1]),
+			burstActiveStations: new Set(),
+		});
 		await assert.doesNotReject(() => poller.start());
 		await scheduled;
 		poller.stop();

@@ -45,6 +45,7 @@ function makePoller(overrides = {}) {
 		stationDevices: new Set(),
 		hasRelay: false,
 		slowPollFactor: 6,
+		burstActiveStations: new Set(),
 	};
 	return new CloudPoller({ ...defaults, ...overrides });
 }
@@ -859,6 +860,39 @@ describe("CloudPoller – pollDevicesAndInverters", function () {
 		// Very old upload → stale → device-not-connected quality.
 		const stale = await run("2020-01-01 00:00:00");
 		assert.strictEqual(stale["DTU_SN_1.grid.voltage"].q, 0x42);
+	});
+
+	it("yields station grid.power to the burst (m:0) when the station is burst-active, keeps energy counters", async function () {
+		const writes = {};
+		const cloud = makeMockCloud();
+		cloud.getStationRealtime = async () => ({
+			real_power: "200",
+			today_eq: "1500",
+			month_eq: "0",
+			year_eq: "0",
+			total_eq: "0",
+			co2_emission_reduction: "0",
+			plant_tree: "0",
+		});
+		cloud.getStationDetails = async () => ({});
+		cloud.getDeviceTree = async () => [];
+		const adapter = makeMockAdapter();
+		adapter.setStateAsync = async (id, val) => {
+			writes[id] = typeof val === "object" ? val.val : val;
+		};
+		const poller = makePoller({
+			cloud,
+			adapter,
+			stationDevices: new Set([42]),
+			burstActiveStations: new Set([42]),
+		});
+		await poller.poll();
+		poller.stop();
+
+		// grid.power is left to the burst poller (m:0)…
+		assert.strictEqual(writes["station-42.grid.power"], undefined);
+		// …but the energy counters (which the burst does not deliver) are still written.
+		assert.strictEqual(writes["station-42.grid.dailyEnergy"], 1.5);
 	});
 
 	it("skips locally connected DTUs in pollInverterRealtimeData", async function () {
@@ -1963,6 +1997,7 @@ describe("CloudPoller – freshness & re-online", function () {
 			stationDevices: new Set([42]),
 			hasRelay: false,
 			slowPollFactor: 6,
+			burstActiveStations: new Set(),
 		});
 
 		await poller.poll(true); // force a slow poll so pollStationDetails runs
@@ -1989,6 +2024,7 @@ describe("CloudPoller – freshness & re-online", function () {
 			stationDevices: new Set([42]),
 			hasRelay: false,
 			slowPollFactor: 6,
+			burstActiveStations: new Set(),
 		});
 
 		await poller.poll(true);
@@ -2016,6 +2052,7 @@ describe("CloudPoller – freshness & re-online", function () {
 			stationDevices: new Set([42]),
 			hasRelay: false,
 			slowPollFactor: 6,
+			burstActiveStations: new Set(),
 		});
 		await stalePoller.poll();
 		const stalePower = writes.find(w => w.id === "station-42.grid.power");
@@ -2035,6 +2072,7 @@ describe("CloudPoller – freshness & re-online", function () {
 			stationDevices: new Set([42]),
 			hasRelay: false,
 			slowPollFactor: 6,
+			burstActiveStations: new Set(),
 		});
 		await freshPoller.poll();
 		const freshPower = writes.find(w => w.id === "station-42.grid.power");

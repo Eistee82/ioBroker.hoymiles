@@ -32,6 +32,7 @@ class CloudPoller {
     stationDevices;
     slowPollFactor;
     hasRelay;
+    burstActiveStations;
     state;
     pollCount;
     pollTimer;
@@ -53,6 +54,7 @@ class CloudPoller {
         this.stationDevices = options.stationDevices;
         this.slowPollFactor = options.slowPollFactor;
         this.hasRelay = options.hasRelay;
+        this.burstActiveStations = options.burstActiveStations;
         this.state = "POLLING_ACTIVE";
         this.pollCount = 0;
         this.pollTimer = undefined;
@@ -279,8 +281,7 @@ class CloudPoller {
         const cloudUpdateEpoch = stationWallClockToEpoch(data.data_time, offsetMs);
         this.adapter.log.debug(`[diag] station ${stationId} lastCloudUpdate: data_time="${data.data_time ?? "<none>"}" ` +
             `offset=${offsetMs / 3600000}h → ${cloudUpdateEpoch != null ? new Date(cloudUpdateEpoch).toISOString() : "n/a"}`);
-        await Promise.all([
-            w("grid.power", num(data.real_power)),
+        const writes = [
             w("grid.dailyEnergy", toKwh(data.today_eq)),
             w("grid.monthEnergy", toKwh(data.month_eq)),
             w("grid.yearEnergy", toKwh(data.year_eq)),
@@ -291,7 +292,11 @@ class CloudPoller {
             w("grid.isReflux", !!data.is_reflux),
             w("info.lastCloudUpdate", cloudUpdateEpoch, 0x00),
             w("info.lastDataTime", stationWallClockToEpoch(data.last_data_time, offsetMs), 0x00),
-        ]);
+        ];
+        if (!this.burstActiveStations.has(stationId)) {
+            writes.push(w("grid.power", num(data.real_power)));
+        }
+        await Promise.all(writes);
     }
     async pollStationDetails(stationId, deviceId, realtimeData, online) {
         try {

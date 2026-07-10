@@ -234,6 +234,12 @@ const stationChannels: ChannelDefinition[] = [
 const stationStates: StateDefinition[] = [
 	// Grid aggregates
 	n("grid.power", "Total power", "Gesamtleistung", "value.power", "W"),
+	// Realtime power-flow (from the burst channel m:0). Created on demand — only present when the
+	// realtime burst is active for the station. Non-zero grid/battery only on metered/battery systems.
+	n("grid.gridPower", "Grid exchange power", "Netzaustauschleistung", "value.power", "W"),
+	n("grid.loadPower", "Load power", "Lastleistung", "value.power", "W"),
+	n("grid.batteryPower", "Battery power", "Batterieleistung", "value.power", "W"),
+	n("grid.pvUtilization", "PV utilization", "PV-Auslastung", "value", "%"),
 	n("grid.dailyEnergy", "Daily energy", "Tagesenergie", "value.energy", "kWh"),
 	n("grid.monthEnergy", "Month energy", "Monatsenergie", "value.energy", "kWh"),
 	n("grid.yearEnergy", "Year energy", "Jahresenergie", "value.energy", "kWh"),

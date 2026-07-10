@@ -1,18 +1,23 @@
 import { BURST_MIN_INTERVAL_MS, BURST_MAX_INTERVAL_MS, BURST_URI_REFRESH_MS } from "./constants.js";
+import { stationStateMap, buildStateCommon } from "./stateDefinitions.js";
 import { anonymize, errorMessage } from "./utils.js";
 class BurstPoller {
     cloud;
     adapter;
     devices;
     stationDevices;
+    burstActiveStations;
     stations;
+    stationStateObjects;
     stopped;
     constructor(options) {
         this.cloud = options.cloud;
         this.adapter = options.adapter;
         this.devices = options.devices;
         this.stationDevices = options.stationDevices;
+        this.burstActiveStations = options.burstActiveStations;
         this.stations = new Map();
+        this.stationStateObjects = new Set();
         this.stopped = false;
     }
     async start() {
@@ -32,6 +37,7 @@ class BurstPoller {
         this.stopped = true;
         for (const sb of this.stations.values()) {
             sb.stopped = true;
+            this.burstActiveStations.delete(sb.stationId);
             for (const t of sb.targets.values()) {
                 t.dev.burstActive = false;
             }
@@ -70,6 +76,7 @@ class BurstPoller {
         for (const t of targets.values()) {
             t.dev.burstActive = true;
         }
+        this.burstActiveStations.add(stationId);
         const sb = {
             stationId,
             uri,
@@ -100,6 +107,11 @@ class BurstPoller {
             const quality = data.con === 1 ? 0x00 : 0x42;
             for (const inv of data.mis ?? []) {
                 await this.writeInverter(sb, inv, quality);
+            }
+            const stationData = await this.cloud.pollRealtimeBurst(sb.uri, { m: 0, t: 1 });
+            if (stationData.power) {
+                const sq = stationData.con === 1 ? 0x00 : 0x42;
+                await this.writeStation(sb.stationId, stationData.power, sq);
             }
             nextDelay = Math.min(Math.max(data.dly ?? BURST_MIN_INTERVAL_MS, BURST_MIN_INTERVAL_MS), BURST_MAX_INTERVAL_MS);
         }
@@ -134,6 +146,32 @@ class BurstPoller {
         }
         await Promise.all(writes);
         this.adapter.log.debug(`Burst ${anonymize(sn, "dtu")}: pac=${inv.pac}W pv=[${strings.slice(0, target.dev.pvCount).join(",")}]`);
+    }
+    async writeStation(stationId, power, quality) {
+        const deviceId = `station-${stationId}`;
+        const ws = (suffix, val) => this.writeStationState(deviceId, suffix, val, quality);
+        await Promise.all([
+            ws("grid.power", power.pv),
+            ws("grid.gridPower", power.grid),
+            ws("grid.loadPower", power.load),
+            ws("grid.batteryPower", power.bat),
+            ws("grid.pvUtilization", power.pvr),
+        ]);
+    }
+    async writeStationState(deviceId, suffix, val, quality) {
+        const fullId = `${deviceId}.${suffix}`;
+        if (!this.stationStateObjects.has(fullId)) {
+            const def = stationStateMap.get(suffix);
+            if (def) {
+                await this.adapter.extendObjectAsync(fullId, {
+                    type: "state",
+                    common: buildStateCommon(def),
+                    native: {},
+                });
+            }
+            this.stationStateObjects.add(fullId);
+        }
+        await this.adapter.setStateAsync(fullId, { val, ack: true, q: quality });
     }
 }
 export default BurstPoller;

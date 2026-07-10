@@ -58,6 +58,8 @@ interface CloudPollerOptions {
 	stationDevices: Set<number>;
 	slowPollFactor: number;
 	hasRelay: boolean;
+	/** Stations the realtime burst streams — their `grid.power` is left to the burst. */
+	burstActiveStations: Set<number>;
 }
 
 /**
@@ -77,6 +79,7 @@ class CloudPoller {
 	private readonly stationDevices: Set<number>;
 	private readonly slowPollFactor: number;
 	private readonly hasRelay: boolean;
+	private readonly burstActiveStations: Set<number>;
 
 	private state: CloudPollState;
 	private pollCount: number;
@@ -122,6 +125,7 @@ class CloudPoller {
 		this.stationDevices = options.stationDevices;
 		this.slowPollFactor = options.slowPollFactor;
 		this.hasRelay = options.hasRelay;
+		this.burstActiveStations = options.burstActiveStations;
 
 		this.state = "POLLING_ACTIVE";
 		this.pollCount = 0;
@@ -474,8 +478,7 @@ class CloudPoller {
 			`[diag] station ${stationId} lastCloudUpdate: data_time="${data.data_time ?? "<none>"}" ` +
 				`offset=${offsetMs / 3600000}h → ${cloudUpdateEpoch != null ? new Date(cloudUpdateEpoch).toISOString() : "n/a"}`,
 		);
-		await Promise.all([
-			w("grid.power", num(data.real_power)),
+		const writes: Array<Promise<void>> = [
 			w("grid.dailyEnergy", toKwh(data.today_eq)),
 			w("grid.monthEnergy", toKwh(data.month_eq)),
 			w("grid.yearEnergy", toKwh(data.year_eq)),
@@ -488,7 +491,13 @@ class CloudPoller {
 			// Timestamps describe WHEN data last arrived — always good quality, even when stale.
 			w("info.lastCloudUpdate", cloudUpdateEpoch, 0x00),
 			w("info.lastDataTime", stationWallClockToEpoch(data.last_data_time, offsetMs), 0x00),
-		]);
+		];
+		// The realtime burst (m:0) owns the live station power; only write it here when no burst
+		// is streaming this station, so the two don't fight over `grid.power`.
+		if (!this.burstActiveStations.has(stationId)) {
+			writes.push(w("grid.power", num(data.real_power)));
+		}
+		await Promise.all(writes);
 	}
 
 	private async pollStationDetails(

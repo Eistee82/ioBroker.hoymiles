@@ -202,7 +202,11 @@ PV-Channels werden dynamisch basierend auf dem Wechselrichter-Modell erstellt (1
 
 | Datenpunkt | Typ | Einheit | Beschreibung |
 |------------|-----|---------|--------------|
-| `grid.power` | number | W | Gesamtleistung der Station |
+| `grid.power` | number | W | Gesamtleistung der Station (live in ~1,5–3 s über den Burst-Kanal, sonst ~80 s) |
+| `grid.gridPower` | number | W | Netzaustauschleistung (Echtzeit, +Bezug/−Einspeisung) — nur bei Anlagen mit Zähler ≠ 0 |
+| `grid.loadPower` | number | W | Last-/Verbrauchsleistung (Echtzeit) |
+| `grid.batteryPower` | number | W | Batterieleistung (Echtzeit, +Laden/−Entladen) — nur bei Batteriesystemen |
+| `grid.pvUtilization` | number | % | PV-Auslastung (Echtzeit) |
 | `grid.dailyEnergy` | number | kWh | Tagesenergie |
 | `grid.monthEnergy` | number | kWh | Monatsenergie |
 | `grid.yearEnergy` | number | kWh | Jahresenergie |

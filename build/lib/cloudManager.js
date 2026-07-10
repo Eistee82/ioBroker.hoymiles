@@ -19,6 +19,7 @@ class CloudManager {
     burstPoller;
     pendingCloudMatches;
     stationDevices;
+    burstActiveStations;
     cloudRetryDelay;
     retryTimer;
     deferredMatchTimer;
@@ -37,6 +38,7 @@ class CloudManager {
         this.burstPoller = null;
         this.pendingCloudMatches = new Map();
         this.stationDevices = new Set();
+        this.burstActiveStations = new Set();
         this.cloudRetryDelay = CLOUD_RETRY_INITIAL_MS;
         this.authErrorActive = false;
     }
@@ -132,6 +134,7 @@ class CloudManager {
             stationDevices: this.stationDevices,
             slowPollFactor: this.slowPollFactor,
             hasRelay: hasActiveRelay,
+            burstActiveStations: this.burstActiveStations,
         });
         await this.cloudPoller.initialFetch();
         if (!hasActiveRelay) {
@@ -143,6 +146,7 @@ class CloudManager {
                 adapter: this.adapter,
                 devices: this.adapter.devices,
                 stationDevices: this.stationDevices,
+                burstActiveStations: this.burstActiveStations,
             });
             await this.burstPoller.start();
         }

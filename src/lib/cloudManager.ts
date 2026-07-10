@@ -39,6 +39,8 @@ class CloudManager {
 	private burstPoller: BurstPoller | null;
 	private readonly pendingCloudMatches: Map<string, number>;
 	private readonly stationDevices: Set<number>;
+	/** Stations the realtime burst is actively streaming — shared with both pollers. */
+	private readonly burstActiveStations: Set<number>;
 	private cloudRetryDelay: number;
 	private retryTimer: ioBroker.Timeout | undefined;
 	private deferredMatchTimer: ioBroker.Timeout | undefined;
@@ -64,6 +66,7 @@ class CloudManager {
 		this.burstPoller = null;
 		this.pendingCloudMatches = new Map();
 		this.stationDevices = new Set();
+		this.burstActiveStations = new Set();
 		this.cloudRetryDelay = CLOUD_RETRY_INITIAL_MS;
 		this.authErrorActive = false;
 	}
@@ -195,6 +198,7 @@ class CloudManager {
 			stationDevices: this.stationDevices,
 			slowPollFactor: this.slowPollFactor,
 			hasRelay: hasActiveRelay,
+			burstActiveStations: this.burstActiveStations,
 		});
 		await this.cloudPoller.initialFetch();
 		if (!hasActiveRelay) {
@@ -210,6 +214,7 @@ class CloudManager {
 				adapter: this.adapter,
 				devices: this.adapter.devices,
 				stationDevices: this.stationDevices,
+				burstActiveStations: this.burstActiveStations,
 			});
 			await this.burstPoller.start();
 		}

@@ -202,7 +202,11 @@ PV channels are created dynamically based on the inverter model (1T = 1 channel,
 
 | State | Type | Unit | Description |
 |-------|------|------|-------------|
-| `grid.power` | number | W | Total station power |
+| `grid.power` | number | W | Total station power (live in ~1.5–3 s via the burst channel when it is active, else ~80 s) |
+| `grid.gridPower` | number | W | Grid exchange power (realtime, +import/−export) — non-zero only on metered systems |
+| `grid.loadPower` | number | W | Load/consumption power (realtime) |
+| `grid.batteryPower` | number | W | Battery power (realtime, +charge/−discharge) — battery systems only |
+| `grid.pvUtilization` | number | % | PV utilization (realtime) |
 | `grid.dailyEnergy` | number | kWh | Daily energy |
 | `grid.monthEnergy` | number | kWh | Monthly energy |
 | `grid.yearEnergy` | number | kWh | Yearly energy |
