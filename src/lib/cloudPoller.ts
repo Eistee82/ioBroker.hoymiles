@@ -776,7 +776,10 @@ class CloudPoller {
 				// (cloud-only DTUs only), so a locally-configured DTU that is merely offline
 				// for the night keeps the `false` its local layer set.
 				const writes: Array<Promise<void>> = [];
-				if (values.MI_POWER !== undefined) {
+				// When the realtime burst poller owns this DTU's power, skip the (slower) power
+				// writes so the two don't fight over `grid.power`; keep the metrics the burst
+				// doesn't deliver (voltage/frequency/temperature).
+				if (values.MI_POWER !== undefined && !dtuDev.burstActive) {
 					writes.push(cs(`${sn}.grid.power`, values.MI_POWER));
 				}
 				if (values.MI_NET_V !== undefined) {
@@ -832,7 +835,7 @@ class CloudPoller {
 									"MODULE_V",
 									"MODULE_I",
 								])
-								.then(modValues => this.setPvStates(cs, sn, p - 1, modValues)),
+								.then(modValues => this.setPvStates(cs, sn, p - 1, modValues, dtuDev.burstActive)),
 						);
 					}
 				}
@@ -872,13 +875,15 @@ class CloudPoller {
 		sn: string,
 		pvIndex: number,
 		modValues: Record<string, number> | null,
+		skipPower = false,
 	): Promise<void> {
 		if (!modValues) {
 			return;
 		}
 		const prefix = `${sn}.pv${pvIndex}`;
 		const writes: Array<Promise<void>> = [];
-		if (modValues.MODULE_POWER !== undefined) {
+		// `skipPower` while the burst poller owns per-string power — keep voltage/current here.
+		if (modValues.MODULE_POWER !== undefined && !skipPower) {
 			writes.push(cs(`${prefix}.power`, modValues.MODULE_POWER));
 		}
 		if (modValues.MODULE_V !== undefined) {

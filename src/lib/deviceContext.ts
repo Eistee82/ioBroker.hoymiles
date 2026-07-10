@@ -129,6 +129,13 @@ class DeviceContext {
 	pvStatesCreated: boolean;
 	/** Number of PV-string states created so far. Read by the burst poller to size its writes. */
 	pvCount: number;
+	/**
+	 * True while the realtime burst poller is actively streaming this DTU's power. The cloud
+	 * poller then skips the overlapping `grid.power`/`pvN.power` writes (the burst owns them,
+	 * faster and fresher) but keeps supplying the metrics the burst does not: voltage, current,
+	 * frequency, temperature, energy counters.
+	 */
+	burstActive: boolean;
 	private meterStatesCreated: boolean;
 	private histStatesCreated: boolean;
 	private pollCount: number;
@@ -205,6 +212,7 @@ class DeviceContext {
 		this.pollTimer = undefined;
 		this.pvStatesCreated = false;
 		this.pvCount = 0;
+		this.burstActive = false;
 		this.meterStatesCreated = false;
 		this.histStatesCreated = false;
 		this.pollCount = 0;

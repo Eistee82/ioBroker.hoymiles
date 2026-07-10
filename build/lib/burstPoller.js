@@ -32,6 +32,9 @@ class BurstPoller {
         this.stopped = true;
         for (const sb of this.stations.values()) {
             sb.stopped = true;
+            for (const t of sb.targets.values()) {
+                t.dev.burstActive = false;
+            }
             if (sb.timer) {
                 this.adapter.clearTimeout(sb.timer);
                 sb.timer = undefined;
@@ -64,6 +67,9 @@ class BurstPoller {
             return;
         }
         const uri = await this.cloud.getRealtimeUri(stationId);
+        for (const t of targets.values()) {
+            t.dev.burstActive = true;
+        }
         const sb = {
             stationId,
             uri,
@@ -91,8 +97,9 @@ class BurstPoller {
                 mis: [...sb.targets.keys()],
                 t: 1,
             });
+            const quality = data.con === 1 ? 0x00 : 0x42;
             for (const inv of data.mis ?? []) {
-                await this.writeInverter(sb, inv);
+                await this.writeInverter(sb, inv, quality);
             }
             nextDelay = Math.min(Math.max(data.dly ?? BURST_MIN_INTERVAL_MS, BURST_MIN_INTERVAL_MS), BURST_MAX_INTERVAL_MS);
         }
@@ -109,13 +116,13 @@ class BurstPoller {
             void this.poll(sb);
         }, nextDelay);
     }
-    async writeInverter(sb, inv) {
+    async writeInverter(sb, inv, quality) {
         const target = sb.targets.get(inv.sn);
         if (!target) {
             return;
         }
         const sn = target.dtuSerial;
-        const cs = (id, val) => this.adapter.setStateAsync(id, { val, ack: true, q: 0x40 }).then(() => { });
+        const cs = (id, val) => this.adapter.setStateAsync(id, { val, ack: true, q: quality }).then(() => { });
         const strings = [inv.p1, inv.p2, inv.p3, inv.p4];
         const activePv = strings.reduce((max, p, i) => (p > 0 ? i + 1 : max), 0);
         if (activePv > target.dev.pvCount && target.dev.deviceId) {

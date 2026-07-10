@@ -55,6 +55,7 @@ class DeviceContext {
     pollTimer;
     pvStatesCreated;
     pvCount;
+    burstActive;
     meterStatesCreated;
     histStatesCreated;
     pollCount;
@@ -100,6 +101,7 @@ class DeviceContext {
         this.pollTimer = undefined;
         this.pvStatesCreated = false;
         this.pvCount = 0;
+        this.burstActive = false;
         this.meterStatesCreated = false;
         this.histStatesCreated = false;
         this.pollCount = 0;

@@ -480,7 +480,7 @@ class CloudPoller {
                     return;
                 }
                 const writes = [];
-                if (values.MI_POWER !== undefined) {
+                if (values.MI_POWER !== undefined && !dtuDev.burstActive) {
                     writes.push(cs(`${sn}.grid.power`, values.MI_POWER));
                 }
                 if (values.MI_NET_V !== undefined) {
@@ -527,7 +527,7 @@ class CloudPoller {
                             "MODULE_V",
                             "MODULE_I",
                         ])
-                            .then(modValues => this.setPvStates(cs, sn, p - 1, modValues)));
+                            .then(modValues => this.setPvStates(cs, sn, p - 1, modValues, dtuDev.burstActive)));
                     }
                 }
                 await Promise.all(pvTasks);
@@ -557,13 +557,13 @@ class CloudPoller {
             }
         }
     }
-    async setPvStates(cs, sn, pvIndex, modValues) {
+    async setPvStates(cs, sn, pvIndex, modValues, skipPower = false) {
         if (!modValues) {
             return;
         }
         const prefix = `${sn}.pv${pvIndex}`;
         const writes = [];
-        if (modValues.MODULE_POWER !== undefined) {
+        if (modValues.MODULE_POWER !== undefined && !skipPower) {
             writes.push(cs(`${prefix}.power`, modValues.MODULE_POWER));
         }
         if (modValues.MODULE_V !== undefined) {

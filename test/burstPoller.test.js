@@ -161,7 +161,7 @@ describe("BurstPoller – start() station discovery", function () {
 // BurstPoller – writing state values
 // ============================================================
 describe("BurstPoller – writeInverter", function () {
-	it("writes grid.power (=pac) and pvN.power (=p1..pN, limited by dev.pvCount) with quality 0x40", async function () {
+	it("writes grid.power (=pac) and pvN.power (=p1..pN, limited by dev.pvCount) with quality 0x00 when the stream is live (con=1)", async function () {
 		const { adapter, calls } = createTrackingAdapter();
 
 		let resolveWrites;
@@ -180,23 +180,64 @@ describe("BurstPoller – writeInverter", function () {
 			pollRealtimeBurst: async () => ({
 				mis: [{ sn: "INV1", pac: 321, p1: 100, p2: 221, p3: 0, p4: 0 }],
 				dly: 4000,
+				con: 1,
+			}),
+		};
+
+		const dev = makeDevice({ dtuSerial: "DTU1", pvCount: 2 });
+		const devices = new Map([["DTU1", dev]]);
+
+		const poller = new BurstPoller({ cloud, adapter, devices, stationDevices: new Set([1]) });
+		await poller.start();
+		await writesDone;
+
+		// While streaming, the device is flagged so the cloud poller yields the power states.
+		assert.strictEqual(dev.burstActive, true);
+
+		poller.stop();
+		// stop() releases the gate again.
+		assert.strictEqual(dev.burstActive, false);
+
+		const byId = Object.fromEntries(calls.map(([id, val]) => [id, val]));
+		assert.deepStrictEqual(byId["DTU1.grid.power"], { val: 321, ack: true, q: 0x00 });
+		assert.deepStrictEqual(byId["DTU1.pv0.power"], { val: 100, ack: true, q: 0x00 });
+		assert.deepStrictEqual(byId["DTU1.pv1.power"], { val: 221, ack: true, q: 0x00 });
+		// p3/p4 must not be written — dev.pvCount is 2.
+		assert.strictEqual(byId["DTU1.pv2.power"], undefined);
+		assert.strictEqual(byId["DTU1.pv3.power"], undefined);
+	});
+
+	it("flags samples as stale (quality 0x42) when the stream is not live (con!=1)", async function () {
+		const { adapter, calls } = createTrackingAdapter();
+
+		let resolveWrites;
+		const writesDone = new Promise(r => (resolveWrites = r));
+		const trackedSetState = adapter.setStateAsync;
+		adapter.setStateAsync = async (id, val) => {
+			await trackedSetState(id, val);
+			if (id === "DTU1.grid.power") {
+				resolveWrites();
+			}
+		};
+
+		const cloud = {
+			getDeviceTree: async () => [dtuNode("DTU1", ["INV1"])],
+			getRealtimeUri: async () => "https://eurt.example.com/rds/api/0/burst/get?k=abc&t=1",
+			pollRealtimeBurst: async () => ({
+				mis: [{ sn: "INV1", pac: 0, p1: 0, p2: 0, p3: 0, p4: 0 }],
+				dly: 4000,
+				con: 0,
 			}),
 		};
 
 		const devices = new Map([["DTU1", makeDevice({ dtuSerial: "DTU1", pvCount: 2 })]]);
-
 		const poller = new BurstPoller({ cloud, adapter, devices, stationDevices: new Set([1]) });
 		await poller.start();
 		await writesDone;
 		poller.stop();
 
 		const byId = Object.fromEntries(calls.map(([id, val]) => [id, val]));
-		assert.deepStrictEqual(byId["DTU1.grid.power"], { val: 321, ack: true, q: 0x40 });
-		assert.deepStrictEqual(byId["DTU1.pv0.power"], { val: 100, ack: true, q: 0x40 });
-		assert.deepStrictEqual(byId["DTU1.pv1.power"], { val: 221, ack: true, q: 0x40 });
-		// p3/p4 must not be written — dev.pvCount is 2.
-		assert.strictEqual(byId["DTU1.pv2.power"], undefined);
-		assert.strictEqual(byId["DTU1.pv3.power"], undefined);
+		assert.strictEqual(byId["DTU1.grid.power"].q, 0x42);
 	});
 
 	it("creates additional PV states on demand when an active string exceeds the known pvCount", async function () {

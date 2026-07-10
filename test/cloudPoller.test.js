@@ -737,6 +737,76 @@ describe("CloudPoller – pollDevicesAndInverters", function () {
 		poller.stop();
 	});
 
+	it("yields grid.power/pvN.power to the burst poller when a DTU is burstActive, but keeps voltage/current/temperature", async function () {
+		const stateWrites = {};
+		const cloud = makeMockCloud();
+		cloud.ensureToken = async () => {};
+		cloud.getStationRealtime = async () => ({
+			real_power: "200",
+			today_eq: "0",
+			month_eq: "0",
+			year_eq: "0",
+			total_eq: "0",
+			co2_emission_reduction: "0",
+			plant_tree: "0",
+		});
+		cloud.getStationDetails = async () => ({});
+		cloud.getDeviceTree = async () => [
+			{
+				sn: "DTU_SN_1",
+				soft_ver: "1.0.0",
+				hard_ver: "2.0.0",
+				id: 10,
+				children: [
+					{
+						sn: "INV_SN_1",
+						id: 100,
+						model_no: "HMS-800W-2T",
+						soft_ver: "3.0.0",
+						hard_ver: "4.0.0",
+						warn_data: { connect: true },
+					},
+				],
+			},
+		];
+		cloud.getMicroRealtimeData = async () => ({
+			MI_POWER: 450,
+			MI_NET_V: 230,
+			MI_NET_RATE: 50.01,
+			MI_TEMPERATURE: 38.5,
+		});
+		cloud.getModuleRealtimeData = async () => ({ MODULE_POWER: 225, MODULE_V: 33.2, MODULE_I: 6.8 });
+
+		const adapter = makeMockAdapter();
+		adapter.setStateAsync = async (id, val) => {
+			stateWrites[id] = typeof val === "object" ? val.val : val;
+		};
+
+		const devices = new Map();
+		devices.set("DTU_SN_1", {
+			dtuSerial: "DTU_SN_1",
+			cloudStationId: 42,
+			connection: null,
+			burstActive: true, // burst poller owns power for this DTU
+			pvStatesCreated: false,
+			createPvStates: async () => {},
+		});
+
+		const poller = makePoller({ cloud, adapter, devices, stationDevices: new Set([42]), slowPollFactor: 1 });
+		await poller.poll();
+
+		// Power states are yielded to the burst poller.
+		assert.strictEqual(stateWrites["DTU_SN_1.grid.power"], undefined);
+		assert.strictEqual(stateWrites["DTU_SN_1.pv0.power"], undefined);
+		// Metrics the burst does not deliver are still written by the cloud poller.
+		assert.strictEqual(stateWrites["DTU_SN_1.grid.voltage"], 230);
+		assert.strictEqual(stateWrites["DTU_SN_1.grid.frequency"], 50.01);
+		assert.strictEqual(stateWrites["DTU_SN_1.inverter.temperature"], 38.5);
+		assert.strictEqual(stateWrites["DTU_SN_1.pv0.voltage"], 33.2);
+		assert.strictEqual(stateWrites["DTU_SN_1.pv0.current"], 6.8);
+		poller.stop();
+	});
+
 	it("skips locally connected DTUs in pollInverterRealtimeData", async function () {
 		const microCalls = [];
 		const cloud = makeMockCloud();

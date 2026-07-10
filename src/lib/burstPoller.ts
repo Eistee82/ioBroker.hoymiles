@@ -77,11 +77,14 @@ class BurstPoller {
 		}
 	}
 
-	/** Stop all burst loops and clear timers. */
+	/** Stop all burst loops, clear timers, and release the cloud poller's `grid.power`/`pvN.power` gate. */
 	stop(): void {
 		this.stopped = true;
 		for (const sb of this.stations.values()) {
 			sb.stopped = true;
+			for (const t of sb.targets.values()) {
+				t.dev.burstActive = false;
+			}
 			if (sb.timer) {
 				this.adapter.clearTimeout(sb.timer);
 				sb.timer = undefined;
@@ -124,6 +127,10 @@ class BurstPoller {
 		}
 
 		const uri = await this.cloud.getRealtimeUri(stationId);
+		// Claim the overlapping power states so the slow cloud poller stops writing them.
+		for (const t of targets.values()) {
+			t.dev.burstActive = true;
+		}
 		const sb: StationBurst = {
 			stationId,
 			uri,
@@ -163,8 +170,11 @@ class BurstPoller {
 				t: 1,
 			});
 
+			// `con:1` = the DTU is live-streaming → the values are genuinely current (good, 0x00).
+			// Anything else means the stream is not live, so mark the sample as stale (0x42).
+			const quality: ioBroker.STATE_QUALITY[keyof ioBroker.STATE_QUALITY] = data.con === 1 ? 0x00 : 0x42;
 			for (const inv of data.mis ?? []) {
-				await this.writeInverter(sb, inv);
+				await this.writeInverter(sb, inv, quality);
 			}
 
 			// Server tells us when to poll next; clamp to sane bounds.
@@ -190,19 +200,24 @@ class BurstPoller {
 
 	/**
 	 * Write one inverter's burst sample: AC total → `grid.power`, PV strings `p1..p4` → `pvN.power`.
-	 * Cloud-sourced quality (0x40). Creates PV states on demand if the cloud poller hasn't yet.
+	 * Creates PV states on demand if the cloud poller hasn't yet.
 	 *
 	 * @param sb - Station burst state (for target lookup).
 	 * @param inv - One `mis[]` entry (per-inverter power sample) from the burst response.
+	 * @param quality - ioBroker state quality for this sample (0x00 live, 0x42 stale).
 	 */
-	private async writeInverter(sb: StationBurst, inv: BurstInverter): Promise<void> {
+	private async writeInverter(
+		sb: StationBurst,
+		inv: BurstInverter,
+		quality: ioBroker.STATE_QUALITY[keyof ioBroker.STATE_QUALITY],
+	): Promise<void> {
 		const target = sb.targets.get(inv.sn);
 		if (!target) {
 			return;
 		}
 		const sn = target.dtuSerial;
 		const cs = (id: string, val: number): Promise<void> =>
-			this.adapter.setStateAsync(id, { val, ack: true, q: 0x40 }).then(() => {});
+			this.adapter.setStateAsync(id, { val, ack: true, q: quality }).then(() => {});
 
 		const strings = [inv.p1, inv.p2, inv.p3, inv.p4];
 		// Highest populated PV index (a string that ever produced > 0). Ensures the pv states exist.
