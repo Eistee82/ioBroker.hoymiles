@@ -466,6 +466,29 @@ class CloudConnection {
         }
         return assertData(result.data, "Realtime data");
     }
+    async getRealtimeUri(stationId) {
+        this.assertStationId(stationId);
+        await this.ensureToken();
+        const result = await this._post("/pvm/api/0/station/get_sd_uri", { sid: stationId });
+        if (result.status !== "0") {
+            throw new Error(`get_sd_uri failed: ${result.message}`);
+        }
+        const uri = result.data?.uri;
+        if (!uri) {
+            throw new Error("get_sd_uri returned no uri");
+        }
+        return uri;
+    }
+    async pollRealtimeBurst(uri, body) {
+        const result = await postJson(uri, body, {
+            token: this.token,
+            userAgent: this.getUserAgent(),
+        });
+        if (result.status !== "0") {
+            throw new Error(`Realtime burst failed: ${result.message}`);
+        }
+        return result.data ?? {};
+    }
     async getWeather(lat, lon) {
         const result = await postJson(EU_WEATHER_URL, { lat, lon }, {
             token: this.token,

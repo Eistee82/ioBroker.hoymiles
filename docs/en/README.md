@@ -33,6 +33,7 @@ Open the adapter configuration in the ioBroker admin interface.
 | **Enable cloud** | off | Enable Hoymiles S-Miles Cloud API |
 | **S-Miles Email** | — | Your S-Miles account email |
 | **S-Miles Password** | — | Your S-Miles account password (stored encrypted) |
+| **Fast realtime data (cloud)** | on | For inverters **without** a local connection, poll fast per-second power data from the cloud (the same "burst" channel the S-Miles app's live view uses). Updates `grid.power` and `pvN.power` roughly every 1.5–3 s (server-dictated) instead of only every ~80 s. Only affects cloud-only devices; locally connected inverters keep their direct local realtime data. |
 
 All inverters in your cloud account are automatically discovered. No manual serial number configuration needed.
 

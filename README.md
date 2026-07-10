@@ -135,6 +135,8 @@ Cloud stations create aggregated device nodes (e.g. `hoymiles.0.station-12345.*`
 
 ## Changelog
 ### **WORK IN PROGRESS**
+- (@Eistee82) Add a fast realtime "burst" cloud channel for cloud-only DTUs (new option `enableRealtimeBurst`, default on): mirrors the S-Miles app's live view via `get_sd_uri` → `…/rds/api/0/burst/get` on the realtime host, updating `grid.power` and `pvN.power` at the server-dictated ~1.5–3 s cadence instead of only every ~80 s. Only affects DTUs without a local/relay connection; locally connected inverters keep their direct realtime data
+- (@Eistee82) Fix `httpClient` dropping the URL query string (`postJson`/`postBinary` now send `pathname + search`) — required for the token-carrying realtime burst URL
 - (@Eistee82) Expose the per-string PV error code as `<dtuSerial>.pvX.errorCode` (PvMO field 8, local only; 0 in normal operation) — the field was already decoded but not surfaced
 - (@Eistee82) Fix paginated warn lists losing entries: the DTU splits long alarm/warn lists across multiple packages (`package_now`/`package_nub`), which were ignored so only the last package survived. The adapter now pulls every package (requesting `package_now + 1` on tag `0xa3 0x04`, like the S-Miles app) and writes the assembled list once complete
 - (@Eistee82) New writable `config.limitPowerMyPower` state for the **persistent** power limit (SetConfig `limit_power_mypower`, stored in the DTU and re-applied on startup). The GetConfig-reported stored limit now feeds this state instead of `inverter.powerLimit`, so the two are cleanly separated: `inverter.powerLimit` is the runtime/RAM-only limit (use it for zero-export — no NVM wear), `config.limitPowerMyPower` is the permanent cap

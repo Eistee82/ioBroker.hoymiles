@@ -127,7 +127,8 @@ class DeviceContext {
 
 	private pollTimer: ioBroker.Interval | undefined;
 	pvStatesCreated: boolean;
-	private pvCount: number;
+	/** Number of PV-string states created so far. Read by the burst poller to size its writes. */
+	pvCount: number;
 	private meterStatesCreated: boolean;
 	private histStatesCreated: boolean;
 	private pollCount: number;

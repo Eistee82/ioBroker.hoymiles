@@ -27,6 +27,13 @@ export const CLOUD_DEFAULT_REALDATA_INTERVAL_MS = 300000;
 export const CLOUD_MIN_REALDATA_INTERVAL_MS = 60000;
 export const ENSURE_TOKEN_TIMEOUT_MS = 30000;
 
+// Realtime "burst" channel (fast live power for cloud-only DTUs).
+// The server dictates the poll cadence via `dly`; we clamp it to these bounds.
+export const BURST_MIN_INTERVAL_MS = 1500;
+export const BURST_MAX_INTERVAL_MS = 10000;
+// Proactively re-fetch the short-lived k-token URL well before it can expire.
+export const BURST_URI_REFRESH_MS = 240000;
+
 // Protobuf protocol
 export const DTU_TIME_OFFSET = 28800; // 8h in seconds
 export const MIN_PROTOBUF_PAYLOAD_SIZE = 4;

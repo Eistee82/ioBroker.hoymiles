@@ -20,6 +20,8 @@
     "enableCloudRelayHelp": "Quando l'adattatore è connesso localmente, l'inverter non può più caricare dati nel cloud Hoymiles. Attiva questa opzione per permettere all'adattatore di inoltrare i dati per conto dell'inverter, in modo che il portale cloud e l'app continuino a funzionare.",
     "enableLocal": "Connessione locale (TCP)",
     "enableLocalHelp": "Connessione diretta all'inverter tramite TCP/Protobuf sulla porta 10081. Fornisce dati in tempo reale ogni pochi secondi, inclusi potenza, tensione, corrente e temperatura per pannello. L'inverter deve essere sulla stessa rete.",
+    "enableRealtimeBurst": "Dati in tempo reale rapidi (cloud)",
+    "enableRealtimeBurstHelp": "Interroga dati di potenza rapidi, al secondo, dal cloud S-Miles per gli inverter senza connessione locale. Interessa solo i dispositivi esclusivamente cloud; gli inverter connessi localmente non sono interessati.",
     "slowPollFactor": "Fattore di interrogazione config/allarmi",
     "slowPollFactorHelp": "I dati di configurazione e allarmi cambiano raramente. Vengono interrogati solo ogni N cicli di dati per ridurre il carico. Predefinito: 6 (= ogni 30 secondi con intervallo di 5s).",
     "tabCloud": "Cloud (S-Miles)",

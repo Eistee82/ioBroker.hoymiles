@@ -20,6 +20,8 @@
     "enableCloudRelayHelp": "Wenn der Adapter lokal verbunden ist, kann der Wechselrichter selbst keine Daten mehr in die Hoymiles Cloud hochladen. Aktiviere dies, damit der Adapter die Daten im Namen des Wechselrichters weiterleitet, sodass Cloud-Portal und App weiterhin funktionieren.",
     "enableLocal": "Lokale Verbindung (TCP)",
     "enableLocalHelp": "Direkte Verbindung zum Wechselrichter per TCP/Protobuf auf Port 10081. Liefert Echtzeitdaten alle paar Sekunden inkl. Leistung, Spannung, Strom und Temperatur pro Panel. Der Wechselrichter muss im gleichen Netzwerk sein.",
+    "enableRealtimeBurst": "Schnelle Echtzeitdaten (Cloud)",
+    "enableRealtimeBurstHelp": "Fragt schnelle Sekundendaten aus der S-Miles-Cloud ab für Wechselrichter ohne lokale Verbindung. Betrifft nur reine Cloud-Geräte; lokal verbundene Wechselrichter sind davon nicht betroffen.",
     "slowPollFactor": "Config/Alarm Abfragefaktor",
     "slowPollFactorHelp": "Konfiguration und Alarme ändern sich selten. Sie werden nur bei jedem X-ten Datenzyklus abgefragt um die Last zu reduzieren. Standard: 6 (= alle 30 Sekunden bei 5s Intervall).",
     "tabCloud": "Cloud (S-Miles)",

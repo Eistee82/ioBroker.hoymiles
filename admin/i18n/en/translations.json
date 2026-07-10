@@ -20,6 +20,8 @@
     "cloudRelayWarning": "Note: A local connection occupies the inverter's only communication channel. This prevents it from sending data to the Hoymiles Cloud on its own. Enable the cloud relay so the adapter forwards the data to the cloud on behalf of the inverter. Without the relay, the Hoymiles app and cloud portal will not work correctly.",
     "enableCloud": "Cloud connection (S-Miles)",
     "enableCloudHelp": "Connect to the Hoymiles S-Miles cloud to get energy statistics (daily, monthly, yearly), CO2 savings, income calculation and per-inverter power data. All inverters in your account are automatically discovered.",
+    "enableRealtimeBurst": "Fast realtime data (cloud)",
+    "enableRealtimeBurstHelp": "Poll fast per-second power data from the S-Miles cloud for inverters without a local connection. Only affects cloud-only devices; locally connected inverters are unaffected.",
     "cloudUser": "S-Miles email",
     "cloudUserRequired": "Email address is required",
     "cloudPassword": "S-Miles password",

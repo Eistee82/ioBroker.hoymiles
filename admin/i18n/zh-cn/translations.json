@@ -20,6 +20,8 @@
     "enableCloudRelayHelp": "当适配器本地连接时，逆变器无法再自行将数据上传到Hoymiles云端。启用此选项可让适配器代表逆变器转发数据，以便云端门户和应用程序继续正常工作。",
     "enableLocal": "本地连接 (TCP)",
     "enableLocalHelp": "通过TCP/Protobuf在端口10081直接连接逆变器。每隔几秒提供实时数据，包括每个面板的功率、电压、电流和温度。逆变器必须在同一网络中。",
+    "enableRealtimeBurst": "快速实时数据（云端）",
+    "enableRealtimeBurstHelp": "为没有本地连接的逆变器从S-Miles云端轮询每秒级的快速功率数据。仅影响纯云端设备；本地连接的逆变器不受影响。",
     "slowPollFactor": "配置/告警轮询因子",
     "slowPollFactorHelp": "配置和告警数据很少变化。它们仅在每第N个数据周期查询一次以减少负载。默认值：6（= 在5秒间隔下每30秒查询一次）。",
     "tabCloud": "云端 (S-Miles)",

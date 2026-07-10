@@ -1,6 +1,35 @@
 import assert from "node:assert";
+import * as https from "node:https";
+import { execSync } from "node:child_process";
+import { mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { join } from "node:path";
+import { tmpdir } from "node:os";
 import CloudConnection, { CloudAuthError } from "../build/lib/cloudConnection.js";
 import { HttpError } from "../build/lib/httpClient.js";
+
+// Allow self-signed certificates for mock server tests (same pattern as httpClient.test.js).
+process.env.NODE_TLS_REJECT_UNAUTHORIZED = "0";
+
+function generateCert() {
+	const tmp = mkdtempSync(join(tmpdir(), "cloudconn-test-"));
+	const keyFile = join(tmp, "key.pem");
+	const certFile = join(tmp, "cert.pem");
+	try {
+		execSync(
+			`openssl req -x509 -newkey rsa:2048 -keyout "${keyFile}" -out "${certFile}" -days 1 -nodes -subj "/CN=localhost"`,
+			{ stdio: "pipe" },
+		);
+		const key = readFileSync(keyFile, "utf8");
+		const cert = readFileSync(certFile, "utf8");
+		return { key, cert };
+	} finally {
+		try {
+			rmSync(tmp, { recursive: true });
+		} catch {
+			/* ignore */
+		}
+	}
+}
 
 // ============================================================
 // cloudConnection – constructor and input validation
@@ -829,5 +858,212 @@ describe("CloudAuthError", function () {
 	it("code defaults to empty string when omitted", function () {
 		const err = new CloudAuthError("bad credentials");
 		assert.strictEqual(err.code, "");
+	});
+});
+
+// ============================================================
+// cloudConnection – getRealtimeUri
+// ============================================================
+describe("cloudConnection – getRealtimeUri", function () {
+	let originalPost;
+
+	beforeEach(function () {
+		originalPost = CloudConnection.prototype._post;
+	});
+
+	afterEach(function () {
+		CloudConnection.prototype._post = originalPost;
+	});
+
+	it("throws 'Invalid stationId' for 0", async function () {
+		const cloud = new CloudConnection("u", "p");
+		await assert.rejects(() => cloud.getRealtimeUri(0), {
+			message: "Invalid stationId",
+		});
+	});
+
+	it("posts {sid} to get_sd_uri and returns data.uri on status=0", async function () {
+		const cloud = new CloudConnection("u", "p");
+		cloud.token = "fake-token";
+		cloud.tokenTime = Date.now();
+
+		let calledPath;
+		let calledBody;
+		CloudConnection.prototype._post = async function (apiPath, body) {
+			calledPath = apiPath;
+			calledBody = body;
+			return { status: "0", data: { uri: "https://eurt.hoymiles.com/rds/api/0/burst/get?k=abc123&t=999" } };
+		};
+
+		const uri = await cloud.getRealtimeUri(42);
+		assert.strictEqual(uri, "https://eurt.hoymiles.com/rds/api/0/burst/get?k=abc123&t=999");
+		assert.strictEqual(calledPath, "/pvm/api/0/station/get_sd_uri");
+		assert.deepStrictEqual(calledBody, { sid: 42 });
+	});
+
+	it("throws when status is not '0'", async function () {
+		const cloud = new CloudConnection("u", "p");
+		cloud.token = "fake-token";
+		cloud.tokenTime = Date.now();
+		CloudConnection.prototype._post = async function () {
+			return { status: "1", message: "session expired" };
+		};
+		await assert.rejects(() => cloud.getRealtimeUri(42), {
+			message: "get_sd_uri failed: session expired",
+		});
+	});
+
+	it("throws when status is '0' but data.uri is missing", async function () {
+		const cloud = new CloudConnection("u", "p");
+		cloud.token = "fake-token";
+		cloud.tokenTime = Date.now();
+		CloudConnection.prototype._post = async function () {
+			return { status: "0", data: {} };
+		};
+		await assert.rejects(() => cloud.getRealtimeUri(42), {
+			message: "get_sd_uri returned no uri",
+		});
+	});
+});
+
+// ============================================================
+// cloudConnection – pollRealtimeBurst (real HTTPS mock server — pollRealtimeBurst
+// posts directly to the caller-supplied `uri` via httpClient.postJson, bypassing
+// this._post, so it cannot be exercised via the prototype-override pattern above).
+// ============================================================
+describe("cloudConnection – pollRealtimeBurst", function () {
+	let server;
+	let serverAvailable = false;
+	let baseUrl;
+
+	before(function (done) {
+		this.timeout(10000);
+
+		let creds;
+		try {
+			creds = generateCert();
+		} catch {
+			// openssl not available — skip all mock-server tests in this block.
+			this.skip();
+			return;
+		}
+
+		server = https.createServer(creds, (req, res) => {
+			const chunks = [];
+			req.on("data", chunk => chunks.push(chunk));
+			req.on("end", () => {
+				const url = req.url;
+
+				// m:0 station overview — power + flow.
+				if (url.startsWith("/burst-m0")) {
+					res.writeHead(200, { "Content-Type": "application/json" });
+					res.end(
+						JSON.stringify({
+							status: "0",
+							data: {
+								dly: 2000,
+								con: 1,
+								power: { pv: 500, pvr: 50, bat: 0, grid: -100, load: 400, sp: 0 },
+								flow: [{ i: 1, o: 2, v: 500 }],
+							},
+						}),
+					);
+					return;
+				}
+
+				// m:3 per-inverter detail — mis[].
+				if (url.startsWith("/burst-m3")) {
+					res.writeHead(200, { "Content-Type": "application/json" });
+					res.end(
+						JSON.stringify({
+							status: "0",
+							data: {
+								dly: 1500,
+								con: 1,
+								mis: [{ sn: "INV1", pac: 300, p1: 150, p2: 150, p3: 0, p4: 0 }],
+							},
+						}),
+					);
+					return;
+				}
+
+				// Non-zero status — server-side rejection (e.g. stale k-token).
+				if (url.startsWith("/burst-error")) {
+					res.writeHead(200, { "Content-Type": "application/json" });
+					res.end(JSON.stringify({ status: "1", message: "token expired" }));
+					return;
+				}
+
+				// status=0 with no data at all — pollRealtimeBurst must fall back to {}.
+				if (url.startsWith("/burst-empty")) {
+					res.writeHead(200, { "Content-Type": "application/json" });
+					res.end(JSON.stringify({ status: "0" }));
+					return;
+				}
+
+				res.writeHead(404, { "Content-Type": "text/plain" });
+				res.end("Not Found");
+			});
+		});
+
+		server.listen(0, "127.0.0.1", () => {
+			serverAvailable = true;
+			const port = server.address().port;
+			baseUrl = `https://127.0.0.1:${port}`;
+			done();
+		});
+
+		server.on("error", err => done(err));
+	});
+
+	after(function (done) {
+		if (server && serverAvailable) {
+			server.close(() => done());
+		} else {
+			done();
+		}
+	});
+
+	beforeEach(function () {
+		if (!serverAvailable) {
+			this.skip();
+		}
+	});
+
+	it("parses m:0 station overview (power + flow)", async function () {
+		this.timeout(10000);
+		const cloud = new CloudConnection("u", "p");
+		const data = await cloud.pollRealtimeBurst(`${baseUrl}/burst-m0?k=abc&t=1`, { m: 0, t: 1 });
+		assert.deepStrictEqual(data.power, { pv: 500, pvr: 50, bat: 0, grid: -100, load: 400, sp: 0 });
+		assert.deepStrictEqual(data.flow, [{ i: 1, o: 2, v: 500 }]);
+		assert.strictEqual(data.dly, 2000);
+	});
+
+	it("parses m:3 per-inverter detail (mis[])", async function () {
+		this.timeout(10000);
+		const cloud = new CloudConnection("u", "p");
+		const data = await cloud.pollRealtimeBurst(`${baseUrl}/burst-m3?k=abc&t=1`, { m: 3, mis: ["INV1"], t: 1 });
+		assert.strictEqual(data.mis.length, 1);
+		assert.strictEqual(data.mis[0].sn, "INV1");
+		assert.strictEqual(data.mis[0].pac, 300);
+		assert.strictEqual(data.mis[0].p1, 150);
+		assert.strictEqual(data.mis[0].p2, 150);
+		assert.strictEqual(data.dly, 1500);
+		assert.strictEqual(data.con, 1);
+	});
+
+	it("throws when the server reports a non-zero status", async function () {
+		this.timeout(10000);
+		const cloud = new CloudConnection("u", "p");
+		await assert.rejects(() => cloud.pollRealtimeBurst(`${baseUrl}/burst-error`, { m: 3, mis: [] }), {
+			message: "Realtime burst failed: token expired",
+		});
+	});
+
+	it("returns an empty object when status=0 but the server sent no data", async function () {
+		this.timeout(10000);
+		const cloud = new CloudConnection("u", "p");
+		const data = await cloud.pollRealtimeBurst(`${baseUrl}/burst-empty`, { m: 3, mis: [] });
+		assert.deepStrictEqual(data, {});
 	});
 });

@@ -54,7 +54,7 @@ function request(url, body, options, responseType) {
         const reqOptions = {
             hostname: parsed.hostname,
             port: parsed.port || 443,
-            path: parsed.pathname,
+            path: parsed.pathname + parsed.search,
             method: "POST",
             agent,
             headers,

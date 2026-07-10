@@ -106,7 +106,9 @@ function request(
 		const reqOptions: https.RequestOptions = {
 			hostname: parsed.hostname,
 			port: parsed.port || 443,
-			path: parsed.pathname,
+			// Include the query string: the realtime burst endpoint carries its auth token
+			// as `?k=…&t=…`, which `pathname` alone drops (→ HTTP 400 from the server).
+			path: parsed.pathname + parsed.search,
 			method: "POST",
 			agent,
 			headers,

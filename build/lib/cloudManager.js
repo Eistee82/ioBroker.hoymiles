@@ -1,5 +1,6 @@
 import CloudConnection, { CloudAuthError } from "./cloudConnection.js";
 import CloudPoller from "./cloudPoller.js";
+import BurstPoller from "./burstPoller.js";
 import DeviceContext from "./deviceContext.js";
 import { stationChannels } from "./stateDefinitions.js";
 import { CLOUD_DISCOVER_CONCURRENCY, CLOUD_RETRY_INITIAL_MS, CLOUD_RETRY_MAX_MS } from "./constants.js";
@@ -9,11 +10,13 @@ class CloudManager {
     protobuf;
     enableLocal;
     enableCloudRelay;
+    enableRealtimeBurst;
     dataInterval;
     slowPollFactor;
     localContexts;
     cloud;
     cloudPoller;
+    burstPoller;
     pendingCloudMatches;
     stationDevices;
     cloudRetryDelay;
@@ -25,11 +28,13 @@ class CloudManager {
         this.protobuf = options.protobuf;
         this.enableLocal = options.enableLocal;
         this.enableCloudRelay = options.enableCloudRelay;
+        this.enableRealtimeBurst = options.enableRealtimeBurst;
         this.dataInterval = options.dataInterval;
         this.slowPollFactor = options.slowPollFactor;
         this.localContexts = options.localContexts;
         this.cloud = new CloudConnection(options.cloudUser, options.cloudPassword, msg => this.adapter.log.debug(`Cloud: ${msg}`));
         this.cloudPoller = null;
+        this.burstPoller = null;
         this.pendingCloudMatches = new Map();
         this.stationDevices = new Set();
         this.cloudRetryDelay = CLOUD_RETRY_INITIAL_MS;
@@ -58,6 +63,10 @@ class CloudManager {
         if (this.deferredMatchTimer) {
             this.adapter.clearTimeout(this.deferredMatchTimer);
             this.deferredMatchTimer = undefined;
+        }
+        if (this.burstPoller) {
+            this.burstPoller.stop();
+            this.burstPoller = null;
         }
         if (this.cloudPoller) {
             this.cloudPoller.stop();
@@ -127,6 +136,15 @@ class CloudManager {
         await this.cloudPoller.initialFetch();
         if (!hasActiveRelay) {
             this.cloudPoller.scheduleCloudPoll();
+        }
+        if (this.enableRealtimeBurst) {
+            this.burstPoller = new BurstPoller({
+                cloud: this.cloud,
+                adapter: this.adapter,
+                devices: this.adapter.devices,
+                stationDevices: this.stationDevices,
+            });
+            await this.burstPoller.start();
         }
     }
     _retryLogin() {

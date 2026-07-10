@@ -20,6 +20,8 @@
     "enableCloudRelayHelp": "Quando o adaptador está conectado localmente, o inversor não consegue mais enviar dados para a Hoymiles Cloud. Ative esta opção para que o adaptador encaminhe os dados em nome do inversor, para que o portal da nuvem e a aplicação continuem a funcionar.",
     "enableLocal": "Conexão local (TCP)",
     "enableLocalHelp": "Conexão direta com o inversor via TCP/Protobuf na porta 10081. Fornece dados em tempo real a cada poucos segundos, incluindo potência, tensão, corrente e temperatura por painel. O inversor deve estar na mesma rede.",
+    "enableRealtimeBurst": "Dados em tempo real rápidos (nuvem)",
+    "enableRealtimeBurstHelp": "Consulta dados de potência rápidos, por segundo, da nuvem S-Miles para inversores sem conexão local. Afeta apenas dispositivos exclusivamente na nuvem; os inversores conectados localmente não são afetados.",
     "slowPollFactor": "Fator de consulta de config/alarmes",
     "slowPollFactorHelp": "Os dados de configuração e alarmes mudam raramente. São consultados apenas a cada N ciclos de dados para reduzir a carga. Padrão: 6 (= a cada 30 segundos com intervalo de 5s).",
     "tabCloud": "Nuvem (S-Miles)",

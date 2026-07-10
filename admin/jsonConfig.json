@@ -191,6 +191,18 @@
             "xl": 12,
             "help": "enableCloudHelp"
         },
+        "enableRealtimeBurst": {
+            "type": "checkbox",
+            "label": "enableRealtimeBurst",
+            "default": true,
+            "xs": 12,
+            "sm": 12,
+            "md": 12,
+            "lg": 12,
+            "xl": 12,
+            "disabled": "!data.enableCloud",
+            "help": "enableRealtimeBurstHelp"
+        },
         "cloudUser": {
             "type": "text",
             "label": "cloudUser",

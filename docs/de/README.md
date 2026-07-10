@@ -33,6 +33,7 @@ Dieser Adapter ist für **Hoymiles HMS Mikrowechselrichter mit integriertem WiFi
 | **Cloud aktivieren** | aus | Hoymiles S-Miles Cloud-API aktivieren |
 | **S-Miles E-Mail** | — | E-Mail-Adresse des S-Miles Kontos |
 | **S-Miles Passwort** | — | Passwort des S-Miles Kontos (verschlüsselt gespeichert) |
+| **Schnelle Echtzeitdaten (Cloud)** | ein | Für Wechselrichter **ohne** lokale Verbindung schnelle Sekunden-Leistungsdaten aus der Cloud abrufen (derselbe „Burst"-Kanal, den die Live-Ansicht der S-Miles-App nutzt). Aktualisiert `grid.power` und `pvN.power` etwa alle 1,5–3 s (servergesteuert) statt nur alle ~80 s. Betrifft nur reine Cloud-Geräte; lokal verbundene Wechselrichter behalten ihre direkten lokalen Echtzeitdaten. |
 
 Alle Wechselrichter im Cloud-Account werden automatisch erkannt. Keine manuelle Seriennummer-Konfiguration nötig.
 

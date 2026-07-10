@@ -226,6 +226,7 @@
     "dataInterval": 5,
     "slowPollFactor": 6,
     "enableCloudRelay": true,
+    "enableRealtimeBurst": true,
     "enableCloud": false,
     "cloudUser": "",
     "cloudPassword": ""

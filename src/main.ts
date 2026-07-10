@@ -20,6 +20,7 @@ interface HoymilesConfig {
 	enableLocal?: boolean;
 	enableCloud?: boolean;
 	enableCloudRelay?: boolean;
+	enableRealtimeBurst?: boolean;
 	cloudUser?: string;
 	cloudPassword?: string;
 	dataInterval?: number;
@@ -71,6 +72,9 @@ class Hoymiles extends utils.Adapter {
 		const rawSlowPoll = Number(cfg.slowPollFactor ?? 6);
 		const slowPollFactor = Number.isNaN(rawSlowPoll) || rawSlowPoll < 1 ? 6 : rawSlowPoll;
 		const enableCloudRelay = cfg.enableCloudRelay !== false;
+		// Fast realtime burst for cloud-only DTUs. Default on: it only affects DTUs without a
+		// local/relay link (skipped otherwise) and follows the server-dictated cadence.
+		const enableRealtimeBurst = cfg.enableRealtimeBurst !== false;
 
 		// --- Shared protobuf handler (loaded once, shared across all devices) ---
 		this.sharedProtobuf = new ProtobufHandler();
@@ -134,6 +138,7 @@ class Hoymiles extends utils.Adapter {
 					cloudPassword,
 					enableLocal,
 					enableCloudRelay,
+					enableRealtimeBurst,
 					dataInterval,
 					slowPollFactor,
 					localContexts: this.localContexts,

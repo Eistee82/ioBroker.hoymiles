@@ -20,6 +20,8 @@
     "enableCloudRelayHelp": "Gdy adapter jest połączony lokalnie, falownik nie może już samodzielnie przesyłać danych do chmury Hoymiles. Włącz tę opcję, aby adapter przesyłał dane w imieniu falownika, dzięki czemu portal chmurowy i aplikacja będą nadal działać.",
     "enableLocal": "Połączenie lokalne (TCP)",
     "enableLocalHelp": "Bezpośrednie połączenie z falownikiem przez TCP/Protobuf na porcie 10081. Dostarcza dane w czasie rzeczywistym co kilka sekund, w tym moc, napięcie, prąd i temperaturę dla każdego panelu. Falownik musi być w tej samej sieci.",
+    "enableRealtimeBurst": "Szybkie dane w czasie rzeczywistym (chmura)",
+    "enableRealtimeBurstHelp": "Pobiera szybkie, sekundowe dane mocy z chmury S-Miles dla falowników bez połączenia lokalnego. Dotyczy tylko urządzeń działających wyłącznie w chmurze; falowniki połączone lokalnie nie są objęte tą opcją.",
     "slowPollFactor": "Współczynnik odpytywania konfiguracji/alarmów",
     "slowPollFactorHelp": "Dane konfiguracji i alarmów zmieniają się rzadko. Są odpytywane tylko co N-ty cykl danych, aby zmniejszyć obciążenie. Domyślnie: 6 (= co 30 sekund przy interwale 5s).",
     "tabCloud": "Chmura (S-Miles)",

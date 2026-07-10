@@ -25,6 +25,61 @@ import {
 	safeJsonStringify,
 } from "./utils.js";
 
+/** One edge of the realtime energy-flow graph (burst m:0): power `v` W flowing from node `i` to node `o`. */
+export interface BurstFlowEdge {
+	/** Source node id. */
+	i: number;
+	/** Destination node id. */
+	o: number;
+	/** Power flowing along the edge, in watts. */
+	v: number;
+}
+/** Aggregated station power from the realtime burst (m:0), all in watts (`pvr` = PV utilization %). */
+export interface BurstStationPower {
+	/** PV generation power (W). */
+	pv: number;
+	/** PV utilization ratio (%). */
+	pvr: number;
+	/** Battery power (W; +charge/−discharge). */
+	bat: number;
+	/** Grid power (W; +import/−export). */
+	grid: number;
+	/** Load / consumption power (W). */
+	load: number;
+	/** Surplus / spare power (W). */
+	sp: number;
+}
+/** Per-inverter realtime power from the burst (m:3): AC total `pac` + per-PV-string watts `p1..p4`. */
+export interface BurstInverter {
+	/** Inverter serial number. */
+	sn: string;
+	/** AC output power (W). */
+	pac: number;
+	/** PV-string 1 power (W). */
+	p1: number;
+	/** PV-string 2 power (W). */
+	p2: number;
+	/** PV-string 3 power (W). */
+	p3: number;
+	/** PV-string 4 power (W). */
+	p4: number;
+}
+/** Decoded `data` object of a realtime-burst response. */
+export interface BurstData {
+	/** Server-dictated delay until the next poll, in ms (adaptive, ~1500–10000). */
+	dly?: number;
+	/** Connection flag (1 = the DTU is live-streaming). */
+	con?: number;
+	/** Station-local timestamp string of this sample. */
+	t?: string;
+	/** Present for m:0 (station overview). */
+	power?: BurstStationPower;
+	/** Present for m:0 — energy-flow graph edges. */
+	flow?: BurstFlowEdge[];
+	/** Present for m:3 (per-device detail). */
+	mis?: BurstInverter[];
+}
+
 /**
  * Cloud profile, determined by an authoritative probe against `/pvm/.../select_by_page`
  * AFTER a successful login. Pre-insp's `v` cannot be used as the profile signal — Hoymiles
@@ -1004,6 +1059,52 @@ class CloudConnection {
 			throw new Error(`Realtime data failed: ${result.message}`);
 		}
 		return assertData<CloudRealtimeData>(result.data, "Realtime data");
+	}
+
+	/**
+	 * Fetch the realtime "burst" URL for a station — the fast-updating channel the S-Miles app
+	 * uses for its live view. `get_sd_uri` returns a short-lived URL on the realtime host
+	 * (`eurt.…`) that carries a `k` auth token in its query string. Poll it via
+	 * `pollRealtimeBurst`. The token expires (embedded `t` timestamp), so re-fetch the URL when
+	 * polling starts to fail.
+	 *
+	 * @param stationId - Cloud station ID.
+	 */
+	async getRealtimeUri(stationId: number): Promise<string> {
+		this.assertStationId(stationId);
+		await this.ensureToken();
+		const result = await this._post<{ uri?: string }>("/pvm/api/0/station/get_sd_uri", { sid: stationId });
+		if (result.status !== "0") {
+			throw new Error(`get_sd_uri failed: ${result.message}`);
+		}
+		const uri = result.data?.uri;
+		if (!uri) {
+			throw new Error("get_sd_uri returned no uri");
+		}
+		return uri;
+	}
+
+	/**
+	 * Poll a realtime burst URL once. `uri` comes from `getRealtimeUri`; `body` selects the mode:
+	 * - `{ m: 0, t: 1 }` → station overview (`power` + `flow`)
+	 * - `{ m: 3, mis: [inverterSn, …], t: 1 }` → per-inverter detail (`mis[].pac/p1..p4`)
+	 *
+	 * The `k` token embedded in `uri` authenticates the request, so there is deliberately no
+	 * `ensureToken` here — the caller owns URL freshness and re-fetches via `getRealtimeUri`.
+	 * Returns the decoded `data` object (empty object if the server sent none).
+	 *
+	 * @param uri - Full realtime URL from `getRealtimeUri` (host + path + `?k=…&t=…`).
+	 * @param body - Mode selector body.
+	 */
+	async pollRealtimeBurst(uri: string, body: Record<string, unknown>): Promise<BurstData> {
+		const result = await postJson<CloudApiResponse<BurstData>>(uri, body, {
+			token: this.token,
+			userAgent: this.getUserAgent(),
+		});
+		if (result.status !== "0") {
+			throw new Error(`Realtime burst failed: ${result.message}`);
+		}
+		return result.data ?? {};
 	}
 
 	/**

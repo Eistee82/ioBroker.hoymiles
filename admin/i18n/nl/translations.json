@@ -20,6 +20,8 @@
     "enableCloudRelayHelp": "Wanneer de adapter lokaal verbonden is, kan de omvormer zelf geen gegevens meer uploaden naar de Hoymiles Cloud. Schakel dit in zodat de adapter de gegevens namens de omvormer doorstuurt, zodat het cloudportaal en de app blijven werken.",
     "enableLocal": "Lokale verbinding (TCP)",
     "enableLocalHelp": "Directe verbinding met de omvormer via TCP/Protobuf op poort 10081. Levert realtime gegevens elke paar seconden, inclusief vermogen, spanning, stroom en temperatuur per paneel. De omvormer moet in hetzelfde netwerk zijn.",
+    "enableRealtimeBurst": "Snelle realtime gegevens (cloud)",
+    "enableRealtimeBurstHelp": "Vraagt snelle vermogensgegevens per seconde op uit de S-Miles-cloud voor omvormers zonder lokale verbinding. Heeft alleen invloed op cloud-only apparaten; lokaal verbonden omvormers worden niet beïnvloed.",
     "slowPollFactor": "Config/alarm opvraagfactor",
     "slowPollFactorHelp": "Configuratie- en alarmgegevens veranderen zelden. Ze worden slechts elke Nde datacyclus opgevraagd om de belasting te verminderen. Standaard: 6 (= elke 30 seconden bij een interval van 5s).",
     "tabCloud": "Cloud (S-Miles)",

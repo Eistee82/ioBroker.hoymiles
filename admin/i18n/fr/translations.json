@@ -20,6 +20,8 @@
     "enableCloudRelayHelp": "Lorsque l'adaptateur est connecté localement, l'onduleur ne peut plus envoyer ses données vers le cloud Hoymiles. Activez cette option pour que l'adaptateur transmette les données au nom de l'onduleur, afin que le portail cloud et l'application continuent de fonctionner.",
     "enableLocal": "Connexion locale (TCP)",
     "enableLocalHelp": "Connexion directe à l'onduleur via TCP/Protobuf sur le port 10081. Fournit des données en temps réel toutes les quelques secondes, y compris la puissance, la tension, le courant et la température par panneau. L'onduleur doit être sur le même réseau.",
+    "enableRealtimeBurst": "Données en temps réel rapides (cloud)",
+    "enableRealtimeBurstHelp": "Interroge des données de puissance rapides, à la seconde, depuis le cloud S-Miles pour les onduleurs sans connexion locale. N'affecte que les appareils uniquement cloud ; les onduleurs connectés localement ne sont pas concernés.",
     "slowPollFactor": "Facteur d'interrogation config/alarmes",
     "slowPollFactorHelp": "Les données de configuration et d'alarmes changent rarement. Elles ne sont interrogées qu'à chaque Nième cycle de données pour réduire la charge. Par défaut : 6 (= toutes les 30 secondes avec un intervalle de 5s).",
     "tabCloud": "Cloud (S-Miles)",

@@ -1,5 +1,6 @@
 import CloudConnection, { CloudAuthError } from "./cloudConnection.js";
 import CloudPoller from "./cloudPoller.js";
+import BurstPoller from "./burstPoller.js";
 import DeviceContext, { type HoymilesAdapter } from "./deviceContext.js";
 import type { ProtobufHandler } from "./protobufHandler.js";
 import { stationChannels } from "./stateDefinitions.js";
@@ -13,6 +14,7 @@ interface CloudManagerOptions {
 	cloudPassword: string;
 	enableLocal: boolean;
 	enableCloudRelay: boolean;
+	enableRealtimeBurst: boolean;
 	dataInterval: number;
 	slowPollFactor: number;
 	localContexts: DeviceContext[];
@@ -27,12 +29,14 @@ class CloudManager {
 	private readonly protobuf: ProtobufHandler;
 	private readonly enableLocal: boolean;
 	private readonly enableCloudRelay: boolean;
+	private readonly enableRealtimeBurst: boolean;
 	private readonly dataInterval: number;
 	private readonly slowPollFactor: number;
 	private readonly localContexts: DeviceContext[];
 
 	private cloud: CloudConnection;
 	private cloudPoller: CloudPoller | null;
+	private burstPoller: BurstPoller | null;
 	private readonly pendingCloudMatches: Map<string, number>;
 	private readonly stationDevices: Set<number>;
 	private cloudRetryDelay: number;
@@ -48,6 +52,7 @@ class CloudManager {
 		this.protobuf = options.protobuf;
 		this.enableLocal = options.enableLocal;
 		this.enableCloudRelay = options.enableCloudRelay;
+		this.enableRealtimeBurst = options.enableRealtimeBurst;
 		this.dataInterval = options.dataInterval;
 		this.slowPollFactor = options.slowPollFactor;
 		this.localContexts = options.localContexts;
@@ -56,6 +61,7 @@ class CloudManager {
 			this.adapter.log.debug(`Cloud: ${msg}`),
 		);
 		this.cloudPoller = null;
+		this.burstPoller = null;
 		this.pendingCloudMatches = new Map();
 		this.stationDevices = new Set();
 		this.cloudRetryDelay = CLOUD_RETRY_INITIAL_MS;
@@ -87,6 +93,10 @@ class CloudManager {
 		if (this.deferredMatchTimer) {
 			this.adapter.clearTimeout(this.deferredMatchTimer);
 			this.deferredMatchTimer = undefined;
+		}
+		if (this.burstPoller) {
+			this.burstPoller.stop();
+			this.burstPoller = null;
 		}
 		if (this.cloudPoller) {
 			this.cloudPoller.stop();
@@ -189,6 +199,19 @@ class CloudManager {
 		await this.cloudPoller.initialFetch();
 		if (!hasActiveRelay) {
 			this.cloudPoller.scheduleCloudPoll();
+		}
+
+		// Fast realtime "burst" channel for cloud-only DTUs — started after the initial cloud
+		// fetch so device/PV states already exist. The poller itself skips any station without
+		// cloud-only inverters, so this is a no-op for pure-local setups.
+		if (this.enableRealtimeBurst) {
+			this.burstPoller = new BurstPoller({
+				cloud: this.cloud,
+				adapter: this.adapter,
+				devices: this.adapter.devices,
+				stationDevices: this.stationDevices,
+			});
+			await this.burstPoller.start();
 		}
 	}
 
