@@ -1,3 +1,4 @@
+import { GRID_PROFILE_SCHEMA } from "./gridProfile.js";
 const n = (id, en, de, role, unit, extra) => ({
     id,
     name: { en, de },
@@ -29,6 +30,13 @@ const channels = [
     { id: "dtu", name: { en: "DTU", de: "DTU" } },
     { id: "alarms", name: { en: "Alarms & warnings", de: "Alarme & Warnungen" }, source: "local" },
     { id: "config", name: { en: "DTU configuration", de: "DTU-Konfiguration" }, source: "local" },
+    { id: "gridProfile", name: { en: "Grid profile", de: "Netzprofil" }, source: "local" },
+];
+const gridProfileStates = [
+    s("gridProfile.standard", "Grid standard", "Netznorm", "text", { source: "local" }),
+    ...GRID_PROFILE_SCHEMA.map(p => p.flag
+        ? b(`gridProfile.${p.key}`, p.en, p.de, "indicator", { source: "local" })
+        : n(`gridProfile.${p.key}`, p.en, p.de, "value", p.unit, { source: "local" })),
 ];
 const states = [
     n("grid.power", "Grid power", "Netzleistung", "value.power", "W"),
@@ -71,9 +79,14 @@ const states = [
         source: "local",
     }),
     b("inverter.lock", "Lock inverter", "Wechselrichter sperren", "switch", { write: true, source: "local" }),
-    n("inverter.warnCount", "Active warning code", "Aktiver Warnungscode", "value", "", { source: "local" }),
-    s("inverter.warnMessage", "Active warning message", "Aktive Warnungsmeldung", "text", { source: "local" }),
+    n("inverter.warnCount", "SGSMO warning_number (raw value)", "SGSMO-Feld warning_number (Rohwert)", "value", "", {
+        source: "local",
+    }),
+    s("inverter.warnMessage", "Active warning message (from WCode alarm list)", "Aktive Warnungsmeldung (aus WCode-Alarmliste)", "text", { source: "local" }),
     n("inverter.linkStatus", "Link status", "Verbindungsstatus", "value", ""),
+    n("inverter.modulationIndexSignal", "Modulation index / signal (raw, packed)", "Modulationsindex / Signal (roh, gepackt)", "value", "", {
+        source: "local",
+    }),
     s("inverter.model", "Model", "Modell", "text", { source: "cloud" }),
     b("dtu.fwUpdateAvailable", "Firmware update available", "Firmware-Update verfügbar", "indicator", {
         source: "cloud",
@@ -85,19 +98,12 @@ const states = [
     s("dtu.wifiVersion", "WiFi version", "WLAN-Version", "text", { source: "local" }),
     b("dtu.reboot", "Reboot DTU", "DTU neustarten", "button", { write: true, source: "local" }),
     n("dtu.stepTime", "Step time", "Schrittzeit", "value", "s", { source: "local" }),
-    n("dtu.rfHwVersion", "RF hardware version", "RF Hardware-Version", "value", "", { source: "local" }),
-    n("dtu.rfSwVersion", "RF software version", "RF Software-Version", "value", "", { source: "local" }),
     n("dtu.accessModel", "Network access mode", "Netzwerk-Zugangsart", "value", "", {
         states: { 0: "GPRS", 1: "WiFi", 2: "Ethernet" },
         source: "local",
     }),
     n("dtu.communicationTime", "Last communication", "Letzte Kommunikation", "value.time", "", { source: "local" }),
     n("dtu.connState", "DTU error code", "DTU Fehlercode", "value", "", { states: { 0: "OK" }, source: "local" }),
-    n("dtu.mode485", "RS485 mode", "RS485 Modus", "value", "", {
-        states: { 0: "Reflux/Auto", 1: "Remote Control" },
-        source: "local",
-    }),
-    n("dtu.sub1gFrequencyBand", "Sub-1G frequency band", "Sub-1G Frequenzband", "value", "", { source: "local" }),
     s("dtu.searchResult", "AutoSearch result (inverter serials)", "AutoSearch-Ergebnis (Wechselrichter-Seriennummern)", "json", { source: "local" }),
     b("info.connected", "Connected", "Verbunden", "indicator.connected"),
     n("info.lastResponse", "Last response time", "Letzte Antwortzeit", "value.time", "", { source: "local" }),
@@ -123,49 +129,24 @@ const states = [
         write: true,
         source: "local",
     }),
+    n("config.limitPowerMyPower", "Persistent power limit", "Persistentes Leistungslimit", "level", "%", {
+        write: true,
+        min: 2,
+        max: 100,
+        source: "local",
+    }),
     s("config.wifiSsid", "WiFi SSID", "WLAN SSID", "text", { source: "local" }),
     n("config.wifiRssi", "WiFi RSSI", "WLAN Signalstärke", "value", "dBm", { source: "local" }),
-    b("config.zeroExportEnable", "Zero export enabled", "Nulleinspeisung aktiviert", "switch.enable", {
-        write: true,
-        source: "local",
-    }),
-    n("config.zeroExport433Addr", "Zero export 433MHz address", "Nulleinspeisung 433MHz Adresse", "value", "", {
-        source: "local",
-    }),
-    {
-        id: "config.meterKind",
-        name: { en: "Meter type", de: "Zählertyp" },
-        type: "string",
-        role: "text",
-        states: {
-            0: "No Meter",
-            1: "Single-phase",
-            2: "Two-phase",
-            3: "Three-phase",
-            5: "CT (G3)",
-            6: "Meter 1S/1T (G3)",
-            7: "Meter 2S/2T (G3)",
-        },
-        unit: "",
-        source: "local",
-    },
-    s("config.meterInterface", "Meter interface", "Zähler-Schnittstelle", "text", { source: "local" }),
     n("config.netDhcpSwitch", "DHCP enabled", "DHCP aktiviert", "value", "", { source: "local" }),
     s("config.dtuApSsid", "DTU AP SSID", "DTU AP SSID", "text", { source: "local" }),
     n("config.netmodeSelect", "Network mode", "Netzwerkmodus", "value", "", {
         states: { 0: "GPRS", 1: "WiFi", 2: "Ethernet" },
         source: "local",
     }),
-    n("config.channelSelect", "Channel select", "Kanalauswahl", "value", "", { source: "local" }),
-    n("config.sub1gSweepSwitch", "Sub-1G sweep", "Sub-1G Sweep", "value", "", { source: "local" }),
-    n("config.sub1gWorkChannel", "Sub-1G work channel", "Sub-1G Arbeitskanal", "value", "", { source: "local" }),
     n("config.invType", "Inverter type", "Wechselrichter-Typ", "value", "", { source: "local" }),
-    s("config.netIpAddress", "IP address", "IP-Adresse", "text", { source: "local" }),
-    s("config.netSubnetMask", "Subnet mask", "Subnetzmaske", "text", { source: "local" }),
-    s("config.netGateway", "Default gateway", "Standard-Gateway", "text", { source: "local" }),
     s("config.wifiIpAddress", "WiFi IP address", "WLAN IP-Adresse", "text", { source: "local" }),
-    s("config.netMacAddress", "MAC address", "MAC-Adresse", "text", { source: "local" }),
     s("config.wifiMacAddress", "WiFi MAC address", "WLAN MAC-Adresse", "text", { source: "local" }),
+    ...gridProfileStates,
 ];
 const stationChannels = [
     { id: "grid", name: { en: "Station grid output", de: "Anlagen-Netzeinspeisung" } },

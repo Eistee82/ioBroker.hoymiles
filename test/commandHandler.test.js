@@ -16,8 +16,8 @@ describe("commandHandler – COMMANDS", function () {
 		"inverter.cleanWarnings",
 		"inverter.cleanGroundingFault",
 		"inverter.lock",
-		"config.zeroExportEnable",
 		"config.serverSendTime",
+		"config.limitPowerMyPower",
 	];
 
 	it("contains all expected command keys", function () {
@@ -42,7 +42,7 @@ describe("commandHandler – COMMANDS", function () {
 		for (const key of buttons) {
 			assert.strictEqual(COMMANDS[key].button, true, `${key} should be a button`);
 		}
-		const nonButtons = ["inverter.powerLimit", "inverter.active", "inverter.lock", "config.zeroExportEnable"];
+		const nonButtons = ["inverter.powerLimit", "inverter.active", "inverter.lock", "config.limitPowerMyPower"];
 		for (const key of nonButtons) {
 			assert.ok(!COMMANDS[key].button, `${key} should not be a button`);
 		}
@@ -86,6 +86,16 @@ describe("commandHandler – COMMANDS", function () {
 		assert.ok(v(-1) !== null, "-1 should be rejected");
 		assert.strictEqual(v(1), null, "1 should be valid");
 		assert.strictEqual(v(5), null, "5 should be valid");
+	});
+
+	it("limitPowerMyPower validate rejects out of range", function () {
+		const v = COMMANDS["config.limitPowerMyPower"].validate;
+		assert.ok(v, "validate function must exist");
+		assert.ok(v(1) !== null, "1 should be rejected (below min 2)");
+		assert.ok(v(101) !== null, "101 should be rejected (above max 100)");
+		assert.strictEqual(v(2), null, "2 should be valid (min)");
+		assert.strictEqual(v(50), null, "50 should be valid");
+		assert.strictEqual(v(100), null, "100 should be valid (max)");
 	});
 
 	it("log functions return strings", function () {
@@ -148,6 +158,19 @@ describe("commandHandler – executeCommand", function () {
 		const { ctx, sent } = createMockContext(handler);
 		await executeCommand("inverter.powerLimit", { val: 150, ack: false, ts: 0, lc: 0, from: "", q: 0 }, ctx);
 		assert.strictEqual(sent.length, 0);
+	});
+
+	it("limitPowerMyPower encode produces buffer with limitPowerMypower 500 for value 50", async function () {
+		const cmd = COMMANDS["config.limitPowerMyPower"];
+		const buf = cmd.encode(50, 1700000000, handler);
+		assert.ok(Buffer.isBuffer(buf), "encode must return a Buffer");
+		assert.ok(buf.length > 0, "buffer must not be empty");
+		// Decode the protobuf payload to verify the scaled value
+		const parsed = handler.parseResponse(buf);
+		assert.ok(parsed, "buffer must be a parseable protobuf message");
+		const ResDTO = handler.protos.SetConfig.lookupType("SetConfigResDTO");
+		const obj = ResDTO.toObject(ResDTO.decode(parsed.payload), { longs: Number, defaults: true });
+		assert.strictEqual(obj.limitPowerMypower, 500, "50% * SCALE_POWER(10) must equal 500");
 	});
 
 	it("sends inverter on/off command", async function () {

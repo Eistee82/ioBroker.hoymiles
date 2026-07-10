@@ -341,6 +341,12 @@ export interface WarnDataResult {
 	dtuSn: string;
 	/** Unix timestamp. */
 	timestamp: number;
+	/** Total number of warn-list packages (1 = single package). */
+	packageNub: number;
+	/** Index of this package (0-based). */
+	packageNow: number;
+	/** Device kind the warnings refer to (warn_device field). */
+	warnDevice: number;
 	/** List of warning entries. */
 	warnings: WarnEntry[];
 }

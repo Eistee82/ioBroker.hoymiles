@@ -8,6 +8,7 @@ export const HTTP_AGENT_TIMEOUT_MS = 30000;
 export const RELAY_POLL_DELAY_MS = 30000;
 export const DEFAULT_POLL_MS = 300000;
 export const MIN_POLL_MS = 60000;
+export const CLOUD_STATION_STALE_MS = 1200000;
 export const DTU_PORT = 10081;
 export const RECONNECT_MAX_MS = 300000;
 export const CLOUD_RECONNECT_DELAY_MIN_MS = 1000;

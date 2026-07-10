@@ -58,6 +58,10 @@ const SEQ_MAX = 60000;
 const num = (v) => (typeof v === "number" ? v : typeof v === "string" ? parseFloat(v) || 0 : 0);
 const arr = (v) => (Array.isArray(v) ? v : []);
 const scaled = (v, div) => (div === 0 ? 0 : num(v) / div);
+const s16 = (v) => {
+    const n = num(v) & 0xffff;
+    return n >= 0x8000 ? n - 0x10000 : n;
+};
 const serialToHex = (v) => (Number(v) || 0).toString(16).toUpperCase();
 const formatIpv4 = (a, b, c, d) => [num(a), num(b), num(c), num(d)].join(".");
 const formatMac = (a, b, c, d, e, f) => [a, b, c, d, e, f].map(v => num(v).toString(16).padStart(2, "0").toUpperCase()).join(":");
@@ -143,6 +147,7 @@ class ProtobufHandler {
             ["APPHeartbeatPB", "HBReqDTO"],
             ["AlarmData", "WInfoReqDTO"],
             ["WarnData", "WarnReqDTO"],
+            ["WarnData", "WarnResDTO"],
             ["AppGetHistPower", "AppGetHistPowerReqDTO"],
             ["EventData", "EventDataReqDTO"],
             ["AutoSearch", "AutoSearchResDTO"],
@@ -265,6 +270,17 @@ class ProtobufHandler {
         const payload = ResDTO.encode(msg).finish();
         return this.buildMessage(CMD.SET_CONFIG[0], CMD.SET_CONFIG[1], payload);
     }
+    encodeWarnDataRequest(timestamp, packageNow = 0) {
+        const ResDTO = this.getType("WarnData", "WarnResDTO");
+        const msg = ResDTO.create({
+            ymdHms: this.formatTimeYmdHms(),
+            packageNow,
+            offset: DTU_TIME_OFFSET,
+            time: timestamp,
+        });
+        const payload = ResDTO.encode(msg).finish();
+        return this.buildMessage(CMD.WARN_DATA[0], CMD.WARN_DATA[1], payload);
+    }
     encodeHeartbeat(timestamp) {
         const ResDTO = this.getType("APPHeartbeatPB", "HBResDTO");
         const msg = ResDTO.create({
@@ -308,16 +324,49 @@ class ProtobufHandler {
         const payload = ResDTO.encode(msg).finish();
         return this.buildMessage(CMD.AUTO_SEARCH[0], CMD.AUTO_SEARCH[1], payload);
     }
-    encodeDevConfigFetch(timestamp, dtuSn, devSn) {
+    encodeDevConfigFetch(timestamp, dtuSn, devSn, currentPackage = 0) {
         const ResDTO = this.getType("DevConfig", "DevConfigFetchResDTO");
         const msg = ResDTO.create({
             responseTime: timestamp,
             transactionId: timestamp,
             dtuSn: dtuSn,
             devSn: devSn,
+            currentPackage: currentPackage,
         });
         const payload = ResDTO.encode(msg).finish();
         return this.buildMessage(CMD.DEV_CONFIG_FETCH[0], CMD.DEV_CONFIG_FETCH[1], payload);
+    }
+    encodeCloudCommandAck(timestamp, dtuSn, action, tid) {
+        const ReqDTO = this.getType("CommandPB", "CommandReqDTO");
+        const msg = ReqDTO.create({ dtuSn, time: timestamp, action, tid });
+        return this.buildMessage(0x22, 0x05, ReqDTO.encode(msg).finish());
+    }
+    encodeCloudCommandStatus(timestamp, dtuSn, action, tid, miSnsSucs = []) {
+        const ReqDTO = this.getType("CommandPB", "CommandStatusReqDTO");
+        const msg = ReqDTO.create({
+            dtuSn,
+            time: timestamp,
+            action,
+            packageNub: 1,
+            packageNow: 1,
+            tid,
+            miSnsSucs,
+        });
+        return this.buildMessage(0x22, 0x06, ReqDTO.encode(msg).finish());
+    }
+    encodeGridProfileResponse(timestamp, dtuSn, devSn, tid, data) {
+        const ReqDTO = this.getType("DevConfig", "DevConfigFetchReqDTO");
+        const msg = ReqDTO.create({
+            requestTime: timestamp,
+            transactionId: tid,
+            data,
+            crc: crc16(data),
+            dtuSn,
+            devSn,
+            totalPackages: 1,
+            ruleType: 1,
+        });
+        return this.buildMessage(0x22, 0x0e, ReqDTO.encode(msg).finish());
     }
     decodeRealDataNew(payload) {
         const obj = this.decodePayload("RealDataNew", "RealDataNewReqDTO", payload);
@@ -340,7 +389,7 @@ class ProtobufHandler {
                 reactivePower: scaled(sgs.reactivePower, SCALE_POWER),
                 current: scaled(sgs.current, SCALE_CURRENT),
                 powerFactor: scaled(sgs.powerFactor, SCALE_POWER_FACTOR),
-                temperature: scaled(sgs.temperature, SCALE_TEMPERATURE),
+                temperature: scaled(s16(sgs.temperature), SCALE_TEMPERATURE),
                 warningNumber: num(sgs.warningNumber),
                 crcChecksum: num(sgs.crcChecksum),
                 linkStatus: num(sgs.linkStatus),
@@ -513,6 +562,9 @@ class ProtobufHandler {
         return {
             dtuSn: obj.dtuSn || "",
             timestamp: num(obj.time),
+            packageNub: Math.max(num(obj.packageNub), 1),
+            packageNow: num(obj.packageNow),
+            warnDevice: num(obj.warnDevice),
             warnings,
         };
     }
@@ -528,7 +580,7 @@ class ProtobufHandler {
                 gridVoltage: scaled(e.gridVoltage, SCALE_VOLTAGE),
                 gridFrequency: scaled(e.gridFrequency, SCALE_FREQUENCY),
                 gridPower: num(e.gridPower),
-                temperature: scaled(e.temperature, SCALE_TEMPERATURE),
+                temperature: scaled(s16(e.temperature), SCALE_TEMPERATURE),
                 miId: `${num(e.miId)}`,
                 startTimestamp: num(e.startTimestamp),
             });

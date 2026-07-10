@@ -131,6 +131,19 @@ const arr = (v: unknown): Record<string, unknown>[] => (Array.isArray(v) ? (v as
 const scaled = (v: unknown, div: number): number => (div === 0 ? 0 : num(v) / div);
 
 /**
+ * Reinterpret a value as a signed 16-bit integer. The inverter packs signed quantities
+ * (e.g. temperature ×10) into unsigned-16 semantics, so values > 0x7FFF are negative
+ * (the S-Miles app does the same above the signed boundary). Works whether the field
+ * arrived as the raw unsigned-16 (e.g. 65531) or as an already-negative int (-5).
+ *
+ * @param v - Raw protobuf field value
+ */
+const s16 = (v: unknown): number => {
+	const n = num(v) & 0xffff;
+	return n >= 0x8000 ? n - 0x10000 : n;
+};
+
+/**
  * Convert a numeric serial number to uppercase hex string.
  *
  * @param v - Numeric serial number
@@ -279,6 +292,7 @@ class ProtobufHandler {
 			["APPHeartbeatPB", "HBReqDTO"],
 			["AlarmData", "WInfoReqDTO"],
 			["WarnData", "WarnReqDTO"],
+			["WarnData", "WarnResDTO"],
 			["AppGetHistPower", "AppGetHistPowerReqDTO"],
 			["EventData", "EventDataReqDTO"],
 			["AutoSearch", "AutoSearchResDTO"],
@@ -511,6 +525,28 @@ class ProtobufHandler {
 	}
 
 	/**
+	 * Encode a WarnData request for a single warn-list package (paginated pull).
+	 *
+	 * The DTU replies (tag 0xa2 0x04) with a `WarnReqDTO` carrying `package_now`/`package_nub`.
+	 * To read a multi-package warn list, request package 0 first, then keep requesting
+	 * `package_now + 1` until `package_now + 1 === package_nub` — exactly as the S-Miles app does.
+	 *
+	 * @param timestamp - Unix timestamp in seconds
+	 * @param packageNow - 0-based index of the package to request
+	 */
+	encodeWarnDataRequest(timestamp: number, packageNow = 0): Buffer {
+		const ResDTO = this.getType("WarnData", "WarnResDTO");
+		const msg = ResDTO.create({
+			ymdHms: this.formatTimeYmdHms(),
+			packageNow,
+			offset: DTU_TIME_OFFSET,
+			time: timestamp,
+		});
+		const payload = ResDTO.encode(msg).finish();
+		return this.buildMessage(CMD.WARN_DATA[0], CMD.WARN_DATA[1], payload);
+	}
+
+	/**
 	 * Encode a heartbeat message.
 	 *
 	 * @param timestamp - Unix timestamp in seconds
@@ -629,17 +665,106 @@ class ProtobufHandler {
 	 * @param timestamp - Unix timestamp in seconds
 	 * @param dtuSn - DTU serial number
 	 * @param devSn - Device serial number
+	 * @param currentPackage - Package index to request (0-based; for chunked grid-profile reads)
 	 */
-	encodeDevConfigFetch(timestamp: number, dtuSn: string, devSn: string): Buffer {
+	encodeDevConfigFetch(timestamp: number, dtuSn: string, devSn: string, currentPackage = 0): Buffer {
 		const ResDTO = this.getType("DevConfig", "DevConfigFetchResDTO");
 		const msg = ResDTO.create({
 			responseTime: timestamp,
 			transactionId: timestamp,
 			dtuSn: dtuSn,
 			devSn: devSn,
+			currentPackage: currentPackage,
 		});
 		const payload = ResDTO.encode(msg).finish();
 		return this.buildMessage(CMD.DEV_CONFIG_FETCH[0], CMD.DEV_CONFIG_FETCH[1], payload);
+	}
+
+	// --- Cloud-relay downlink responses (DTU → cloud, 0x22 tags) ---
+	// Used when the relay impersonates the DTU and must answer a server command itself.
+
+	/**
+	 * Encode the command acknowledgement the DTU sends after receiving an action command
+	 * (cloud tag 0x22 0x05, `CommandReqDTO`).
+	 *
+	 * @param timestamp - Unix timestamp in seconds
+	 * @param dtuSn - DTU serial number
+	 * @param action - Action code being acknowledged (e.g. 41 = read grid profile)
+	 * @param tid - Transaction id from the originating command
+	 */
+	encodeCloudCommandAck(timestamp: number, dtuSn: string, action: number, tid: number): Buffer {
+		const ReqDTO = this.getType("CommandPB", "CommandReqDTO");
+		const msg = ReqDTO.create({ dtuSn, time: timestamp, action, tid });
+		return this.buildMessage(0x22, 0x05, ReqDTO.encode(msg).finish());
+	}
+
+	/**
+	 * Encode the command-status message (cloud tag 0x22 0x06, `CommandStatusReqDTO`) the DTU
+	 * sends while processing a command.
+	 *
+	 * @param timestamp - Unix timestamp in seconds
+	 * @param dtuSn - DTU serial number
+	 * @param action - Action code (e.g. 41 = read grid profile, 4 = report version)
+	 * @param tid - Transaction id from the originating command
+	 * @param miSnsSucs - Micro-inverter serials (as int64) the command succeeded for; the version
+	 *   query (action 4) echoes the inverter here. Omit/empty for commands that don't report it.
+	 */
+	encodeCloudCommandStatus(
+		timestamp: number,
+		dtuSn: string,
+		action: number,
+		tid: number,
+		miSnsSucs: number[] = [],
+	): Buffer {
+		const ReqDTO = this.getType("CommandPB", "CommandStatusReqDTO");
+		const msg = ReqDTO.create({
+			dtuSn,
+			time: timestamp,
+			action,
+			packageNub: 1,
+			packageNow: 1,
+			tid,
+			miSnsSucs,
+		});
+		return this.buildMessage(0x22, 0x06, ReqDTO.encode(msg).finish());
+	}
+
+	/**
+	 * Encode a device-config (grid-profile) upload (cloud tag 0x22 0x0e, `DevConfigFetchReqDTO`).
+	 * The `data` blob must be little-endian (cloud byte order — see {@link byteSwap16}).
+	 *
+	 * `dtu_sn`/`dev_sn` are `bytes` in the real protocol (not strings): the DTU sends the raw
+	 * serial bytes, so pass back the exact bytes read locally rather than an ASCII serial — the
+	 * cloud matches the upload to the pending request by these bytes.
+	 *
+	 * @param timestamp - Unix timestamp in seconds
+	 * @param dtuSn - DTU serial as raw bytes (echo what the DTU sent locally)
+	 * @param devSn - Micro-inverter serial as raw bytes (echo what the DTU sent locally)
+	 * @param tid - Transaction id from the originating command
+	 * @param data - Little-endian grid-file blob
+	 */
+	encodeGridProfileResponse(
+		timestamp: number,
+		dtuSn: Uint8Array,
+		devSn: Uint8Array,
+		tid: number,
+		data: Uint8Array,
+	): Buffer {
+		const ReqDTO = this.getType("DevConfig", "DevConfigFetchReqDTO");
+		const msg = ReqDTO.create({
+			requestTime: timestamp,
+			transactionId: tid,
+			data,
+			crc: crc16(data), // CRC-16/Modbus over the (little-endian) blob — matches the real DTU
+			dtuSn,
+			devSn,
+			totalPackages: 1,
+			// The real DTU closes the single-package grid-file upload with rule_type=1 (field 12)
+			// and does NOT set current_package (field 11) — verified against a packet capture of
+			// a working read. Sending current_package instead leaves the cloud stuck at 1%.
+			ruleType: 1,
+		});
+		return this.buildMessage(0x22, 0x0e, ReqDTO.encode(msg).finish());
 	}
 
 	// --- Decode Responses ---
@@ -673,7 +798,7 @@ class ProtobufHandler {
 				reactivePower: scaled(sgs.reactivePower, SCALE_POWER),
 				current: scaled(sgs.current, SCALE_CURRENT),
 				powerFactor: scaled(sgs.powerFactor, SCALE_POWER_FACTOR),
-				temperature: scaled(sgs.temperature, SCALE_TEMPERATURE),
+				temperature: scaled(s16(sgs.temperature), SCALE_TEMPERATURE),
 				warningNumber: num(sgs.warningNumber),
 				crcChecksum: num(sgs.crcChecksum),
 				linkStatus: num(sgs.linkStatus),
@@ -907,6 +1032,11 @@ class ProtobufHandler {
 		return {
 			dtuSn: (obj.dtuSn as string) || "",
 			timestamp: num(obj.time),
+			// package_nub = total packages (1 = single). package_now = 0-based index of this
+			// package. The DTU paginates long warn lists; the caller must pull each package.
+			packageNub: Math.max(num(obj.packageNub), 1),
+			packageNow: num(obj.packageNow),
+			warnDevice: num(obj.warnDevice),
 			warnings,
 		};
 	}
@@ -930,7 +1060,7 @@ class ProtobufHandler {
 				gridVoltage: scaled(e.gridVoltage, SCALE_VOLTAGE),
 				gridFrequency: scaled(e.gridFrequency, SCALE_FREQUENCY),
 				gridPower: num(e.gridPower),
-				temperature: scaled(e.temperature, SCALE_TEMPERATURE),
+				temperature: scaled(s16(e.temperature), SCALE_TEMPERATURE),
 				miId: `${num(e.miId)}`,
 				startTimestamp: num(e.startTimestamp),
 			});

@@ -91,13 +91,13 @@ Der Adapter nutzt das ioBroker State-Quality-Attribut (`q`), um die Zuverlässig
 |---------|------|-----------|------|
 | Gut | `0x00` (0) | Frische, lokale Daten | Normalbetrieb — Daten direkt von der DTU via TCP empfangen |
 | Ersatzwert | `0x40` (64) | Cloud-Daten als Fallback | Wechselrichter-Daten von der Hoymiles Cloud-API statt lokal (Cloud-only Geräte) |
-| Gerät nicht verbunden | `0x42` (66) | Veraltete Daten, Gerät offline | DTU-Verbindung verloren — Werte sind die letzten bekannten Messwerte vor dem Disconnect |
+| Gerät nicht verbunden | `0x42` (66) | Veraltete Daten, Gerät offline | DTU-Verbindung verloren — Werte sind die letzten bekannten Messwerte vor dem Disconnect. Wird auch bei Cloud-Station-`grid.*` gesetzt, wenn der letzte Cloud-Upload der Station älter als ~20 min ist (DTU sendet nicht). |
 
-**Betroffene Datenpunkte:** `grid.*`, `pv*.*`, `inverter.temperature`, `inverter.active`, `inverter.warnCount`, `inverter.warnMessage`, `inverter.activePowerLimit`, `meter.*`
+**Betroffene Datenpunkte:** `grid.*`, `pv*.*`, `inverter.temperature`, `inverter.active`, `inverter.warnCount`, `inverter.warnMessage`, `inverter.activePowerLimit`, `meter.*` — sowie die Cloud-Station-Messwerte `station-<id>.grid.*` (mit `0x42` markiert, solange die Station offline/veraltet ist).
 
-Info-States (`info.*`), Config-States (`config.*`) und Cloud-Stationsdaten werden **nicht** von Quality-Änderungen betroffen.
+Info-States (`info.*`), Config-States (`config.*`) und statische Cloud-Stationsdaten (Name, Adresse, Koordinaten, Warn-Flags) werden **nicht** von Quality-Änderungen betroffen.
 
-**Automatischer Reset:** Wenn die lokale DTU-Verbindung wiederhergestellt wird, setzt die nächste erfolgreiche Datenantwort alle betroffenen States automatisch auf Quality `0x00` (gut) zurück.
+**Automatischer Reset:** Wenn die lokale DTU-Verbindung wiederhergestellt wird, setzt die nächste erfolgreiche Datenantwort alle betroffenen States automatisch auf Quality `0x00` (gut) zurück. Ebenso: sobald eine Cloud-Station wieder Daten sendet, geht die `grid.*`-Quality auf `0x00` zurück und der Adapter führt sofort einen vollständigen Refresh durch (Details, Geräte, Firmware, Warnungen), bevor er zum normalen Poll-Zyklus zurückkehrt.
 
 Das Quality-Attribut kann in Skripten und Visualisierungen genutzt werden, um zwischen aktuellen und veralteten Daten zu unterscheiden, z.B. durch Ausgrauen von Werten mit `q > 0`.
 
@@ -155,6 +155,7 @@ PV-Channels werden dynamisch basierend auf dem Wechselrichter-Modell erstellt (1
 | `pvX.current` | number | A | Panel-Strom |
 | `pvX.dailyEnergy` | number | kWh | Tagesenergie (nur lokal) |
 | `pvX.totalEnergy` | number | kWh | Gesamtenergie (nur lokal) |
+| `pvX.errorCode` | number | | Fehlercode pro Strang, 0 im Normalbetrieb (nur lokal) |
 
 ### `<dtuSerial>.inverter.*` — Wechselrichter-Status & Steuerung (pro DTU)
 
@@ -165,7 +166,7 @@ PV-Channels werden dynamisch basierend auf dem Wechselrichter-Modell erstellt (1
 | `inverter.hwVersion` | string | — | nein | Hardware-Version |
 | `inverter.swVersion` | string | — | nein | Software-Version |
 | `inverter.temperature` | number | °C | nein | Temperatur |
-| `inverter.powerLimit` | number | % | **ja** | Leistungslimit (2-100%, lokal) |
+| `inverter.powerLimit` | number | % | **ja** | **Laufzeit**-Leistungslimit (RAM-only, **kein Flash-/NVM-Verschleiß — sekündliches Schreiben unbedenklich**). **Mit diesem Datenpunkt lässt sich eine Nulleinspeisung realisieren** / dynamische Drosselung. 2-100%, lokal |
 | `inverter.activePowerLimit` | number | % | nein | Aktives Leistungslimit (live, lokal) |
 | `inverter.active` | boolean | — | **ja** | Wechselrichter ein/aus (lokal) |
 | `inverter.reboot` | boolean | — | **ja** | Wechselrichter neustarten (lokal) |
@@ -174,9 +175,10 @@ PV-Channels werden dynamisch basierend auf dem Wechselrichter-Modell erstellt (1
 | `inverter.cleanWarnings` | boolean | — | **ja** | Warnungen löschen (lokal) |
 | `inverter.cleanGroundingFault` | boolean | — | **ja** | Erdungsfehler löschen (lokal) |
 | `inverter.lock` | boolean | — | **ja** | Wechselrichter sperren/entsperren (lokal) |
-| `inverter.warnCount` | number | — | nein | Aktiver Warnungscode (lokal) |
-| `inverter.warnMessage` | string | — | nein | Aktive Warnungsmeldung (lokal) |
+| `inverter.warnCount` | number | — | nein | SGSMO-Feld `warning_number`, Rohwert (lokal) — kein dokumentierter Warn-Code |
+| `inverter.warnMessage` | string | — | nein | Aktive Warnungsmeldung aus der WCode-Alarmliste (lokal) |
 | `inverter.linkStatus` | number | — | nein | Verbindungsstatus |
+| `inverter.modulationIndexSignal` | number | — | nein | SGSMO #20, roher gepackter Wert (Modulationsindex + Signal; genaue Dekodierung noch unbestätigt, lokal) |
 
 ### `<dtuSerial>.dtu.*` — DTU-Information (pro DTU, nur lokal)
 
@@ -190,13 +192,9 @@ PV-Channels werden dynamisch basierend auf dem Wechselrichter-Modell erstellt (1
 | `dtu.wifiVersion` | string | — | WLAN-Version |
 | `dtu.fwUpdateAvailable` | boolean | — | Firmware-Update verfügbar (1x täglich via Cloud geprüft) |
 | `dtu.stepTime` | number | s | Schrittzeit |
-| `dtu.rfHwVersion` | number | — | RF Hardware-Version |
-| `dtu.rfSwVersion` | number | — | RF Software-Version |
 | `dtu.accessModel` | number | — | Netzwerk-Zugangsart (0=GPRS, 1=WiFi, 2=Ethernet) |
 | `dtu.communicationTime` | number | — | Letzte Kommunikation (Unix-Timestamp) |
 | `dtu.connState` | number | — | DTU Fehlercode (0=OK) |
-| `dtu.mode485` | number | — | RS485 Modus (0=Reflux/Auto, 1=Remote Control) |
-| `dtu.sub1gFrequencyBand` | number | — | Sub-1G Frequenzband |
 | `dtu.searchResult` | string | — | AutoSearch-Ergebnis (Wechselrichter-Seriennummern, JSON) |
 
 ### `station-<id>.grid.*` — Stations-Aggregate (Cloud)
@@ -251,7 +249,7 @@ Netz- und Zähler-Warnflags aus dem Cloud-Datensatz `station/find`. Alle boolesc
 
 | State | Typ | Beschreibung |
 |-------|-----|--------------|
-| `warn.stationOffline` | boolean | Anlage offline / Netzspannung weg |
+| `warn.stationOffline` | boolean | Anlage offline / Netzspannung weg. Wird gegen die Daten-Frische gegengeprüft: eine Anlage, die noch aktuelle Daten hochlädt, wird nie als offline gemeldet — auch wenn die Cloud kurzzeitig `s_uoff` setzt (z.B. während das Cloud-Relay beim Adapter-Start die DTU-Verbindung übernimmt) |
 | `warn.gridUnstable` | boolean | Netzspannung instabil |
 | `warn.gridFault` | boolean | Netzfehler / Netz-Anomalie |
 | `warn.deviceAlarm` | boolean | Wechselrichter-Alarm — ein Wechselrichter hat eine aktive Störung (z. B. „PVx kein Eingang", wenn ein DC-Strang gezogen wird). Dieselbe Bedingung erscheint lokal und schneller unter `alarms.lastCode`/`alarms.lastMessage` |
@@ -276,30 +274,76 @@ Netz- und Zähler-Warnflags aus dem Cloud-Datensatz `station/find`. Alle boolesc
 
 ### `<dtuSerial>.config.*` — DTU-Konfiguration (pro DTU, lokal)
 
+> ⚠️ **WARNUNG — `config.*`-Datenpunkte (besonders `config.limitPowerMyPower`) NIEMALS häufig oder in einer automatisierten Schleife schreiben.** Jeder Schreibvorgang programmiert den **internen Flash der integrierten DTU** (das WiFi-Modul im HMS-xT). Flash hat eine begrenzte Lebensdauer (≈ einige zehntausend Zyklen); wiederholtes hochfrequentes Schreiben — z. B. eine sekündliche Nulleinspeisungs-Schleife — nutzt ihn ab und kann das **Gerät dauerhaft zerstören (bricken)**. Diese Datenpunkte nur für gelegentliche, dauerhafte Einstellungen verwenden.
+> **Für dynamische / häufige Leistungsbegrenzung (Nulleinspeisung) stattdessen `inverter.powerLimit` nutzen** — ein Laufzeit-Befehl im RAM, **ohne Flash-Schreibvorgang und ohne Verschleiß**, sekündliches Schreiben unbedenklich.
+
 | Datenpunkt | Typ | Einheit | Schreibbar | Beschreibung |
 |------------|-----|---------|------------|--------------|
 | `config.serverDomain` | string | — | nein | Cloud-Server Domain |
 | `config.serverPort` | number | — | nein | Cloud-Server Port |
-| `config.serverSendTime` | number | min | **ja** | Cloud-Sendeintervall (Minuten) |
+| `config.serverSendTime` | number | min | **ja** | Cloud-Sendeintervall (Minuten). ⚠️ Persistent (DTU-Flash) — nicht häufig schreiben, siehe Warnung oben |
+| `config.limitPowerMyPower` | number | % | **ja** | **Persistentes** Leistungslimit (im DTU-Flash gespeichert, übersteht Neustart; 2-100%, lokal). ⚠️ **Nur für dauerhafte Begrenzung — niemals in einer Schleife schreiben (nutzt DTU-Flash ab). Für dynamische Nulleinspeisung `inverter.powerLimit` nutzen** (siehe Warnung oben) |
 | `config.wifiSsid` | string | — | nein | WLAN SSID |
-| `config.wifiRssi` | number | dBm | nein | WLAN Signalstärke |
-| `config.zeroExportEnable` | boolean | — | **ja** | Nulleinspeisung aktiviert |
-| `config.zeroExport433Addr` | number | — | nein | Nulleinspeisung 433MHz-Sensoradresse |
-| `config.meterKind` | string | — | nein | Zählertyp (0=Kein, 1=1-Phasen, 2=2-Phasen, 3=3-Phasen, 5=CT G3, 6=Meter 1S/1T G3, 7=Meter 2S/2T G3) |
-| `config.meterInterface` | string | — | nein | Zähler-Schnittstelle |
+| `config.wifiRssi` | number | dBm | nein | WLAN Signalstärke (echtes dBm, z.B. −65) |
 | `config.invType` | number | — | nein | Wechselrichter-Typ |
 | `config.netmodeSelect` | number | — | nein | Netzwerkmodus (0=GPRS, 1=WiFi, 2=Ethernet) |
 | `config.netDhcpSwitch` | number | — | nein | DHCP aktiviert |
-| `config.netIpAddress` | string | — | nein | Ethernet IP-Adresse |
-| `config.netSubnetMask` | string | — | nein | Ethernet Subnetzmaske |
-| `config.netGateway` | string | — | nein | Ethernet Gateway |
-| `config.netMacAddress` | string | — | nein | Ethernet MAC-Adresse |
 | `config.wifiIpAddress` | string | — | nein | WLAN IP-Adresse |
 | `config.wifiMacAddress` | string | — | nein | WLAN MAC-Adresse |
 | `config.dtuApSsid` | string | — | nein | DTU Access-Point SSID |
-| `config.channelSelect` | number | — | nein | Kanalauswahl |
-| `config.sub1gSweepSwitch` | number | — | nein | Sub-1G Sweep |
-| `config.sub1gWorkChannel` | number | — | nein | Sub-1G Arbeitskanal |
+
+### `<dtuSerial>.gridProfile.*` — Netzprofil (pro DTU, lokal)
+
+Das Netz-Anschlussprofil des Wechselrichters (Netz-/Sicherheitsparameter), lokal über DevConfigFetch gelesen. Alle nur lesbar. Spannungs-/Frequenzwerte richten sich nach der aktiven Netznorm (z. B. `DE_VDE4105_2018`). Funktions-Flags sind boolesch (`true` = Funktion aktiv).
+
+| State | Typ | Einheit | Schreibbar | Beschreibung |
+|-------|-----|---------|------------|--------------|
+| `gridProfile.standard` | string | — | nein | Netznorm-Name (z. B. DE_VDE4105_2018) |
+| `gridProfile.countryStdCode` | number | — | nein | Ländernorm-Code |
+| `gridProfile.version` | number | — | nein | Netzprofil-Version |
+| `gridProfile.nominalVoltage` | number | V | nein | Nennspannung |
+| `gridProfile.lowVoltage1` | number | V | nein | Unterspannung 1 (LV1) |
+| `gridProfile.lowVoltage1TripTime` | number | s | nein | LV1 max. Auslösezeit |
+| `gridProfile.highVoltage1` | number | V | nein | Überspannung 1 (HV1) |
+| `gridProfile.highVoltage1TripTime` | number | s | nein | HV1 max. Auslösezeit |
+| `gridProfile.lowVoltage2` | number | V | nein | Unterspannung 2 (LV2) |
+| `gridProfile.lowVoltage2TripTime` | number | s | nein | LV2 max. Auslösezeit |
+| `gridProfile.avgHighVoltage10min` | number | V | nein | 10-Min-Mittel Überspannung |
+| `gridProfile.nominalFrequency` | number | Hz | nein | Nennfrequenz |
+| `gridProfile.lowFrequency1` | number | Hz | nein | Unterfrequenz 1 (LF1) |
+| `gridProfile.lowFrequency1TripTime` | number | s | nein | LF1 max. Auslösezeit |
+| `gridProfile.highFrequency1` | number | Hz | nein | Überfrequenz 1 (HF1) |
+| `gridProfile.highFrequency1TripTime` | number | s | nein | HF1 max. Auslösezeit |
+| `gridProfile.islandingDetection` | boolean | — | nein | Inselerkennung aktiv |
+| `gridProfile.reconnectTime` | number | s | nein | Wiederzuschaltzeit |
+| `gridProfile.reconnectHighVoltage` | number | V | nein | Wiederzuschalt-Überspannung |
+| `gridProfile.reconnectLowVoltage` | number | V | nein | Wiederzuschalt-Unterspannung |
+| `gridProfile.reconnectHighFrequency` | number | Hz | nein | Wiederzuschalt-Überfrequenz |
+| `gridProfile.reconnectLowFrequency` | number | Hz | nein | Wiederzuschalt-Unterfrequenz |
+| `gridProfile.rampUpRateNormal` | number | %/s | nein | Normale Hochlaufrate |
+| `gridProfile.rampUpRateSoftStart` | number | %/s | nein | Soft-Start-Hochlaufrate |
+| `gridProfile.freqWattActive` | boolean | — | nein | Frequenz-Watt aktiv |
+| `gridProfile.freqWattStart` | number | Hz | nein | Frequenz-Watt Start (Fstart) |
+| `gridProfile.freqWattDroopSlope` | number | %Pn/Hz | nein | Frequenz-Watt Droop-Steigung |
+| `gridProfile.recoveryRampRate` | number | %Pn/s | nein | Wiederanlauf-Rampe |
+| `gridProfile.recoveryHighFrequency` | number | Hz | nein | Wiederanlauf-Überfrequenz |
+| `gridProfile.recoveryLowFrequency` | number | Hz | nein | Wiederanlauf-Unterfrequenz |
+| `gridProfile.activePowerControlActive` | boolean | — | nein | Wirkleistungssteuerung aktiv |
+| `gridProfile.powerRampRate` | number | %Pn/s | nein | Leistungs-Rampe |
+| `gridProfile.voltVarActive` | boolean | — | nein | Volt-Var aktiv |
+| `gridProfile.voltVarV1` | number | V | nein | Volt-Var Sollwert V1 |
+| `gridProfile.voltVarQ1` | number | %Pn | nein | Volt-Var Sollwert Q1 |
+| `gridProfile.voltVarV2` | number | V | nein | Volt-Var Sollwert V2 |
+| `gridProfile.voltVarV3` | number | V | nein | Volt-Var Sollwert V3 |
+| `gridProfile.voltVarV4` | number | V | nein | Volt-Var Sollwert V4 |
+| `gridProfile.voltVarQ4` | number | %Pn | nein | Volt-Var Sollwert Q4 |
+| `gridProfile.specifiedPowerFactorActive` | boolean | — | nein | Fester Leistungsfaktor aktiv |
+| `gridProfile.powerFactor` | number | — | nein | Leistungsfaktor (cos φ) |
+| `gridProfile.wattPowerFactorActive` | boolean | — | nein | Watt-Leistungsfaktor aktiv |
+| `gridProfile.wattPowerFactorStart` | number | %Pn | nein | Watt-PF Startleistung |
+| `gridProfile.powerFactorAtRatedPower` | number | — | nein | Leistungsfaktor bei Nennleistung |
+| `gridProfile.reactivePowerControlActive` | boolean | — | nein | Blindleistungssteuerung aktiv |
+| `gridProfile.reactivePower` | number | %Sn | nein | Blindleistung (VAR) |
 
 ### `<dtuSerial>.meter.*` — Energiezähler (pro DTU, lokal, dynamisch)
 

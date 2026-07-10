@@ -5,6 +5,7 @@ import { executeCommand } from "./commandHandler.js";
 import Encryption from "./encryption.js";
 import { channels, states } from "./stateDefinitions.js";
 import { getAlarmDescription } from "./alarmCodes.js";
+import { decodeGridProfile, byteSwap16 } from "./gridProfile.js";
 import { INFO_FALLBACK_TIMEOUT_MS, SCALE_POWER } from "./constants.js";
 import { whToKwh } from "./convert.js";
 import { errorMessage, safeJsonStringify, unixSeconds } from "./utils.js";
@@ -41,6 +42,14 @@ interface DeviceContextOptions {
 	slowPollFactor: number;
 }
 
+/** A non-routine downlink frame the cloud sent to the relay (server → DTU command). */
+interface CloudRelayCommand {
+	cmdHigh: number;
+	cmdLow: number;
+	seq: number;
+	payload: Buffer;
+}
+
 /** PV field definitions — base fields available from both local and cloud. */
 const PV_FIELDS_BASE = [
 	{ suffix: "power", en: "power", de: "Leistung", role: "value.power", unit: "W" },
@@ -52,6 +61,9 @@ const PV_FIELDS_BASE = [
 const PV_FIELDS_LOCAL_ONLY = [
 	{ suffix: "dailyEnergy", en: "daily energy", de: "Tagesenergie", role: "value.energy", unit: "kWh" },
 	{ suffix: "totalEnergy", en: "total energy", de: "Gesamtenergie", role: "value.energy", unit: "kWh" },
+	// PvMO.error_code (field 8): per-string fault code, 0 in normal operation. Raw value
+	// (no scaling) — firmware-confirmed field, decoded but previously unexposed.
+	{ suffix: "errorCode", en: "error code", de: "Fehlercode", role: "value", unit: "" },
 ] as const;
 
 /** Writable state IDs that need subscriptions (relative to device prefix). */
@@ -64,10 +76,24 @@ const WRITABLE_STATES = [
 	"inverter.cleanWarnings",
 	"inverter.cleanGroundingFault",
 	"inverter.lock",
-	"config.zeroExportEnable",
 	"config.serverSendTime",
+	"config.limitPowerMyPower",
 	"dtu.reboot",
 ];
+
+/** A normalized alarm/warning entry ready to be written to states. */
+interface NormalizedAlarm {
+	sn: string;
+	code: number;
+	num: number;
+	startTime: number;
+	endTime: number;
+	data1: number;
+	data2: number;
+	descriptionEn: string;
+	descriptionDe: string;
+	active: boolean;
+}
 
 /** Manages a single DTU device: connection, polling, state updates, and commands. */
 class DeviceContext {
@@ -110,6 +136,27 @@ class DeviceContext {
 	cloudSendTimeMin: number;
 	private cloudRelayInitializing: boolean;
 	private dataInterval: number;
+	/** Micro-inverter serial (from InfoData) — needed as `dev_sn` for DevConfigFetch (grid profile). */
+	private inverterSn: string;
+	/** Grid-profile chunk accumulator: package index → raw data bytes. */
+	private readonly gridChunks: Map<number, Buffer> = new Map();
+	/** Paginated warn-list accumulator: package index (0-based) → normalized alarms of that package. */
+	private readonly warnChunks: Map<number, NormalizedAlarm[]> = new Map();
+	/** Last fully-read grid-profile blob (big-endian), cached to answer cloud-relay reads. */
+	private gridBlob: Buffer | null = null;
+	/**
+	 * DTU/inverter serials exactly as the DTU sent them in the local DevConfigFetch response
+	 * (`dtu_sn`/`dev_sn` are `bytes`, not an ASCII serial). Echoed verbatim into the cloud
+	 * grid-profile upload so the cloud can match it to the pending read. `null` until read.
+	 */
+	private gridDtuSn: Buffer | null = null;
+	private gridDevSn: Buffer | null = null;
+	/**
+	 * Transaction id of an in-flight cloud grid-profile read (action 41). Set when we ack the
+	 * command; the grid file (0x22 0x0e) is uploaded only once the cloud acks our status
+	 * (0x23 0x06), mirroring the real DTU's handshake. `null` when no read is pending.
+	 */
+	private pendingGridServeTid: number | null = null;
 
 	/** Pending response resolver for request-response pairing. */
 	private pendingResponse: { cmdKey: string; resolve: () => void; timer: ioBroker.Timeout | undefined } | null;
@@ -170,6 +217,7 @@ class DeviceContext {
 		this.slowPollRotations = 0;
 		this.pollBusy = false;
 		this.consecutivePollErrors = 0;
+		this.inverterSn = "";
 	}
 
 	/**
@@ -377,6 +425,10 @@ class DeviceContext {
 			}),
 		);
 
+		// Remove states/channels that no longer exist in the definitions (e.g. after an
+		// adapter update that renamed or dropped a state) so they disappear from the tree.
+		await this.cleanupObsoleteObjects();
+
 		// Subscribe to writable states for this device
 		for (const stateId of WRITABLE_STATES) {
 			this.adapter.subscribeStates(`${this.deviceId}.${stateId}`);
@@ -384,6 +436,50 @@ class DeviceContext {
 
 		this.statesCreated = true;
 		this.adapter.log.info(`[${this.deviceId}] Device states created`);
+	}
+
+	/**
+	 * Delete states/channels under this device that are no longer part of the current
+	 * definitions. Keeps dynamically-created objects (PV channels, meter, history) and
+	 * everything still listed in `states`/`channels`. Runs once after state creation so
+	 * obsolete entries from older adapter versions vanish on update.
+	 */
+	private async cleanupObsoleteObjects(): Promise<void> {
+		const knownStates = new Set(states.map(d => d.id));
+		const knownChannels = new Set(channels.map(c => c.id));
+		const isKnown = (rel: string): boolean =>
+			knownStates.has(rel) ||
+			knownChannels.has(rel) ||
+			/^pv\d+(\.|$)/.test(rel) || // dynamic PV channels + states
+			rel === "meter" ||
+			rel.startsWith("meter.") || // dynamic meter channel
+			rel === "history" ||
+			rel.startsWith("history."); // dynamic history channel
+
+		const prefix = `${this.adapter.namespace}.${this.deviceId}.`;
+		try {
+			const removed: string[] = [];
+			for (const kind of ["state", "channel"] as const) {
+				const view = await this.adapter.getObjectViewAsync("system", kind, {
+					startkey: prefix,
+					endkey: `${prefix}香`,
+				});
+				for (const row of view.rows) {
+					const rel = row.id.slice(prefix.length);
+					if (rel && !isKnown(rel)) {
+						await this.adapter.delObjectAsync(row.id, { recursive: true });
+						removed.push(rel);
+					}
+				}
+			}
+			if (removed.length) {
+				this.adapter.log.info(
+					`[${this.deviceId}] Removed ${removed.length} obsolete object(s): ${removed.join(", ")}`,
+				);
+			}
+		} catch (e) {
+			this.adapter.log.debug(`[${this.deviceId}] Obsolete-object cleanup skipped: ${errorMessage(e)}`);
+		}
 	}
 
 	/**
@@ -520,6 +616,166 @@ class DeviceContext {
 		this.pollTimer = this.adapter.setInterval(() => {
 			this.pollTick().catch(onPollError);
 		}, interval);
+
+		// Read the grid profile once per (re)connect — it is near-static, so no need to poll it
+		// repeatedly. The DTU answers via DevConfigFetch (0xa2 0x07); handleDevConfigFetch
+		// reassembles chunked packages and decodes the blob into gridProfile.* states.
+		this.requestGridProfile();
+	}
+
+	/** Kick off a grid-profile read (package 0). Subsequent packages are requested in the handler. */
+	private requestGridProfile(): void {
+		if (!this.enableLocal || !this.inverterSn || !this.connection?.connected || !this.protobuf) {
+			return;
+		}
+		this.gridChunks.clear();
+		this.connection
+			.send(this.protobuf.encodeDevConfigFetch(unixSeconds(), this.dtuSerial, this.inverterSn))
+			.catch(e => {
+				this.adapter.log.debug(`[${this.deviceId}] DevConfigFetch send failed: ${errorMessage(e)}`);
+			});
+	}
+
+	/**
+	 * Handle a downlink command the cloud sent to the relay (which impersonates the DTU).
+	 * Currently answers the grid-profile read (action 41); other commands are logged only.
+	 *
+	 * @param cmd - Parsed downlink frame from the cloud relay.
+	 */
+	private handleCloudCommand(cmd: CloudRelayCommand): void {
+		if (!this.protobuf || !this.cloudRelay) {
+			return;
+		}
+		try {
+			// The cloud acks our command-status with 0x23 0x06 (CommandStatusResDTO). For a
+			// grid-profile read the real DTU uploads the grid file (0x22 0x0e) only after this
+			// status-ack, so complete a pending read here rather than up front.
+			if (cmd.cmdHigh === 0x23 && cmd.cmdLow === 0x06) {
+				this.handleCloudStatusAck(cmd.payload);
+				return;
+			}
+			// Cloud action commands arrive as 0x23 0x05 (CommandResDTO with an action code).
+			if (!(cmd.cmdHigh === 0x23 && cmd.cmdLow === 0x05)) {
+				this.adapter.log.debug(
+					`[${this.deviceId}] [diag] cloud command 0x${cmd.cmdHigh.toString(16)} 0x${cmd.cmdLow.toString(16)} — not handled`,
+				);
+				return;
+			}
+			const ResDTO = this.protobuf.getType("CommandPB", "CommandResDTO");
+			const obj = ResDTO.toObject(ResDTO.decode(cmd.payload), { longs: Number, defaults: true }) as Record<
+				string,
+				unknown
+			>;
+			const action = Number(obj.action) || 0;
+			const tid = Number(obj.tid) || 0;
+			this.adapter.log.debug(`[${this.deviceId}] [diag] cloud command action=${action} tid=${tid}`);
+			if (action === 41) {
+				this.serveGridProfileToCloud(tid);
+			} else if (action === 4) {
+				this.serveVersionToCloud(tid);
+			}
+		} catch (err) {
+			this.adapter.log.warn(`[${this.deviceId}] handleCloudCommand error: ${errorMessage(err)}`);
+		}
+	}
+
+	/**
+	 * Begin answering a cloud grid-profile read (action 41) over the relay: send ack (0x22 0x05)
+	 * + status (0x22 0x06) and arm the pending serve. The grid file (0x22 0x0e) itself is sent
+	 * later from {@link handleCloudStatusAck}, once the cloud acks this status with 0x23 0x06 —
+	 * the real DTU follows the same order, and uploading the file up front makes the cloud show
+	 * "no data".
+	 *
+	 * @param tid - Transaction id from the originating command (echoed back).
+	 */
+	private serveGridProfileToCloud(tid: number): void {
+		const relay = this.cloudRelay;
+		if (!relay || !this.protobuf || !this.gridBlob || !this.gridDtuSn || !this.gridDevSn) {
+			this.adapter.log.debug(`[${this.deviceId}] grid-profile cloud-serve skipped (relay/blob/sn missing)`);
+			return;
+		}
+		const ts = unixSeconds();
+		relay.sendFrame(this.protobuf.encodeCloudCommandAck(ts, this.dtuSerial, 41, tid));
+		relay.sendFrame(this.protobuf.encodeCloudCommandStatus(ts, this.dtuSerial, 41, tid));
+		this.pendingGridServeTid = tid;
+		this.adapter.log.debug(
+			`[${this.deviceId}] grid-profile read: ack+status sent, awaiting cloud status-ack (tid=${tid})`,
+		);
+	}
+
+	/**
+	 * Handle the cloud's status acknowledgement (0x23 0x06, `CommandStatusResDTO`). When it
+	 * confirms a pending grid-profile read, upload the grid file (0x22 0x0e) now — the real DTU
+	 * sends it only after this ack. The pending guard (set only for action 41) keeps the
+	 * status-ack of an unrelated command (e.g. the version query) from triggering an upload.
+	 *
+	 * @param payload - `CommandStatusResDTO` payload from the cloud.
+	 */
+	private handleCloudStatusAck(payload: Buffer): void {
+		if (!this.protobuf || this.pendingGridServeTid === null) {
+			return;
+		}
+		const StatusRes = this.protobuf.getType("CommandPB", "CommandStatusResDTO");
+		const obj = StatusRes.toObject(StatusRes.decode(payload), { longs: Number, defaults: true }) as Record<
+			string,
+			unknown
+		>;
+		const action = Number(obj.action) || 0;
+		// A status-ack carrying a different, known action is not ours — leave the read pending.
+		if (action !== 0 && action !== 41) {
+			return;
+		}
+		const tid = this.pendingGridServeTid;
+		this.pendingGridServeTid = null;
+		this.sendGridProfileFile(tid);
+	}
+
+	/**
+	 * Upload the cached grid file to the cloud (0x22 0x0e, `DevConfigFetchReqDTO`). The blob is
+	 * byte-swapped from the locally-read big-endian order to the cloud's little-endian order, and
+	 * `dtu_sn`/`dev_sn` echo the raw serial bytes the DTU sent (they are `bytes`, not ASCII).
+	 *
+	 * @param tid - Transaction id from the originating command (echoed back).
+	 */
+	private sendGridProfileFile(tid: number): void {
+		const relay = this.cloudRelay;
+		if (!relay || !this.protobuf || !this.gridBlob || !this.gridDtuSn || !this.gridDevSn) {
+			this.adapter.log.debug(`[${this.deviceId}] grid-profile file send skipped (relay/blob/sn missing)`);
+			return;
+		}
+		relay.sendFrame(
+			this.protobuf.encodeGridProfileResponse(
+				unixSeconds(),
+				this.gridDtuSn,
+				this.gridDevSn,
+				tid,
+				byteSwap16(this.gridBlob),
+			),
+		);
+		this.adapter.log.info(`[${this.deviceId}] served grid profile to cloud via relay (tid=${tid})`);
+	}
+
+	/**
+	 * Answer a cloud version query (action 4) over the relay: ack (0x22 0x05) + status
+	 * (0x22 0x06) echoing the inverter serial in `mi_sns_sucs`. There is no separate version
+	 * payload — the firmware versions already live in the cloud's device tree (`soft_ver`);
+	 * this just lets the request complete instead of timing out while the relay is primary.
+	 *
+	 * @param tid - Transaction id from the originating command (echoed back).
+	 */
+	private serveVersionToCloud(tid: number): void {
+		const relay = this.cloudRelay;
+		if (!relay || !this.protobuf || !this.inverterSn) {
+			this.adapter.log.debug(`[${this.deviceId}] version cloud-serve skipped (relay/sn missing)`);
+			return;
+		}
+		const ts = unixSeconds();
+		const miSn = Number.parseInt(this.inverterSn, 16);
+		relay.sendFrame(this.protobuf.encodeCloudCommandAck(ts, this.dtuSerial, 4, tid));
+		relay.sendFrame(
+			this.protobuf.encodeCloudCommandStatus(ts, this.dtuSerial, 4, tid, Number.isFinite(miSn) ? [miSn] : []),
+		);
+		this.adapter.log.info(`[${this.deviceId}] answered cloud version query (action 4) via relay (tid=${tid})`);
 	}
 
 	private stopPollCycle(): void {
@@ -871,14 +1127,20 @@ class DeviceContext {
 					["grid.reactivePower", sgs.reactivePower],
 					["grid.powerFactor", sgs.powerFactor],
 					["inverter.temperature", sgs.temperature],
+					// SGSMO.warning_number (#10) is NOT a warn code: the S-Miles app never maps it to
+					// alarm text (its realtime view reads voltage/frequency/power/temperature only),
+					// and the proto names it like WNum (count), not WCode. The authoritative warn
+					// codes come via AlarmData/WarnData.WCode and are surfaced as inverter.warnMessage
+					// in handleAlarmData(). Keep this only as the raw SGSMO value.
 					["inverter.warnCount", sgs.warningNumber],
-					["inverter.warnMessage", sgs.warningNumber > 0 ? getAlarmDescription(sgs.warningNumber, "en") : ""],
 					// Only write linkStatus if present (proto3 omits default 0, which is indistinguishable from "not sent")
 					...(sgs.linkStatus
 						? [["inverter.linkStatus", sgs.linkStatus] as [string, ioBroker.StateValue]]
 						: []),
 					["inverter.serialNumber", sgs.serialNumber],
 					["inverter.activePowerLimit", sgs.powerLimit],
+					// SGSMO #20: packed (two bytes), exact decode not yet confirmed → raw
+					["inverter.modulationIndexSignal", sgs.modulationIndexSignal],
 				);
 			}
 
@@ -894,6 +1156,7 @@ class DeviceContext {
 					[`${prefix}.current`, pv.current],
 					[`${prefix}.dailyEnergy`, whToKwh(pv.energyDaily)],
 					[`${prefix}.totalEnergy`, Math.round(pv.energyTotal / 100) / 10], // double normalization: round at Wh precision, then → kWh
+					[`${prefix}.errorCode`, pv.errorCode],
 				);
 			}
 
@@ -983,13 +1246,9 @@ class DeviceContext {
 				["dtu.rssi", di.signalStrength],
 				["dtu.connState", di.errorCode],
 				["dtu.stepTime", di.dtuStepTime],
-				["dtu.rfHwVersion", di.dtuRfHwVersion],
-				["dtu.rfSwVersion", di.dtuRfSwVersion],
 				["dtu.accessModel", di.accessModel],
 				["dtu.communicationTime", di.communicationTime * 1000],
 				["dtu.wifiVersion", di.wifiVersion],
-				["dtu.mode485", di.dtu485Mode],
-				["dtu.sub1gFrequencyBand", di.sub1gFrequencyBand],
 			);
 		}
 		await this.setStates(entries, true);
@@ -1018,6 +1277,7 @@ class DeviceContext {
 	private async updateInverterVersions(info: ReturnType<ProtobufHandler["decodeInfoData"]>): Promise<void> {
 		if (info.pvInfo.length > 0) {
 			const pv = info.pvInfo[0];
+			this.inverterSn = pv.sn || this.inverterSn;
 			await this.setStates(
 				[
 					["inverter.serialNumber", pv.sn],
@@ -1062,6 +1322,7 @@ class DeviceContext {
 					this.adapter.log.debug(`[${this.deviceId}] Cloud relay sent data, triggering cloud poll`);
 					void this.adapter.onRelayDataSent();
 				});
+				this.cloudRelay.on("command", (cmd: CloudRelayCommand) => this.handleCloudCommand(cmd));
 				this.cloudRelay.connect();
 			}
 		} else if (this.cloudRelay && this.protobuf && dtuSn) {
@@ -1096,28 +1357,19 @@ class DeviceContext {
 
 			await this.setStates(
 				[
-					["inverter.powerLimit", config.limitPower / SCALE_POWER],
+					// limit_power_mypower is the DTU-stored (persistent) limit — expose it as the
+					// persistent state, not the runtime inverter.powerLimit setpoint.
+					["config.limitPowerMyPower", config.limitPower / SCALE_POWER],
 					["config.serverDomain", config.serverDomain],
 					["config.serverPort", config.serverPort],
 					["config.serverSendTime", config.serverSendTime],
 					["config.wifiSsid", config.wifiSsid],
 					["config.wifiRssi", config.wifiRssi],
-					["config.zeroExportEnable", !!config.zeroExportEnable],
-					["config.zeroExport433Addr", config.zeroExport433Addr],
-					["config.meterKind", config.meterKind],
-					["config.meterInterface", config.meterInterface],
 					["config.netDhcpSwitch", config.dhcpSwitch],
 					["config.dtuApSsid", config.dtuApSsid],
 					["config.netmodeSelect", config.netmodeSelect],
-					["config.channelSelect", config.channelSelect],
-					["config.sub1gSweepSwitch", config.sub1gSweepSwitch],
-					["config.sub1gWorkChannel", config.sub1gWorkChannel],
 					["config.invType", config.invType],
-					["config.netIpAddress", config.ipAddress],
-					["config.netSubnetMask", config.subnetMask],
-					["config.netGateway", config.gateway],
 					["config.wifiIpAddress", config.wifiIpAddress],
-					["config.netMacAddress", config.macAddress],
 					["config.wifiMacAddress", config.wifiMacAddress],
 				],
 				true,
@@ -1138,31 +1390,18 @@ class DeviceContext {
 		}
 	}
 
-	private async handleAlarmData(payload: Buffer): Promise<void> {
-		interface AlarmInfo {
-			sn: string;
-			code: number;
-			num: number;
-			startTime: number;
-			endTime: number;
-			data1: number;
-			data2: number;
-			descriptionEn: string;
-			descriptionDe: string;
-			active: boolean;
-		}
-
-		const normalize = (e: {
-			sn: string;
-			code: number;
-			num: number;
-			startTime: number;
-			endTime: number;
-			data1: number;
-			data2: number;
-			descriptionEn?: string;
-			descriptionDe?: string;
-		}): AlarmInfo => ({
+	private static normalizeAlarm(e: {
+		sn: string;
+		code: number;
+		num: number;
+		startTime: number;
+		endTime: number;
+		data1: number;
+		data2: number;
+		descriptionEn?: string;
+		descriptionDe?: string;
+	}): NormalizedAlarm {
+		return {
 			sn: e.sn,
 			code: e.code,
 			num: e.num,
@@ -1173,25 +1412,73 @@ class DeviceContext {
 			descriptionEn: e.descriptionEn || getAlarmDescription(e.code, "en"),
 			descriptionDe: e.descriptionDe || getAlarmDescription(e.code, "de"),
 			active: e.endTime === 0,
-		});
+		};
+	}
 
-		let alarms: AlarmInfo[] = [];
-
+	private async handleAlarmData(payload: Buffer): Promise<void> {
+		// AlarmData (WInfoReqDTO) is always a single packet — finalize immediately.
 		try {
 			const data = this.protobuf.decodeAlarmData(payload);
-			alarms = data.alarms.map(normalize);
+			await this.finalizeAlarms(data.alarms.map(DeviceContext.normalizeAlarm));
+			return;
 		} catch {
-			try {
-				const data = this.protobuf.decodeWarnData(payload);
-				alarms = data.warnings.map(normalize);
-			} catch (err) {
-				this.adapter.log.warn(
-					`[${this.deviceId || this.host}] Error decoding AlarmData/WarnData: ${errorMessage(err)}`,
-				);
-				return;
-			}
+			// Not the AlarmData format → try the (paginated) WarnData format below.
 		}
 
+		let data;
+		try {
+			data = this.protobuf.decodeWarnData(payload);
+		} catch (err) {
+			this.adapter.log.warn(
+				`[${this.deviceId || this.host}] Error decoding AlarmData/WarnData: ${errorMessage(err)}`,
+			);
+			return;
+		}
+
+		const total = data.packageNub;
+		const now = data.packageNow;
+		const pageAlarms = data.warnings.map(DeviceContext.normalizeAlarm);
+
+		// Single-package list → finalize directly (no accumulation needed).
+		if (total <= 1) {
+			this.warnChunks.clear();
+			await this.finalizeAlarms(pageAlarms);
+			return;
+		}
+
+		// Multi-package list: the DTU paginates and we must pull every package, then
+		// assemble — mirroring the S-Miles app. package_now is 0-based, package_nub is the
+		// total. Reset the accumulator on the first package so a new query starts clean.
+		if (now === 0) {
+			this.warnChunks.clear();
+		}
+		this.warnChunks.set(now, pageAlarms);
+		this.adapter.log.debug(
+			`[${this.deviceId || this.host}] Warn list package ${now + 1}/${total} (${pageAlarms.length} entries)`,
+		);
+
+		// More packages outstanding → request the next one and wait for it.
+		if (now + 1 < total) {
+			this.connection
+				?.send(this.protobuf.encodeWarnDataRequest(unixSeconds(), now + 1))
+				.catch(e =>
+					this.adapter.log.debug(`[${this.deviceId || this.host}] warn next-pkg failed: ${errorMessage(e)}`),
+				);
+			return;
+		}
+
+		// Last package received → assemble all packages in order and finalize.
+		const assembled = [...this.warnChunks.keys()].sort((a, b) => a - b).flatMap(k => this.warnChunks.get(k)!);
+		this.warnChunks.clear();
+		await this.finalizeAlarms(assembled);
+	}
+
+	/**
+	 * Write the assembled alarm list to the alarm states.
+	 *
+	 * @param alarms - The complete, normalized alarm list (all packages merged).
+	 */
+	private async finalizeAlarms(alarms: NormalizedAlarm[]): Promise<void> {
 		if (alarms.length === 0) {
 			this.adapter.log.debug(`[${this.deviceId || this.host}] Alarm list query returned no active alarms`);
 		} else {
@@ -1200,11 +1487,14 @@ class DeviceContext {
 
 		const activeAlarms = alarms.filter(a => a.active);
 
+		const latestActive = activeAlarms[activeAlarms.length - 1];
 		const entries: Array<[string, ioBroker.StateValue]> = [
 			["alarms.count", alarms.length],
 			["alarms.activeCount", activeAlarms.length],
 			["alarms.hasActive", activeAlarms.length > 0],
 			["alarms.json", safeJsonStringify(alarms)],
+			// Authoritative warn message from the WCode-based alarm list (same source the S-Miles app uses)
+			["inverter.warnMessage", latestActive ? latestActive.descriptionEn : ""],
 		];
 
 		if (alarms.length > 0) {
@@ -1312,13 +1602,72 @@ class DeviceContext {
 		}
 	}
 
+	/**
+	 * Handle a DevConfigFetch response (grid-connection file). The blob can be chunked over
+	 * several packages — accumulate them, request the next while incomplete, then decode the
+	 * reassembled big-endian blob into `gridProfile.*` states.
+	 *
+	 * @param payload - Decrypted DevConfigFetchReqDTO payload.
+	 */
 	private handleDevConfigFetch(payload: Buffer): void {
 		if (!this.protobuf) {
 			return;
 		}
 		try {
-			this.protobuf.getType("DevConfig", "DevConfigFetchReqDTO").decode(payload);
-			this.adapter.log.debug(`[${this.deviceId || this.host}] DevConfig response received`);
+			const ReqDTO = this.protobuf.getType("DevConfig", "DevConfigFetchReqDTO");
+			const obj = ReqDTO.toObject(ReqDTO.decode(payload), { longs: Number, defaults: true }) as Record<
+				string,
+				unknown
+			>;
+			const data = obj.data as Uint8Array | undefined;
+			const chunk = data && data.length ? Buffer.from(data) : Buffer.alloc(0);
+			const pkg = Number(obj.currentPackage) || 0;
+			const total = Math.max(Number(obj.totalPackages) || 1, 1);
+			this.gridChunks.set(pkg, chunk);
+			this.adapter.log.debug(
+				`[${this.deviceId || this.host}] grid profile package ${pkg + 1}/${total} (${chunk.length} bytes)`,
+			);
+
+			// More packages outstanding → request the next one and wait for it
+			if (pkg + 1 < total) {
+				this.connection
+					?.send(this.protobuf.encodeDevConfigFetch(unixSeconds(), this.dtuSerial, this.inverterSn, pkg + 1))
+					.catch(e =>
+						this.adapter.log.debug(`[${this.deviceId}] grid profile next-pkg failed: ${errorMessage(e)}`),
+					);
+				return;
+			}
+
+			// All packages received → assemble in order and decode
+			const assembled = Buffer.concat(
+				[...this.gridChunks.keys()].sort((a, b) => a - b).map(k => this.gridChunks.get(k)!),
+			);
+			this.gridChunks.clear();
+			if (assembled.length < 4) {
+				return;
+			}
+			// The local DevConfigFetch `data` field is the grid file (big-endian) followed by a
+			// 2-byte CRC-16 trailer of that grid file. The cloud's grid-file blob (and our decode)
+			// is the grid file ONLY — the CRC lives in a separate field. Strip the trailer so the
+			// relay serves the exact 112-byte cloud format, not 114 bytes (which the app can't show).
+			const blob = assembled.subarray(0, assembled.length - 2);
+			this.gridBlob = blob; // cache (big-endian, no trailer) to answer cloud-relay grid-profile reads
+			// Cache the DTU/inverter serials exactly as the DTU sent them (raw bytes) so the cloud
+			// grid-profile upload can echo them verbatim — see serveGridProfileToCloud.
+			const dtuSnBytes = obj.dtuSn as Uint8Array | undefined;
+			const devSnBytes = obj.devSn as Uint8Array | undefined;
+			this.gridDtuSn = dtuSnBytes && dtuSnBytes.length ? Buffer.from(dtuSnBytes) : null;
+			this.gridDevSn = devSnBytes && devSnBytes.length ? Buffer.from(devSnBytes) : null;
+			this.adapter.log.debug(`[${this.deviceId || this.host}] [diag] grid profile blob: ${blob.toString("hex")}`);
+			this.adapter.log.debug(
+				`[${this.deviceId || this.host}] [diag] grid profile sns: dtu=${this.gridDtuSn?.toString("hex") ?? "-"} dev=${this.gridDevSn?.toString("hex") ?? "-"}`,
+			);
+			const decoded = decodeGridProfile(blob);
+			const entries: Array<[string, ioBroker.StateValue]> = [["gridProfile.standard", decoded.standard]];
+			for (const [key, val] of Object.entries(decoded.values)) {
+				entries.push([`gridProfile.${key}`, val]);
+			}
+			void this.setStates(entries, true);
 		} catch (err) {
 			this.adapter.log.warn(`[${this.deviceId || this.host}] Error decoding DevConfig: ${errorMessage(err)}`);
 		}
@@ -1446,6 +1795,9 @@ class DeviceContext {
 			this.cloudRelay.disconnect();
 			this.cloudRelay = null;
 		}
+		this.pendingGridServeTid = null;
+		this.gridDtuSn = null;
+		this.gridDevSn = null;
 		// Unsubscribe from writable states
 		if (this.deviceId) {
 			for (const stateId of WRITABLE_STATES) {

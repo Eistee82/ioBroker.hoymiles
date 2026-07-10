@@ -5,6 +5,7 @@ import { executeCommand } from "./commandHandler.js";
 import Encryption from "./encryption.js";
 import { channels, states } from "./stateDefinitions.js";
 import { getAlarmDescription } from "./alarmCodes.js";
+import { decodeGridProfile, byteSwap16 } from "./gridProfile.js";
 import { INFO_FALLBACK_TIMEOUT_MS, SCALE_POWER } from "./constants.js";
 import { whToKwh } from "./convert.js";
 import { errorMessage, safeJsonStringify, unixSeconds } from "./utils.js";
@@ -17,6 +18,7 @@ const PV_FIELDS_BASE = [
 const PV_FIELDS_LOCAL_ONLY = [
     { suffix: "dailyEnergy", en: "daily energy", de: "Tagesenergie", role: "value.energy", unit: "kWh" },
     { suffix: "totalEnergy", en: "total energy", de: "Gesamtenergie", role: "value.energy", unit: "kWh" },
+    { suffix: "errorCode", en: "error code", de: "Fehlercode", role: "value", unit: "" },
 ];
 const WRITABLE_STATES = [
     "inverter.powerLimit",
@@ -27,8 +29,8 @@ const WRITABLE_STATES = [
     "inverter.cleanWarnings",
     "inverter.cleanGroundingFault",
     "inverter.lock",
-    "config.zeroExportEnable",
     "config.serverSendTime",
+    "config.limitPowerMyPower",
     "dtu.reboot",
 ];
 class DeviceContext {
@@ -61,6 +63,13 @@ class DeviceContext {
     cloudSendTimeMin;
     cloudRelayInitializing;
     dataInterval;
+    inverterSn;
+    gridChunks = new Map();
+    warnChunks = new Map();
+    gridBlob = null;
+    gridDtuSn = null;
+    gridDevSn = null;
+    pendingGridServeTid = null;
     pendingResponse;
     slowPollQueue;
     slowPollIndex;
@@ -103,6 +112,7 @@ class DeviceContext {
         this.slowPollRotations = 0;
         this.pollBusy = false;
         this.consecutivePollErrors = 0;
+        this.inverterSn = "";
     }
     async initFromSerial(serial) {
         this.dtuSerial = serial;
@@ -243,11 +253,46 @@ class DeviceContext {
                 await this.adapter.setStateAsync(`${this.deviceId}.${def.id}`, defaultVal, true);
             }
         }));
+        await this.cleanupObsoleteObjects();
         for (const stateId of WRITABLE_STATES) {
             this.adapter.subscribeStates(`${this.deviceId}.${stateId}`);
         }
         this.statesCreated = true;
         this.adapter.log.info(`[${this.deviceId}] Device states created`);
+    }
+    async cleanupObsoleteObjects() {
+        const knownStates = new Set(states.map(d => d.id));
+        const knownChannels = new Set(channels.map(c => c.id));
+        const isKnown = (rel) => knownStates.has(rel) ||
+            knownChannels.has(rel) ||
+            /^pv\d+(\.|$)/.test(rel) ||
+            rel === "meter" ||
+            rel.startsWith("meter.") ||
+            rel === "history" ||
+            rel.startsWith("history.");
+        const prefix = `${this.adapter.namespace}.${this.deviceId}.`;
+        try {
+            const removed = [];
+            for (const kind of ["state", "channel"]) {
+                const view = await this.adapter.getObjectViewAsync("system", kind, {
+                    startkey: prefix,
+                    endkey: `${prefix}香`,
+                });
+                for (const row of view.rows) {
+                    const rel = row.id.slice(prefix.length);
+                    if (rel && !isKnown(rel)) {
+                        await this.adapter.delObjectAsync(row.id, { recursive: true });
+                        removed.push(rel);
+                    }
+                }
+            }
+            if (removed.length) {
+                this.adapter.log.info(`[${this.deviceId}] Removed ${removed.length} obsolete object(s): ${removed.join(", ")}`);
+            }
+        }
+        catch (e) {
+            this.adapter.log.debug(`[${this.deviceId}] Obsolete-object cleanup skipped: ${errorMessage(e)}`);
+        }
     }
     async createPvStates(pvCount, cloudOnly = false) {
         if (!this.deviceId) {
@@ -352,6 +397,94 @@ class DeviceContext {
         this.pollTimer = this.adapter.setInterval(() => {
             this.pollTick().catch(onPollError);
         }, interval);
+        this.requestGridProfile();
+    }
+    requestGridProfile() {
+        if (!this.enableLocal || !this.inverterSn || !this.connection?.connected || !this.protobuf) {
+            return;
+        }
+        this.gridChunks.clear();
+        this.connection
+            .send(this.protobuf.encodeDevConfigFetch(unixSeconds(), this.dtuSerial, this.inverterSn))
+            .catch(e => {
+            this.adapter.log.debug(`[${this.deviceId}] DevConfigFetch send failed: ${errorMessage(e)}`);
+        });
+    }
+    handleCloudCommand(cmd) {
+        if (!this.protobuf || !this.cloudRelay) {
+            return;
+        }
+        try {
+            if (cmd.cmdHigh === 0x23 && cmd.cmdLow === 0x06) {
+                this.handleCloudStatusAck(cmd.payload);
+                return;
+            }
+            if (!(cmd.cmdHigh === 0x23 && cmd.cmdLow === 0x05)) {
+                this.adapter.log.debug(`[${this.deviceId}] [diag] cloud command 0x${cmd.cmdHigh.toString(16)} 0x${cmd.cmdLow.toString(16)} — not handled`);
+                return;
+            }
+            const ResDTO = this.protobuf.getType("CommandPB", "CommandResDTO");
+            const obj = ResDTO.toObject(ResDTO.decode(cmd.payload), { longs: Number, defaults: true });
+            const action = Number(obj.action) || 0;
+            const tid = Number(obj.tid) || 0;
+            this.adapter.log.debug(`[${this.deviceId}] [diag] cloud command action=${action} tid=${tid}`);
+            if (action === 41) {
+                this.serveGridProfileToCloud(tid);
+            }
+            else if (action === 4) {
+                this.serveVersionToCloud(tid);
+            }
+        }
+        catch (err) {
+            this.adapter.log.warn(`[${this.deviceId}] handleCloudCommand error: ${errorMessage(err)}`);
+        }
+    }
+    serveGridProfileToCloud(tid) {
+        const relay = this.cloudRelay;
+        if (!relay || !this.protobuf || !this.gridBlob || !this.gridDtuSn || !this.gridDevSn) {
+            this.adapter.log.debug(`[${this.deviceId}] grid-profile cloud-serve skipped (relay/blob/sn missing)`);
+            return;
+        }
+        const ts = unixSeconds();
+        relay.sendFrame(this.protobuf.encodeCloudCommandAck(ts, this.dtuSerial, 41, tid));
+        relay.sendFrame(this.protobuf.encodeCloudCommandStatus(ts, this.dtuSerial, 41, tid));
+        this.pendingGridServeTid = tid;
+        this.adapter.log.debug(`[${this.deviceId}] grid-profile read: ack+status sent, awaiting cloud status-ack (tid=${tid})`);
+    }
+    handleCloudStatusAck(payload) {
+        if (!this.protobuf || this.pendingGridServeTid === null) {
+            return;
+        }
+        const StatusRes = this.protobuf.getType("CommandPB", "CommandStatusResDTO");
+        const obj = StatusRes.toObject(StatusRes.decode(payload), { longs: Number, defaults: true });
+        const action = Number(obj.action) || 0;
+        if (action !== 0 && action !== 41) {
+            return;
+        }
+        const tid = this.pendingGridServeTid;
+        this.pendingGridServeTid = null;
+        this.sendGridProfileFile(tid);
+    }
+    sendGridProfileFile(tid) {
+        const relay = this.cloudRelay;
+        if (!relay || !this.protobuf || !this.gridBlob || !this.gridDtuSn || !this.gridDevSn) {
+            this.adapter.log.debug(`[${this.deviceId}] grid-profile file send skipped (relay/blob/sn missing)`);
+            return;
+        }
+        relay.sendFrame(this.protobuf.encodeGridProfileResponse(unixSeconds(), this.gridDtuSn, this.gridDevSn, tid, byteSwap16(this.gridBlob)));
+        this.adapter.log.info(`[${this.deviceId}] served grid profile to cloud via relay (tid=${tid})`);
+    }
+    serveVersionToCloud(tid) {
+        const relay = this.cloudRelay;
+        if (!relay || !this.protobuf || !this.inverterSn) {
+            this.adapter.log.debug(`[${this.deviceId}] version cloud-serve skipped (relay/sn missing)`);
+            return;
+        }
+        const ts = unixSeconds();
+        const miSn = Number.parseInt(this.inverterSn, 16);
+        relay.sendFrame(this.protobuf.encodeCloudCommandAck(ts, this.dtuSerial, 4, tid));
+        relay.sendFrame(this.protobuf.encodeCloudCommandStatus(ts, this.dtuSerial, 4, tid, Number.isFinite(miSn) ? [miSn] : []));
+        this.adapter.log.info(`[${this.deviceId}] answered cloud version query (action 4) via relay (tid=${tid})`);
     }
     stopPollCycle() {
         if (this.pollTimer) {
@@ -601,9 +734,9 @@ class DeviceContext {
             ];
             if (data.sgs.length > 0) {
                 const sgs = data.sgs[0];
-                entries.push(["grid.power", sgs.activePower], ["grid.voltage", sgs.voltage], ["grid.current", sgs.current], ["grid.frequency", sgs.frequency], ["grid.reactivePower", sgs.reactivePower], ["grid.powerFactor", sgs.powerFactor], ["inverter.temperature", sgs.temperature], ["inverter.warnCount", sgs.warningNumber], ["inverter.warnMessage", sgs.warningNumber > 0 ? getAlarmDescription(sgs.warningNumber, "en") : ""], ...(sgs.linkStatus
+                entries.push(["grid.power", sgs.activePower], ["grid.voltage", sgs.voltage], ["grid.current", sgs.current], ["grid.frequency", sgs.frequency], ["grid.reactivePower", sgs.reactivePower], ["grid.powerFactor", sgs.powerFactor], ["inverter.temperature", sgs.temperature], ["inverter.warnCount", sgs.warningNumber], ...(sgs.linkStatus
                     ? [["inverter.linkStatus", sgs.linkStatus]]
-                    : []), ["inverter.serialNumber", sgs.serialNumber], ["inverter.activePowerLimit", sgs.powerLimit]);
+                    : []), ["inverter.serialNumber", sgs.serialNumber], ["inverter.activePowerLimit", sgs.powerLimit], ["inverter.modulationIndexSignal", sgs.modulationIndexSignal]);
             }
             for (const pv of data.pv) {
                 const pvIndex = pv.portNumber - 1;
@@ -611,7 +744,7 @@ class DeviceContext {
                     continue;
                 }
                 const prefix = `pv${pvIndex}`;
-                entries.push([`${prefix}.power`, pv.power], [`${prefix}.voltage`, pv.voltage], [`${prefix}.current`, pv.current], [`${prefix}.dailyEnergy`, whToKwh(pv.energyDaily)], [`${prefix}.totalEnergy`, Math.round(pv.energyTotal / 100) / 10]);
+                entries.push([`${prefix}.power`, pv.power], [`${prefix}.voltage`, pv.voltage], [`${prefix}.current`, pv.current], [`${prefix}.dailyEnergy`, whToKwh(pv.energyDaily)], [`${prefix}.totalEnergy`, Math.round(pv.energyTotal / 100) / 10], [`${prefix}.errorCode`, pv.errorCode]);
             }
             if (data.meter.length > 0) {
                 if (!this.meterStatesCreated) {
@@ -670,7 +803,7 @@ class DeviceContext {
         const entries = [["dtu.serialNumber", info.dtuSn]];
         if (info.dtuInfo) {
             const di = info.dtuInfo;
-            entries.push(["dtu.swVersion", formatDtuVersion(di.swVersion)], ["dtu.hwVersion", formatDtuVersion(di.hwVersion).replace("V", "H")], ["dtu.rssi", di.signalStrength], ["dtu.connState", di.errorCode], ["dtu.stepTime", di.dtuStepTime], ["dtu.rfHwVersion", di.dtuRfHwVersion], ["dtu.rfSwVersion", di.dtuRfSwVersion], ["dtu.accessModel", di.accessModel], ["dtu.communicationTime", di.communicationTime * 1000], ["dtu.wifiVersion", di.wifiVersion], ["dtu.mode485", di.dtu485Mode], ["dtu.sub1gFrequencyBand", di.sub1gFrequencyBand]);
+            entries.push(["dtu.swVersion", formatDtuVersion(di.swVersion)], ["dtu.hwVersion", formatDtuVersion(di.hwVersion).replace("V", "H")], ["dtu.rssi", di.signalStrength], ["dtu.connState", di.errorCode], ["dtu.stepTime", di.dtuStepTime], ["dtu.accessModel", di.accessModel], ["dtu.communicationTime", di.communicationTime * 1000], ["dtu.wifiVersion", di.wifiVersion]);
         }
         await this.setStates(entries, true);
     }
@@ -698,6 +831,7 @@ class DeviceContext {
     async updateInverterVersions(info) {
         if (info.pvInfo.length > 0) {
             const pv = info.pvInfo[0];
+            this.inverterSn = pv.sn || this.inverterSn;
             await this.setStates([
                 ["inverter.serialNumber", pv.sn],
                 ["inverter.hwVersion", formatInvVersion(pv.bootVersion).replace("V", "H")],
@@ -736,6 +870,7 @@ class DeviceContext {
                     this.adapter.log.debug(`[${this.deviceId}] Cloud relay sent data, triggering cloud poll`);
                     void this.adapter.onRelayDataSent();
                 });
+                this.cloudRelay.on("command", (cmd) => this.handleCloudCommand(cmd));
                 this.cloudRelay.connect();
             }
         }
@@ -765,28 +900,17 @@ class DeviceContext {
             const config = this.protobuf.decodeGetConfig(payload);
             this.adapter.log.debug(`[${this.deviceId || this.host}] Config: server=${config.serverDomain}:${config.serverPort}, sendTime=${config.serverSendTime}min`);
             await this.setStates([
-                ["inverter.powerLimit", config.limitPower / SCALE_POWER],
+                ["config.limitPowerMyPower", config.limitPower / SCALE_POWER],
                 ["config.serverDomain", config.serverDomain],
                 ["config.serverPort", config.serverPort],
                 ["config.serverSendTime", config.serverSendTime],
                 ["config.wifiSsid", config.wifiSsid],
                 ["config.wifiRssi", config.wifiRssi],
-                ["config.zeroExportEnable", !!config.zeroExportEnable],
-                ["config.zeroExport433Addr", config.zeroExport433Addr],
-                ["config.meterKind", config.meterKind],
-                ["config.meterInterface", config.meterInterface],
                 ["config.netDhcpSwitch", config.dhcpSwitch],
                 ["config.dtuApSsid", config.dtuApSsid],
                 ["config.netmodeSelect", config.netmodeSelect],
-                ["config.channelSelect", config.channelSelect],
-                ["config.sub1gSweepSwitch", config.sub1gSweepSwitch],
-                ["config.sub1gWorkChannel", config.sub1gWorkChannel],
                 ["config.invType", config.invType],
-                ["config.netIpAddress", config.ipAddress],
-                ["config.netSubnetMask", config.subnetMask],
-                ["config.netGateway", config.gateway],
                 ["config.wifiIpAddress", config.wifiIpAddress],
-                ["config.netMacAddress", config.macAddress],
                 ["config.wifiMacAddress", config.wifiMacAddress],
             ], true);
             if (config.serverDomain && config.serverPort) {
@@ -804,8 +928,8 @@ class DeviceContext {
             this.adapter.log.warn(`[${this.deviceId || this.host}] Error decoding Config: ${errorMessage(err)}`);
         }
     }
-    async handleAlarmData(payload) {
-        const normalize = (e) => ({
+    static normalizeAlarm(e) {
+        return {
             sn: e.sn,
             code: e.code,
             num: e.num,
@@ -816,22 +940,48 @@ class DeviceContext {
             descriptionEn: e.descriptionEn || getAlarmDescription(e.code, "en"),
             descriptionDe: e.descriptionDe || getAlarmDescription(e.code, "de"),
             active: e.endTime === 0,
-        });
-        let alarms = [];
+        };
+    }
+    async handleAlarmData(payload) {
         try {
             const data = this.protobuf.decodeAlarmData(payload);
-            alarms = data.alarms.map(normalize);
+            await this.finalizeAlarms(data.alarms.map(DeviceContext.normalizeAlarm));
+            return;
         }
         catch {
-            try {
-                const data = this.protobuf.decodeWarnData(payload);
-                alarms = data.warnings.map(normalize);
-            }
-            catch (err) {
-                this.adapter.log.warn(`[${this.deviceId || this.host}] Error decoding AlarmData/WarnData: ${errorMessage(err)}`);
-                return;
-            }
         }
+        let data;
+        try {
+            data = this.protobuf.decodeWarnData(payload);
+        }
+        catch (err) {
+            this.adapter.log.warn(`[${this.deviceId || this.host}] Error decoding AlarmData/WarnData: ${errorMessage(err)}`);
+            return;
+        }
+        const total = data.packageNub;
+        const now = data.packageNow;
+        const pageAlarms = data.warnings.map(DeviceContext.normalizeAlarm);
+        if (total <= 1) {
+            this.warnChunks.clear();
+            await this.finalizeAlarms(pageAlarms);
+            return;
+        }
+        if (now === 0) {
+            this.warnChunks.clear();
+        }
+        this.warnChunks.set(now, pageAlarms);
+        this.adapter.log.debug(`[${this.deviceId || this.host}] Warn list package ${now + 1}/${total} (${pageAlarms.length} entries)`);
+        if (now + 1 < total) {
+            this.connection
+                ?.send(this.protobuf.encodeWarnDataRequest(unixSeconds(), now + 1))
+                .catch(e => this.adapter.log.debug(`[${this.deviceId || this.host}] warn next-pkg failed: ${errorMessage(e)}`));
+            return;
+        }
+        const assembled = [...this.warnChunks.keys()].sort((a, b) => a - b).flatMap(k => this.warnChunks.get(k));
+        this.warnChunks.clear();
+        await this.finalizeAlarms(assembled);
+    }
+    async finalizeAlarms(alarms) {
         if (alarms.length === 0) {
             this.adapter.log.debug(`[${this.deviceId || this.host}] Alarm list query returned no active alarms`);
         }
@@ -839,11 +989,13 @@ class DeviceContext {
             this.adapter.log.debug(`[${this.deviceId || this.host}] Alarms received: ${alarms.length} entries`);
         }
         const activeAlarms = alarms.filter(a => a.active);
+        const latestActive = activeAlarms[activeAlarms.length - 1];
         const entries = [
             ["alarms.count", alarms.length],
             ["alarms.activeCount", activeAlarms.length],
             ["alarms.hasActive", activeAlarms.length > 0],
             ["alarms.json", safeJsonStringify(alarms)],
+            ["inverter.warnMessage", latestActive ? latestActive.descriptionEn : ""],
         ];
         if (alarms.length > 0) {
             const last = alarms[alarms.length - 1];
@@ -941,8 +1093,39 @@ class DeviceContext {
             return;
         }
         try {
-            this.protobuf.getType("DevConfig", "DevConfigFetchReqDTO").decode(payload);
-            this.adapter.log.debug(`[${this.deviceId || this.host}] DevConfig response received`);
+            const ReqDTO = this.protobuf.getType("DevConfig", "DevConfigFetchReqDTO");
+            const obj = ReqDTO.toObject(ReqDTO.decode(payload), { longs: Number, defaults: true });
+            const data = obj.data;
+            const chunk = data && data.length ? Buffer.from(data) : Buffer.alloc(0);
+            const pkg = Number(obj.currentPackage) || 0;
+            const total = Math.max(Number(obj.totalPackages) || 1, 1);
+            this.gridChunks.set(pkg, chunk);
+            this.adapter.log.debug(`[${this.deviceId || this.host}] grid profile package ${pkg + 1}/${total} (${chunk.length} bytes)`);
+            if (pkg + 1 < total) {
+                this.connection
+                    ?.send(this.protobuf.encodeDevConfigFetch(unixSeconds(), this.dtuSerial, this.inverterSn, pkg + 1))
+                    .catch(e => this.adapter.log.debug(`[${this.deviceId}] grid profile next-pkg failed: ${errorMessage(e)}`));
+                return;
+            }
+            const assembled = Buffer.concat([...this.gridChunks.keys()].sort((a, b) => a - b).map(k => this.gridChunks.get(k)));
+            this.gridChunks.clear();
+            if (assembled.length < 4) {
+                return;
+            }
+            const blob = assembled.subarray(0, assembled.length - 2);
+            this.gridBlob = blob;
+            const dtuSnBytes = obj.dtuSn;
+            const devSnBytes = obj.devSn;
+            this.gridDtuSn = dtuSnBytes && dtuSnBytes.length ? Buffer.from(dtuSnBytes) : null;
+            this.gridDevSn = devSnBytes && devSnBytes.length ? Buffer.from(devSnBytes) : null;
+            this.adapter.log.debug(`[${this.deviceId || this.host}] [diag] grid profile blob: ${blob.toString("hex")}`);
+            this.adapter.log.debug(`[${this.deviceId || this.host}] [diag] grid profile sns: dtu=${this.gridDtuSn?.toString("hex") ?? "-"} dev=${this.gridDevSn?.toString("hex") ?? "-"}`);
+            const decoded = decodeGridProfile(blob);
+            const entries = [["gridProfile.standard", decoded.standard]];
+            for (const [key, val] of Object.entries(decoded.values)) {
+                entries.push([`gridProfile.${key}`, val]);
+            }
+            void this.setStates(entries, true);
         }
         catch (err) {
             this.adapter.log.warn(`[${this.deviceId || this.host}] Error decoding DevConfig: ${errorMessage(err)}`);
@@ -1041,6 +1224,9 @@ class DeviceContext {
             this.cloudRelay.disconnect();
             this.cloudRelay = null;
         }
+        this.pendingGridServeTid = null;
+        this.gridDtuSn = null;
+        this.gridDevSn = null;
         if (this.deviceId) {
             for (const stateId of WRITABLE_STATES) {
                 this.adapter.unsubscribeStates(`${this.deviceId}.${stateId}`);

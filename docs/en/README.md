@@ -91,13 +91,13 @@ The adapter uses ioBroker's state quality attribute (`q`) to indicate the reliab
 |---------|-------|---------|------|
 | Good | `0x00` (0) | Fresh, locally sourced data | Normal operation — data received directly from DTU via TCP |
 | Substitute | `0x40` (64) | Cloud-sourced fallback data | Inverter data fetched from the Hoymiles Cloud API instead of local TCP (cloud-only devices) |
-| Device not connected | `0x42` (66) | Stale data, device offline | DTU connection lost — values are the last known readings before disconnect |
+| Device not connected | `0x42` (66) | Stale data, device offline | DTU connection lost — values are the last known readings before disconnect. Also set on cloud station `grid.*` when the station's last cloud upload is older than ~20 min (DTU not uploading). |
 
-**Affected states:** `grid.*`, `pv*.*`, `inverter.temperature`, `inverter.active`, `inverter.warnCount`, `inverter.warnMessage`, `inverter.activePowerLimit`, `meter.*`
+**Affected states:** `grid.*`, `pv*.*`, `inverter.temperature`, `inverter.active`, `inverter.warnCount`, `inverter.warnMessage`, `inverter.activePowerLimit`, `meter.*` — plus the cloud station measurements `station-<id>.grid.*` (flagged `0x42` while the station is offline/stale).
 
-Info states (`info.*`), config states (`config.*`), and station-level cloud data are **not** affected by quality changes.
+Info states (`info.*`), config states (`config.*`), and static station-level cloud data (name, address, coordinates, warning flags) are **not** affected by quality changes.
 
-**Automatic reset:** When the local DTU connection is restored, the next successful data response automatically resets all affected states back to quality `0x00` (good).
+**Automatic reset:** When the local DTU connection is restored, the next successful data response automatically resets all affected states back to quality `0x00` (good). Likewise, when a cloud station resumes uploading, its `grid.*` quality returns to `0x00` and the adapter immediately performs one full refresh (details, devices, firmware, warnings) before resuming the normal poll cadence.
 
 You can use the quality attribute in scripts and visualizations to distinguish between fresh and stale data, e.g. by dimming or greying out values with `q > 0`.
 
@@ -155,6 +155,7 @@ PV channels are created dynamically based on the inverter model (1T = 1 channel,
 | `pvX.current` | number | A | Panel current |
 | `pvX.dailyEnergy` | number | kWh | Daily energy (local only) |
 | `pvX.totalEnergy` | number | kWh | Total energy (local only) |
+| `pvX.errorCode` | number | | Per-string error code, 0 in normal operation (local only) |
 
 ### `<dtuSerial>.inverter.*` — Inverter Status & Control (per DTU)
 
@@ -165,7 +166,7 @@ PV channels are created dynamically based on the inverter model (1T = 1 channel,
 | `inverter.hwVersion` | string | — | no | Hardware version |
 | `inverter.swVersion` | string | — | no | Software version |
 | `inverter.temperature` | number | °C | no | Inverter temperature |
-| `inverter.powerLimit` | number | % | **yes** | Power limit (2-100%, local) |
+| `inverter.powerLimit` | number | % | **yes** | **Runtime** power limit (RAM-only, **no flash/NVM wear — safe to write every second**). **Use this state to realize zero-export (Nulleinspeisung)** / dynamic curtailment. 2-100%, local |
 | `inverter.activePowerLimit` | number | % | no | Active power limit (live, local) |
 | `inverter.active` | boolean | — | **yes** | Turn inverter on/off (local) |
 | `inverter.reboot` | boolean | — | **yes** | Reboot inverter (button, local) |
@@ -174,9 +175,10 @@ PV channels are created dynamically based on the inverter model (1T = 1 channel,
 | `inverter.cleanWarnings` | boolean | — | **yes** | Clean warnings (button, local) |
 | `inverter.cleanGroundingFault` | boolean | — | **yes** | Clean grounding fault (button, local) |
 | `inverter.lock` | boolean | — | **yes** | Lock/unlock inverter (local) |
-| `inverter.warnCount` | number | — | no | Active warning code (local) |
-| `inverter.warnMessage` | string | — | no | Active warning message (local) |
+| `inverter.warnCount` | number | — | no | SGSMO `warning_number` field, raw value (local) — not a documented warn code |
+| `inverter.warnMessage` | string | — | no | Active warning message from the WCode alarm list (local) |
 | `inverter.linkStatus` | number | — | no | Link status |
+| `inverter.modulationIndexSignal` | number | — | no | SGSMO #20, raw packed value (modulation index + signal; exact decode not yet confirmed, local) |
 
 ### `<dtuSerial>.dtu.*` — DTU Information (per DTU, local only)
 
@@ -190,13 +192,9 @@ PV channels are created dynamically based on the inverter model (1T = 1 channel,
 | `dtu.wifiVersion` | string | — | WiFi version |
 | `dtu.fwUpdateAvailable` | boolean | — | Firmware update available (checked once daily via cloud) |
 | `dtu.stepTime` | number | s | Step time |
-| `dtu.rfHwVersion` | number | — | RF hardware version |
-| `dtu.rfSwVersion` | number | — | RF software version |
 | `dtu.accessModel` | number | — | Network access mode (0=GPRS, 1=WiFi, 2=Ethernet) |
 | `dtu.communicationTime` | number | — | Last communication (Unix timestamp) |
 | `dtu.connState` | number | — | DTU error code (0=OK) |
-| `dtu.mode485` | number | — | RS485 mode (0=Reflux/Auto, 1=Remote Control) |
-| `dtu.sub1gFrequencyBand` | number | — | Sub-1G frequency band |
 | `dtu.searchResult` | string | — | AutoSearch result (inverter serials, JSON) |
 
 ### `station-<id>.grid.*` — Station Aggregates (cloud)
@@ -251,7 +249,7 @@ Grid- and meter-level warning flags from the cloud's `station/find` record. All 
 
 | State | Type | Description |
 |-------|------|-------------|
-| `warn.stationOffline` | boolean | Station offline / supply voltage off |
+| `warn.stationOffline` | boolean | Station offline / supply voltage off. Cross-checked against realtime data freshness: a station that is still uploading recent data is never reported offline, even if the cloud briefly flags `s_uoff` (e.g. while the cloud relay takes over the DTU's uplink on adapter start) |
 | `warn.gridUnstable` | boolean | Grid voltage unstable |
 | `warn.gridFault` | boolean | Grid fault / grid abnormal |
 | `warn.deviceAlarm` | boolean | Inverter alarm — an inverter has an active fault (e.g. "PVx no input" when a DC string is disconnected). The same condition surfaces locally and faster under `alarms.lastCode`/`alarms.lastMessage` |
@@ -276,30 +274,76 @@ Grid- and meter-level warning flags from the cloud's `station/find` record. All 
 
 ### `<dtuSerial>.config.*` — DTU Configuration (per DTU, local)
 
+> ⚠️ **WARNING — never write `config.*` states (especially `config.limitPowerMyPower`) frequently or in an automated loop.** Each write programs the **internal flash of the integrated DTU** (the WiFi module inside the HMS-xT). Flash endurance is finite (≈ tens of thousands of cycles); repeated high-frequency writes — e.g. a per-second zero-export loop — wear it out and can **permanently brick the device**. Use these states only for occasional, permanent settings.
+> **For dynamic / frequent power limiting (zero-export), use `inverter.powerLimit` instead** — a runtime, RAM-only command with **no flash write and no wear**, safe to update every second.
+
 | State | Type | Unit | Writable | Description |
 |-------|------|------|----------|-------------|
 | `config.serverDomain` | string | — | no | Cloud server domain |
 | `config.serverPort` | number | — | no | Cloud server port |
-| `config.serverSendTime` | number | min | **yes** | Cloud send interval (minutes) |
+| `config.serverSendTime` | number | min | **yes** | Cloud send interval (minutes). ⚠️ Persistent (DTU flash) — do not write frequently, see warning above |
+| `config.limitPowerMyPower` | number | % | **yes** | **Persistent** power limit (stored in DTU flash, survives a reboot; 2-100%, local). ⚠️ **Permanent cap only — never write in a loop (wears DTU flash). For dynamic zero-export use `inverter.powerLimit`** (see warning above) |
 | `config.wifiSsid` | string | — | no | WiFi SSID |
-| `config.wifiRssi` | number | dBm | no | WiFi signal strength |
-| `config.zeroExportEnable` | boolean | — | **yes** | Zero export enabled |
-| `config.zeroExport433Addr` | number | — | no | Zero export 433MHz sensor address |
-| `config.meterKind` | string | — | no | Meter type (0=None, 1=1-phase, 2=2-phase, 3=3-phase, 5=CT G3, 6=Meter 1S/1T G3, 7=Meter 2S/2T G3) |
-| `config.meterInterface` | string | — | no | Meter interface |
+| `config.wifiRssi` | number | dBm | no | WiFi signal strength (real dBm, e.g. −65) |
 | `config.invType` | number | — | no | Inverter type |
 | `config.netmodeSelect` | number | — | no | Network mode (0=GPRS, 1=WiFi, 2=Ethernet) |
 | `config.netDhcpSwitch` | number | — | no | DHCP enabled |
-| `config.netIpAddress` | string | — | no | Ethernet IP address |
-| `config.netSubnetMask` | string | — | no | Ethernet subnet mask |
-| `config.netGateway` | string | — | no | Ethernet gateway |
-| `config.netMacAddress` | string | — | no | Ethernet MAC address |
 | `config.wifiIpAddress` | string | — | no | WiFi IP address |
 | `config.wifiMacAddress` | string | — | no | WiFi MAC address |
 | `config.dtuApSsid` | string | — | no | DTU access point SSID |
-| `config.channelSelect` | number | — | no | Channel select |
-| `config.sub1gSweepSwitch` | number | — | no | Sub-1G sweep |
-| `config.sub1gWorkChannel` | number | — | no | Sub-1G work channel |
+
+### `<dtuSerial>.gridProfile.*` — Grid Profile (per DTU, local)
+
+The inverter's grid-connection profile (safety/grid-code parameters), read locally via DevConfigFetch. All read-only. Voltage/frequency values follow the active grid standard (e.g. `DE_VDE4105_2018`). Function flags are booleans (`true` = function active).
+
+| State | Type | Unit | Writable | Description |
+|-------|------|------|----------|-------------|
+| `gridProfile.standard` | string | — | no | Grid standard name (e.g. DE_VDE4105_2018) |
+| `gridProfile.countryStdCode` | number | — | no | Country standard code |
+| `gridProfile.version` | number | — | no | Grid profile version |
+| `gridProfile.nominalVoltage` | number | V | no | Nominal voltage |
+| `gridProfile.lowVoltage1` | number | V | no | Low voltage 1 (LV1) |
+| `gridProfile.lowVoltage1TripTime` | number | s | no | LV1 max trip time |
+| `gridProfile.highVoltage1` | number | V | no | High voltage 1 (HV1) |
+| `gridProfile.highVoltage1TripTime` | number | s | no | HV1 max trip time |
+| `gridProfile.lowVoltage2` | number | V | no | Low voltage 2 (LV2) |
+| `gridProfile.lowVoltage2TripTime` | number | s | no | LV2 max trip time |
+| `gridProfile.avgHighVoltage10min` | number | V | no | 10-min average high voltage |
+| `gridProfile.nominalFrequency` | number | Hz | no | Nominal frequency |
+| `gridProfile.lowFrequency1` | number | Hz | no | Low frequency 1 (LF1) |
+| `gridProfile.lowFrequency1TripTime` | number | s | no | LF1 max trip time |
+| `gridProfile.highFrequency1` | number | Hz | no | High frequency 1 (HF1) |
+| `gridProfile.highFrequency1TripTime` | number | s | no | HF1 max trip time |
+| `gridProfile.islandingDetection` | boolean | — | no | Islanding detection active |
+| `gridProfile.reconnectTime` | number | s | no | Reconnect time |
+| `gridProfile.reconnectHighVoltage` | number | V | no | Reconnect high voltage |
+| `gridProfile.reconnectLowVoltage` | number | V | no | Reconnect low voltage |
+| `gridProfile.reconnectHighFrequency` | number | Hz | no | Reconnect high frequency |
+| `gridProfile.reconnectLowFrequency` | number | Hz | no | Reconnect low frequency |
+| `gridProfile.rampUpRateNormal` | number | %/s | no | Normal ramp-up rate |
+| `gridProfile.rampUpRateSoftStart` | number | %/s | no | Soft-start ramp-up rate |
+| `gridProfile.freqWattActive` | boolean | — | no | Frequency-Watt active |
+| `gridProfile.freqWattStart` | number | Hz | no | Frequency-Watt start (Fstart) |
+| `gridProfile.freqWattDroopSlope` | number | %Pn/Hz | no | Frequency-Watt droop slope |
+| `gridProfile.recoveryRampRate` | number | %Pn/s | no | Recovery ramp rate |
+| `gridProfile.recoveryHighFrequency` | number | Hz | no | Recovery high frequency |
+| `gridProfile.recoveryLowFrequency` | number | Hz | no | Recovery low frequency |
+| `gridProfile.activePowerControlActive` | boolean | — | no | Active power control active |
+| `gridProfile.powerRampRate` | number | %Pn/s | no | Power ramp rate |
+| `gridProfile.voltVarActive` | boolean | — | no | Volt-Var active |
+| `gridProfile.voltVarV1` | number | V | no | Volt-Var set point V1 |
+| `gridProfile.voltVarQ1` | number | %Pn | no | Volt-Var set point Q1 |
+| `gridProfile.voltVarV2` | number | V | no | Volt-Var set point V2 |
+| `gridProfile.voltVarV3` | number | V | no | Volt-Var set point V3 |
+| `gridProfile.voltVarV4` | number | V | no | Volt-Var set point V4 |
+| `gridProfile.voltVarQ4` | number | %Pn | no | Volt-Var set point Q4 |
+| `gridProfile.specifiedPowerFactorActive` | boolean | — | no | Specified power factor active |
+| `gridProfile.powerFactor` | number | — | no | Power factor (cos φ) |
+| `gridProfile.wattPowerFactorActive` | boolean | — | no | Watt-power-factor active |
+| `gridProfile.wattPowerFactorStart` | number | %Pn | no | Watt-PF start power |
+| `gridProfile.powerFactorAtRatedPower` | number | — | no | Power factor at rated power |
+| `gridProfile.reactivePowerControlActive` | boolean | — | no | Reactive power control active |
+| `gridProfile.reactivePower` | number | %Sn | no | Reactive power (VAR) |
 
 ### `<dtuSerial>.meter.*` — Energy Meter (per DTU, local, dynamic)
 

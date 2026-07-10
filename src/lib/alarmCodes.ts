@@ -470,7 +470,9 @@ function getAlarmDescription(code: number, lang?: string): string {
 	lang = lang || "en";
 	const entry = ALARM_CODES[code];
 	if (!entry) {
-		return `Unknown code: ${code}`;
+		// Code not in the S-Miles warn_code.json table — the inverter firmware can raise
+		// codes that the app doesn't document. Surface the raw number so it isn't lost.
+		return lang === "de" ? `Unbekannter Code: ${code}` : `Unknown code: ${code}`;
 	}
 	return entry[lang as keyof AlarmTranslation] || entry.en;
 }

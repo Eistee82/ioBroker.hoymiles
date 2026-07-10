@@ -759,4 +759,81 @@ describe("protobufHandler – additional decode methods", function () {
 			assert.strictEqual(result.events.length, 0);
 		});
 	});
+
+	describe("cloud-relay grid-profile responses", function () {
+		it("encodeGridProfileResponse round-trips via 0x22 0x0e (DevConfigFetchReqDTO)", function () {
+			const data = Buffer.from("00030120", "hex"); // little-endian sample blob
+			// dtu_sn/dev_sn are bytes (raw serial), not ASCII strings — echo what the DTU sent
+			const dtuSn = Buffer.from("4143A01CEDE4", "hex");
+			const devSn = Buffer.from("1412A01CEDE4", "hex");
+			const frame = handler.encodeGridProfileResponse(1700000000, dtuSn, devSn, 9999, data);
+			const parsed = handler.parseResponse(frame);
+			assert.strictEqual(parsed.cmdHigh, 0x22);
+			assert.strictEqual(parsed.cmdLow, 0x0e);
+			const ReqDTO = handler.protos.DevConfig.lookupType("DevConfigFetchReqDTO");
+			const obj = ReqDTO.toObject(ReqDTO.decode(parsed.payload), { longs: Number });
+			assert.strictEqual(Buffer.from(obj.data).toString("hex"), "00030120");
+			assert.strictEqual(Buffer.from(obj.dtuSn).toString("hex"), dtuSn.toString("hex"));
+			assert.strictEqual(Buffer.from(obj.devSn).toString("hex"), devSn.toString("hex"));
+			assert.strictEqual(obj.transactionId, 9999);
+			assert.strictEqual(obj.totalPackages, 1);
+			// real DTU closes the single-package upload with rule_type=1, not current_package
+			assert.strictEqual(obj.ruleType, 1);
+			assert.ok(!obj.currentPackage, "current_package must not be set (real DTU uses rule_type)");
+			assert.strictEqual(obj.crc, crc16(data), "crc must be CRC-16/Modbus over the data blob");
+		});
+
+		it("encodeGridProfileResponse crc matches the captured DTU value (20325 for the real LE blob)", function () {
+			const leBlob = Buffer.from(
+				"000301200a00fc0830071e003b0b01000b041e00e209001088138e1201001e1401000020010003305802e209a30792138e120040d0071000085001009c13900110009c137413027001001027008000005b082c01b70841099d092c01009000005f0000b00000f401a1ff02a000000000",
+				"hex",
+			);
+			const frame = handler.encodeGridProfileResponse(
+				1700000000,
+				Buffer.from("4143A01CEDE4", "hex"),
+				Buffer.from("1412A01CEDE4", "hex"),
+				1,
+				leBlob,
+			);
+			const ReqDTO = handler.protos.DevConfig.lookupType("DevConfigFetchReqDTO");
+			const obj = ReqDTO.toObject(ReqDTO.decode(handler.parseResponse(frame).payload), { longs: Number });
+			assert.strictEqual(obj.crc, 20325);
+		});
+
+		it("encodeCloudCommandAck carries dtuSn/action/tid via 0x22 0x05", function () {
+			const parsed = handler.parseResponse(handler.encodeCloudCommandAck(1700000000, "DTU123", 41, 9999));
+			assert.strictEqual(parsed.cmdHigh, 0x22);
+			assert.strictEqual(parsed.cmdLow, 0x05);
+			const ReqDTO = handler.protos.CommandPB.lookupType("CommandReqDTO");
+			const obj = ReqDTO.toObject(ReqDTO.decode(parsed.payload), { longs: Number });
+			assert.strictEqual(obj.dtuSn, "DTU123");
+			assert.strictEqual(obj.action, 41);
+			assert.strictEqual(obj.tid, 9999);
+		});
+
+		it("encodeCloudCommandStatus uses 0x22 0x06 (CommandStatusReqDTO)", function () {
+			const parsed = handler.parseResponse(handler.encodeCloudCommandStatus(1700000000, "DTU123", 41, 9999));
+			assert.strictEqual(parsed.cmdHigh, 0x22);
+			assert.strictEqual(parsed.cmdLow, 0x06);
+			const ReqDTO = handler.protos.CommandPB.lookupType("CommandStatusReqDTO");
+			const obj = ReqDTO.toObject(ReqDTO.decode(parsed.payload), { longs: Number });
+			assert.strictEqual(obj.action, 41);
+			assert.strictEqual(obj.tid, 9999);
+		});
+
+		it("encodeCloudCommandStatus echoes mi_sns_sucs for the version query (action 4)", function () {
+			// inverter SN 1412A01CEDE4 as int64 == 22070228217316 (captured live)
+			const miSn = parseInt("1412A01CEDE4", 16);
+			const parsed = handler.parseResponse(
+				handler.encodeCloudCommandStatus(1700000000, "DTU123", 4, 50628399, [miSn]),
+			);
+			assert.strictEqual(parsed.cmdHigh, 0x22);
+			assert.strictEqual(parsed.cmdLow, 0x06);
+			const ReqDTO = handler.protos.CommandPB.lookupType("CommandStatusReqDTO");
+			const obj = ReqDTO.toObject(ReqDTO.decode(parsed.payload), { longs: Number });
+			assert.strictEqual(obj.action, 4);
+			assert.strictEqual(obj.tid, 50628399);
+			assert.deepStrictEqual(obj.miSnsSucs, [22070228217316]);
+		});
+	});
 });

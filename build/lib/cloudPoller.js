@@ -1,5 +1,5 @@
 import { toKwh } from "./convert.js";
-import { CLOUD_POLL_CONCURRENCY, DEFAULT_POLL_MS, MIN_POLL_MS, RELAY_POLL_DELAY_MS } from "./constants.js";
+import { CLOUD_POLL_CONCURRENCY, CLOUD_STATION_STALE_MS, DEFAULT_POLL_MS, MIN_POLL_MS, RELAY_POLL_DELAY_MS, } from "./constants.js";
 import { formatDtuVersion, formatSwVersion } from "./protobufHandler.js";
 import { anonymize, deriveStationTzOffsetMs, errorMessage, logOnError, mapLimit, stationWallClockToEpoch, } from "./utils.js";
 import { stationStateMap, buildStateCommon } from "./stateDefinitions.js";
@@ -41,6 +41,7 @@ class CloudPoller {
     lastFirmwareCheckDay;
     initialFetchDone;
     lastRealtimeFetch;
+    stationOnline = new Map();
     pollInProgress;
     boundSetState;
     lastCloudConnected;
@@ -64,7 +65,7 @@ class CloudPoller {
         this.pollInProgress = false;
         this.boundSetState = this.adapter.setStateAsync.bind(this.adapter);
     }
-    async writeStationState(deviceId, suffix, value) {
+    async writeStationState(deviceId, suffix, value, quality) {
         if (value === null || value === undefined || value === "") {
             return;
         }
@@ -80,7 +81,12 @@ class CloudPoller {
             }
             this.stationStateObjects.add(fullId);
         }
-        await this.boundSetState(fullId, value, true);
+        if (quality !== undefined) {
+            await this.boundSetState(fullId, { val: value, ack: true, q: quality });
+        }
+        else {
+            await this.boundSetState(fullId, value, true);
+        }
     }
     async initialFetch() {
         if (this.initialFetchDone) {
@@ -168,6 +174,7 @@ class CloudPoller {
             this.pollTimer = undefined;
         }
         this.lastRealtimeFetch.clear();
+        this.stationOnline.clear();
     }
     async poll(forceSlowPoll = false) {
         if (!this.cloud || this.pollInProgress) {
@@ -237,21 +244,37 @@ class CloudPoller {
     async pollStation(stationId, isSlowPoll) {
         const deviceId = `station-${stationId}`;
         const data = await this.cloud.getStationRealtime(stationId);
-        if (isSlowPoll) {
-            await this.pollStationDetails(stationId, deviceId, data);
+        const online = this.isStationFresh(stationId, data.data_time);
+        const cameOnline = online && this.stationOnline.get(stationId) === false;
+        this.stationOnline.set(stationId, online);
+        if (cameOnline) {
+            this.adapter.log.info(`Cloud station ${stationId} back online → forcing full refresh`);
         }
-        await this.setStationRealtimeStates(stationId, deviceId, data);
-        if (isSlowPoll) {
+        const slowPoll = isSlowPoll || cameOnline;
+        if (slowPoll) {
+            await this.pollStationDetails(stationId, deviceId, data, online);
+        }
+        await this.setStationRealtimeStates(stationId, deviceId, data, online);
+        if (slowPoll) {
             await this.pollWeather(stationId, deviceId);
             if (this.firmwareCheckDue(stationId)) {
                 await this.pollFirmwareStatus(stationId);
             }
         }
-        await this.pollDevicesAndInverters(stationId, isSlowPoll);
-        this.adapter.log.debug(`Cloud data (station ${stationId}): ${data.real_power}W, today=${toKwh(data.today_eq).toFixed(2)}kWh, total=${toKwh(data.total_eq).toFixed(2)}kWh`);
+        await this.pollDevicesAndInverters(stationId, slowPoll);
+        this.adapter.log.debug(`Cloud data (station ${stationId}): ${data.real_power}W, today=${toKwh(data.today_eq).toFixed(2)}kWh, total=${toKwh(data.total_eq).toFixed(2)}kWh, online=${online}`);
     }
-    async setStationRealtimeStates(stationId, deviceId, data) {
-        const w = (suffix, value) => this.writeStationState(deviceId, suffix, value);
+    isStationFresh(stationId, dataTime) {
+        const offsetMs = this.stationTzOffsetMs.get(stationId) ?? 0;
+        const epoch = stationWallClockToEpoch(dataTime, offsetMs);
+        if (epoch == null) {
+            return true;
+        }
+        return Date.now() - epoch < CLOUD_STATION_STALE_MS;
+    }
+    async setStationRealtimeStates(stationId, deviceId, data, online) {
+        const q = online ? 0x00 : 0x42;
+        const w = (suffix, value, quality = q) => this.writeStationState(deviceId, suffix, value, quality);
         const offsetMs = this.stationTzOffsetMs.get(stationId) ?? 0;
         const cloudUpdateEpoch = stationWallClockToEpoch(data.data_time, offsetMs);
         this.adapter.log.debug(`[diag] station ${stationId} lastCloudUpdate: data_time="${data.data_time ?? "<none>"}" ` +
@@ -266,11 +289,11 @@ class CloudPoller {
             w("grid.treesPlanted", num(data.plant_tree)),
             w("grid.isBalance", !!data.is_balance),
             w("grid.isReflux", !!data.is_reflux),
-            w("info.lastCloudUpdate", cloudUpdateEpoch),
-            w("info.lastDataTime", stationWallClockToEpoch(data.last_data_time, offsetMs)),
+            w("info.lastCloudUpdate", cloudUpdateEpoch, 0x00),
+            w("info.lastDataTime", stationWallClockToEpoch(data.last_data_time, offsetMs), 0x00),
         ]);
     }
-    async pollStationDetails(stationId, deviceId, realtimeData) {
+    async pollStationDetails(stationId, deviceId, realtimeData, online) {
         try {
             const details = await this.cloud.getStationDetails(stationId);
             const w = (suffix, value) => this.writeStationState(deviceId, suffix, value);
@@ -309,6 +332,10 @@ class CloudPoller {
             const wd = details.warn_data ?? realtimeData.warn_data;
             const wdSource = details.warn_data ? "station/find" : realtimeData.warn_data ? "realtime (home)" : "absent";
             this.adapter.log.debug(`[diag] station ${stationId} warn_data: ${wdSource}`);
+            const stationOffline = online ? false : wd?.s_uoff;
+            if (online && wd?.s_uoff) {
+                this.adapter.log.debug(`[diag] station ${stationId}: s_uoff=true but realtime data is fresh → reporting stationOffline=false`);
+            }
             await Promise.all([
                 w("info.stationName", details.name || null),
                 w("info.stationId", stationId),
@@ -323,7 +350,7 @@ class CloudPoller {
                 w("grid.currency", details.money_unit || null),
                 w("grid.todayIncome", price ? Math.round(toKwh(realtimeData.today_eq) * price * 100) / 100 : null),
                 w("grid.totalIncome", price ? Math.round(toKwh(realtimeData.total_eq) * price * 100) / 100 : null),
-                w("warn.stationOffline", wd?.s_uoff),
+                w("warn.stationOffline", stationOffline),
                 w("warn.gridUnstable", wd?.s_ustable),
                 w("warn.gridFault", wd?.g_warn),
                 w("warn.deviceAlarm", wd?.l3_warn),

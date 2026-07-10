@@ -1,7 +1,13 @@
 import type CloudConnection from "./cloudConnection.js";
 import { toKwh } from "./convert.js";
 import type DeviceContext from "./deviceContext.js";
-import { CLOUD_POLL_CONCURRENCY, DEFAULT_POLL_MS, MIN_POLL_MS, RELAY_POLL_DELAY_MS } from "./constants.js";
+import {
+	CLOUD_POLL_CONCURRENCY,
+	CLOUD_STATION_STALE_MS,
+	DEFAULT_POLL_MS,
+	MIN_POLL_MS,
+	RELAY_POLL_DELAY_MS,
+} from "./constants.js";
 import { formatDtuVersion, formatSwVersion } from "./protobufHandler.js";
 import {
 	anonymize,
@@ -91,6 +97,12 @@ class CloudPoller {
 
 	/** Timestamp (ms) of last cloud realtime data fetch per DTU serial. */
 	private lastRealtimeFetch: Map<string, number>;
+	/**
+	 * Last known online/fresh state per station id (derived from realtime `data_time` age).
+	 * Used to (a) flag stale cloud values via state quality and (b) force a one-off full
+	 * refresh when a station transitions offline → online.
+	 */
+	private readonly stationOnline: Map<number, boolean> = new Map();
 	private pollInProgress: boolean;
 
 	/** Cached bound setStateAsync to avoid re-creating closures on every poll. */
@@ -136,11 +148,13 @@ class CloudPoller {
 	 * @param deviceId - Station device id, e.g. `station-10022030`.
 	 * @param suffix - State suffix matching a key in `stationStateMap`, e.g. `info.address`.
 	 * @param value - Value to write. Null/undefined/empty string → skipped.
+	 * @param quality - Optional ioBroker quality code (e.g. 0x42 for stale/offline). Omit for good (0x00).
 	 */
 	private async writeStationState(
 		deviceId: string,
 		suffix: string,
 		value: string | number | boolean | null | undefined,
+		quality?: ioBroker.STATE_QUALITY[keyof ioBroker.STATE_QUALITY],
 	): Promise<void> {
 		if (value === null || value === undefined || value === "") {
 			return;
@@ -157,7 +171,11 @@ class CloudPoller {
 			}
 			this.stationStateObjects.add(fullId);
 		}
-		await this.boundSetState(fullId, value, true);
+		if (quality !== undefined) {
+			await this.boundSetState(fullId, { val: value, ack: true, q: quality });
+		} else {
+			await this.boundSetState(fullId, value, true);
+		}
 	}
 
 	/**
@@ -294,6 +312,7 @@ class CloudPoller {
 			this.pollTimer = undefined;
 		}
 		this.lastRealtimeFetch.clear();
+		this.stationOnline.clear();
 	}
 
 	/**
@@ -380,15 +399,27 @@ class CloudPoller {
 		// Station realtime data (every cycle)
 		const data = await this.cloud.getStationRealtime(stationId);
 
+		// Freshness from the realtime data_time age. When a station transitions offline → online
+		// (DTU resumed uploading to the cloud), force a one-off full refresh THIS cycle so details,
+		// devices, firmware and warn flags catch up immediately instead of waiting up to
+		// slowPollFactor cycles. After that the station reverts to the normal poll cadence.
+		const online = this.isStationFresh(stationId, data.data_time);
+		const cameOnline = online && this.stationOnline.get(stationId) === false;
+		this.stationOnline.set(stationId, online);
+		if (cameOnline) {
+			this.adapter.log.info(`Cloud station ${stationId} back online → forcing full refresh`);
+		}
+		const slowPoll = isSlowPoll || cameOnline;
+
 		// Station details run BEFORE the realtime states on a slow poll: they cache the
 		// station's UTC offset that setStationRealtimeStates needs to convert data_time.
-		if (isSlowPoll) {
-			await this.pollStationDetails(stationId, deviceId, data);
+		if (slowPoll) {
+			await this.pollStationDetails(stationId, deviceId, data, online);
 		}
-		await this.setStationRealtimeStates(stationId, deviceId, data);
+		await this.setStationRealtimeStates(stationId, deviceId, data, online);
 
 		// Weather (slow poll ~30min), firmware (once per day)
-		if (isSlowPoll) {
+		if (slowPoll) {
 			await this.pollWeather(stationId, deviceId);
 			if (this.firmwareCheckDue(stationId)) {
 				await this.pollFirmwareStatus(stationId);
@@ -396,20 +427,45 @@ class CloudPoller {
 		}
 
 		// Device tree + per-inverter data
-		await this.pollDevicesAndInverters(stationId, isSlowPoll);
+		await this.pollDevicesAndInverters(stationId, slowPoll);
 
 		this.adapter.log.debug(
-			`Cloud data (station ${stationId}): ${data.real_power}W, today=${toKwh(data.today_eq).toFixed(2)}kWh, total=${toKwh(data.total_eq).toFixed(2)}kWh`,
+			`Cloud data (station ${stationId}): ${data.real_power}W, today=${toKwh(data.today_eq).toFixed(2)}kWh, total=${toKwh(data.total_eq).toFixed(2)}kWh, online=${online}`,
 		);
+	}
+
+	/**
+	 * Whether the station's latest cloud upload is recent enough to count as live. Converts the
+	 * local-zone `data_time` to an epoch via the cached per-station UTC offset; a missing offset
+	 * or timestamp (first poll) errs toward "fresh" so a station is never falsely flagged offline.
+	 *
+	 * @param stationId - Station id (for the cached UTC offset).
+	 * @param dataTime - Cloud `data_time` string (station-local wall clock).
+	 */
+	private isStationFresh(stationId: number, dataTime: string | undefined): boolean {
+		const offsetMs = this.stationTzOffsetMs.get(stationId) ?? 0;
+		const epoch = stationWallClockToEpoch(dataTime, offsetMs);
+		if (epoch == null) {
+			return true;
+		}
+		return Date.now() - epoch < CLOUD_STATION_STALE_MS;
 	}
 
 	private async setStationRealtimeStates(
 		stationId: number,
 		deviceId: string,
 		data: Awaited<ReturnType<CloudConnection["getStationRealtime"]>>,
+		online: boolean,
 	): Promise<void> {
-		const w = (suffix: string, value: string | number | boolean | null | undefined): Promise<void> =>
-			this.writeStationState(deviceId, suffix, value);
+		// Stale cloud measurements (DTU offline / not uploading) keep their last value but are
+		// flagged via state quality (0x42 = device not connected), so consumers can distinguish
+		// live data from a frozen last reading. Quality resets to 0x00 once the station is fresh again.
+		const q: ioBroker.STATE_QUALITY[keyof ioBroker.STATE_QUALITY] = online ? 0x00 : 0x42;
+		const w = (
+			suffix: string,
+			value: string | number | boolean | null | undefined,
+			quality: ioBroker.STATE_QUALITY[keyof ioBroker.STATE_QUALITY] = q,
+		): Promise<void> => this.writeStationState(deviceId, suffix, value, quality);
 		// data_time / last_data_time arrive in the station's LOCAL zone, not UTC — convert
 		// with the offset cached by pollStationDetails (0 = no offset known yet, first poll).
 		const offsetMs = this.stationTzOffsetMs.get(stationId) ?? 0;
@@ -429,8 +485,9 @@ class CloudPoller {
 			// is_balance / is_reflux: server sends number (0/1) on Home and boolean on Web — both coerce cleanly via !!.
 			w("grid.isBalance", !!data.is_balance),
 			w("grid.isReflux", !!data.is_reflux),
-			w("info.lastCloudUpdate", cloudUpdateEpoch),
-			w("info.lastDataTime", stationWallClockToEpoch(data.last_data_time, offsetMs)),
+			// Timestamps describe WHEN data last arrived — always good quality, even when stale.
+			w("info.lastCloudUpdate", cloudUpdateEpoch, 0x00),
+			w("info.lastDataTime", stationWallClockToEpoch(data.last_data_time, offsetMs), 0x00),
 		]);
 	}
 
@@ -438,6 +495,7 @@ class CloudPoller {
 		stationId: number,
 		deviceId: string,
 		realtimeData: Awaited<ReturnType<CloudConnection["getStationRealtime"]>>,
+		online: boolean,
 	): Promise<void> {
 		try {
 			const details = await this.cloud.getStationDetails(stationId);
@@ -495,6 +553,16 @@ class CloudPoller {
 			const wd = details.warn_data ?? realtimeData.warn_data;
 			const wdSource = details.warn_data ? "station/find" : realtimeData.warn_data ? "realtime (home)" : "absent";
 			this.adapter.log.debug(`[diag] station ${stationId} warn_data: ${wdSource}`);
+			// Cross-check s_uoff against data freshness: the cloud briefly flags s_uoff=true when
+			// the DTU's native cloud link is bumped (e.g. our relay taking over on adapter start),
+			// even though the station keeps uploading. A station with fresh realtime data is
+			// demonstrably NOT offline, so trust freshness over a transient/stale s_uoff flag.
+			const stationOffline = online ? false : wd?.s_uoff;
+			if (online && wd?.s_uoff) {
+				this.adapter.log.debug(
+					`[diag] station ${stationId}: s_uoff=true but realtime data is fresh → reporting stationOffline=false`,
+				);
+			}
 			await Promise.all([
 				w("info.stationName", details.name || null),
 				w("info.stationId", stationId),
@@ -510,7 +578,7 @@ class CloudPoller {
 				// Income calculations require a price > 0; otherwise skip so we don't create a meaningless 0-state.
 				w("grid.todayIncome", price ? Math.round(toKwh(realtimeData.today_eq) * price * 100) / 100 : null),
 				w("grid.totalIncome", price ? Math.round(toKwh(realtimeData.total_eq) * price * 100) / 100 : null),
-				w("warn.stationOffline", wd?.s_uoff),
+				w("warn.stationOffline", stationOffline),
 				w("warn.gridUnstable", wd?.s_ustable),
 				w("warn.gridFault", wd?.g_warn),
 				w("warn.deviceAlarm", wd?.l3_warn),

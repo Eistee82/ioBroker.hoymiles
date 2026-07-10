@@ -20,7 +20,7 @@ describe("alarmCodes", function () {
 	it('getAlarmDescription returns "Unknown code" for invalid code', function () {
 		assert.strictEqual(getAlarmDescription(99999, "en"), "Unknown code: 99999");
 		assert.strictEqual(getAlarmDescription(0, "en"), "Unknown code: 0");
-		assert.strictEqual(getAlarmDescription(-1, "de"), "Unknown code: -1");
+		assert.strictEqual(getAlarmDescription(-1, "de"), "Unbekannter Code: -1");
 	});
 
 	it("getAlarmDescription defaults to EN when no language specified", function () {

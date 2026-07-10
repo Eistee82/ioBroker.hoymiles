@@ -785,6 +785,12 @@ class CloudConnection {
 		const rawList = result.data?.list ?? [];
 		this.stationDcMap.clear();
 		this.stationAkMap.clear();
+		// SOURCE DISCIPLINE: `select_by_page` is a cached LIST summary — its per-station fields
+		// (`warn_data`, `status`, energy, …) can lag the authoritative detail endpoints. Consume
+		// it ONLY for discovery (`id`/`name`) and routing (`dc`/`ak`). NEVER write state VALUES
+		// from a list entry — those come exclusively from `station/find` (details),
+		// `count_station_real_data` (realtime) and the device tree. (Observed: list `s_uoff=true`
+		// while `station/find` reported `s_uoff=false` for the same station at the same time.)
 		return rawList.map(entry => {
 			// home: id arrives as `sid`. Preserve everything else so future fields stay accessible.
 			const id = typeof entry.id === "number" ? entry.id : typeof entry.sid === "number" ? entry.sid : 0;

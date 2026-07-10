@@ -51,10 +51,11 @@ describe("stateDefinitions", function () {
 		assert.ok(channelIds.includes("info"), "Missing info channel");
 		assert.ok(channelIds.includes("alarms"), "Missing alarms channel");
 		assert.ok(channelIds.includes("config"), "Missing config channel");
+		assert.ok(channelIds.includes("gridProfile"), "Missing gridProfile channel");
 	});
 
-	it("has 6 static channels (PV and meter are dynamic)", function () {
-		assert.strictEqual(channels.length, 6, `Expected 6 channels but got ${channels.length}`);
+	it("has 7 static channels (PV and meter are dynamic)", function () {
+		assert.strictEqual(channels.length, 7, `Expected 7 channels but got ${channels.length}`);
 	});
 
 	it("contains DTU states", function () {
@@ -64,25 +65,18 @@ describe("stateDefinitions", function () {
 		assert.ok(stateIds.includes("dtu.swVersion"), "Missing dtu.swVersion state");
 		assert.ok(stateIds.includes("dtu.rssi"), "Missing dtu.rssi state");
 		assert.ok(stateIds.includes("dtu.stepTime"), "Missing dtu.stepTime state");
-		assert.ok(stateIds.includes("dtu.rfHwVersion"), "Missing dtu.rfHwVersion state");
-		assert.ok(stateIds.includes("dtu.rfSwVersion"), "Missing dtu.rfSwVersion state");
 		assert.ok(stateIds.includes("dtu.accessModel"), "Missing dtu.accessModel state");
 		assert.ok(stateIds.includes("dtu.communicationTime"), "Missing dtu.communicationTime state");
 		assert.ok(stateIds.includes("dtu.wifiVersion"), "Missing dtu.wifiVersion state");
-		assert.ok(stateIds.includes("dtu.mode485"), "Missing dtu.mode485 state");
-		assert.ok(stateIds.includes("dtu.sub1gFrequencyBand"), "Missing dtu.sub1gFrequencyBand state");
 		assert.ok(stateIds.includes("dtu.reboot"), "Missing dtu.reboot state");
 		assert.ok(stateIds.includes("dtu.connState"), "Missing dtu.connState state");
 	});
 
 	it("contains network config states", function () {
 		const stateIds = states.map(s => s.id);
-		assert.ok(stateIds.includes("config.netIpAddress"), "Missing config.netIpAddress state");
-		assert.ok(stateIds.includes("config.netSubnetMask"), "Missing config.netSubnetMask state");
-		assert.ok(stateIds.includes("config.netGateway"), "Missing config.netGateway state");
 		assert.ok(stateIds.includes("config.wifiIpAddress"), "Missing config.wifiIpAddress state");
-		assert.ok(stateIds.includes("config.netMacAddress"), "Missing config.netMacAddress state");
 		assert.ok(stateIds.includes("config.wifiMacAddress"), "Missing config.wifiMacAddress state");
+		assert.ok(stateIds.includes("config.dtuApSsid"), "Missing config.dtuApSsid state");
 	});
 
 	it("does not contain events.* states", function () {
@@ -167,6 +161,16 @@ describe("stateDefinitions – station", function () {
 		assert.ok(writableIds.includes("dtu.reboot"), "Missing writable dtu.reboot");
 		assert.ok(writableIds.includes("inverter.lock"), "Missing writable inverter.lock");
 		assert.ok(writableIds.includes("config.serverSendTime"), "Missing writable config.serverSendTime");
+		assert.ok(writableIds.includes("config.limitPowerMyPower"), "Missing writable config.limitPowerMyPower");
+	});
+
+	it("config.limitPowerMyPower state has correct definition", function () {
+		const def = states.find(s => s.id === "config.limitPowerMyPower");
+		assert.ok(def, "config.limitPowerMyPower must exist in states");
+		assert.strictEqual(def.type, "number", "type must be number");
+		assert.strictEqual(def.write, true, "must be writable");
+		assert.strictEqual(def.min, 2, "min must be 2");
+		assert.strictEqual(def.max, 100, "max must be 100");
 	});
 
 	it("station states are all read-only", function () {

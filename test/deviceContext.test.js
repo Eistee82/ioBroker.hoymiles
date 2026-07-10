@@ -1,6 +1,8 @@
 import assert from "node:assert";
 import DeviceContext, { WRITABLE_STATES } from "../build/lib/deviceContext.js";
 import { COMMANDS } from "../build/lib/commandHandler.js";
+import { ProtobufHandler } from "../build/lib/protobufHandler.js";
+import { byteSwap16 } from "../build/lib/gridProfile.js";
 
 // ============================================================
 // deviceContext – WRITABLE_STATES constant
@@ -17,7 +19,7 @@ describe("deviceContext – WRITABLE_STATES", function () {
 		assert.ok(WRITABLE_STATES.includes("dtu.reboot"));
 		assert.ok(WRITABLE_STATES.includes("inverter.lock"));
 		assert.ok(WRITABLE_STATES.includes("config.serverSendTime"));
-		assert.ok(WRITABLE_STATES.includes("config.zeroExportEnable"));
+		assert.ok(WRITABLE_STATES.includes("config.limitPowerMyPower"));
 	});
 
 	it("all writable states have a matching COMMANDS entry", function () {
@@ -830,9 +832,9 @@ describe("deviceContext – createPvStates", function () {
 		await ctx.createPvStates(2);
 		const newCalls = extendCalls.slice(callsBefore);
 
-		// 2 PV inputs: each gets 1 channel + 5 states (power, voltage, current, dailyEnergy, totalEnergy)
-		// = 2 * (1 + 5) = 12
-		assert.strictEqual(newCalls.length, 12, `Expected 12 extendObject calls, got ${newCalls.length}`);
+		// 2 PV inputs: each gets 1 channel + 6 states (power, voltage, current, dailyEnergy, totalEnergy, errorCode)
+		// = 2 * (1 + 6) = 14
+		assert.strictEqual(newCalls.length, 14, `Expected 14 extendObject calls, got ${newCalls.length}`);
 
 		// Verify channel creation
 		assert.ok(newCalls[0][0].endsWith("pv0"), "First call should create pv0 channel");
@@ -897,8 +899,8 @@ describe("deviceContext – createPvStates", function () {
 		const newCalls = extendCalls.slice(callsBefore);
 
 		// Loop uses this.pvCount (clamped to MAX_PV_PORTS = 6)
-		// 6 PVs × (1 channel + 5 states) = 36 calls
-		assert.strictEqual(newCalls.length, 36, "Should create exactly 36 objects for 6 clamped PV ports");
+		// 6 PVs × (1 channel + 6 states) = 42 calls
+		assert.strictEqual(newCalls.length, 42, "Should create exactly 42 objects for 6 clamped PV ports");
 		assert.strictEqual(ctx["pvCount"], 6, "pvCount should be clamped to 6");
 	});
 });
@@ -1357,6 +1359,9 @@ describe("deviceContext – handleAlarmData", function () {
 				throw new Error("not alarm format");
 			},
 			decodeWarnData: () => ({
+				packageNub: 1,
+				packageNow: 0,
+				warnDevice: 1,
 				warnings: [{ sn: "INV1", code: 2001, num: 1, startTime: 1700000000, endTime: 0, data1: 0, data2: 0 }],
 			}),
 		};
@@ -1379,6 +1384,72 @@ describe("deviceContext – handleAlarmData", function () {
 
 		const countCall = newCalls.find(c => c[0] === "TEST1234.alarms.count");
 		assert.strictEqual(countCall[1], 1);
+	});
+
+	it("accumulates a paginated WarnData list and requests follow-up packages", async function () {
+		const { calls, adapter } = createTrackingAdapter();
+		// Two packages, each with one warning. package_now is 0-based, package_nub = 2.
+		const pages = [
+			{
+				packageNub: 2,
+				packageNow: 0,
+				warnDevice: 1,
+				warnings: [{ sn: "INV1", code: 101, num: 1, startTime: 1700000000, endTime: 0, data1: 0, data2: 0 }],
+			},
+			{
+				packageNub: 2,
+				packageNow: 1,
+				warnDevice: 1,
+				warnings: [{ sn: "INV1", code: 102, num: 2, startTime: 1700000000, endTime: 0, data1: 0, data2: 0 }],
+			},
+		];
+		let decodeCall = 0;
+		const sentRequests = [];
+		const mockProtobuf = {
+			decodeAlarmData: () => {
+				throw new Error("not alarm format");
+			},
+			decodeWarnData: () => pages[decodeCall++],
+			encodeWarnDataRequest: (_ts, packageNow) => {
+				sentRequests.push(packageNow);
+				return Buffer.from([packageNow]);
+			},
+		};
+
+		const ctx = new DeviceContext({
+			adapter,
+			protobuf: mockProtobuf,
+			host: "192.168.1.1",
+			enableLocal: false,
+			enableCloud: false,
+			enableCloudRelay: false,
+			dataInterval: 15,
+			slowPollFactor: 6,
+		});
+		await ctx.initFromSerial("TEST1234");
+		ctx.connection = { connected: true, send: async () => {} };
+
+		// First package: must NOT write states yet, but must request package 1.
+		const before1 = calls.length;
+		await ctx["handleAlarmData"](Buffer.alloc(0));
+		const after1 = calls.slice(before1);
+		assert.ok(
+			!after1.some(c => c[0] === "TEST1234.alarms.count"),
+			"First package must not finalize alarm states yet",
+		);
+		assert.deepStrictEqual(sentRequests, [1], "Must request the next package (index 1)");
+
+		// Second (last) package: now finalize with BOTH warnings merged.
+		const before2 = calls.length;
+		await ctx["handleAlarmData"](Buffer.alloc(0));
+		const after2 = calls.slice(before2);
+		const countCall = after2.find(c => c[0] === "TEST1234.alarms.count");
+		assert.strictEqual(countCall[1], 2, "Both packages' warnings must be present after the last package");
+
+		const jsonCall = after2.find(c => c[0] === "TEST1234.alarms.json");
+		const codes = JSON.parse(jsonCall[1]).map(a => a.code);
+		assert.deepStrictEqual(codes, [101, 102], "Warnings assembled in package order");
+		assert.deepStrictEqual(sentRequests, [1], "Last package must not request a further package");
 	});
 });
 
@@ -1462,12 +1533,14 @@ describe("deviceContext – handleConfigData", function () {
 		const newCalls = calls.slice(callsBefore);
 
 		const stateIds = newCalls.map(c => c[0]);
-		assert.ok(stateIds.includes("TEST1234.inverter.powerLimit"), "Should write inverter.powerLimit");
+		// limitPower from GetConfig is now written as config.limitPowerMyPower (persistent, DTU-stored)
+		// rather than inverter.powerLimit (runtime setpoint) — see handleConfigData change.
+		assert.ok(stateIds.includes("TEST1234.config.limitPowerMyPower"), "Should write config.limitPowerMyPower");
 		assert.ok(stateIds.includes("TEST1234.config.serverDomain"), "Should write config.serverDomain");
 		assert.ok(stateIds.includes("TEST1234.config.wifiSsid"), "Should write config.wifiSsid");
 
-		// powerLimit = 8000 / 10 = 800
-		const powerLimitCall = newCalls.find(c => c[0] === "TEST1234.inverter.powerLimit");
+		// limitPower = 8000 / 10 = 800
+		const powerLimitCall = newCalls.find(c => c[0] === "TEST1234.config.limitPowerMyPower");
 		assert.strictEqual(powerLimitCall[1], 800);
 
 		// cloudServerDomain should be set
@@ -2080,7 +2153,7 @@ describe("deviceContext – createPvStates extended", function () {
 		};
 	}
 
-	it("creates 1 PV input with 5 fields (local mode)", async function () {
+	it("creates 1 PV input with 6 fields (local mode)", async function () {
 		const { extendCalls, adapter } = createTrackingAdapter();
 		const ctx = new DeviceContext({
 			adapter,
@@ -2096,8 +2169,8 @@ describe("deviceContext – createPvStates extended", function () {
 		const callsBefore = extendCalls.length;
 		await ctx.createPvStates(1);
 		const newCalls = extendCalls.slice(callsBefore);
-		// 1 PV: 1 channel + 5 states = 6
-		assert.strictEqual(newCalls.length, 6, `Expected 6 calls for 1 PV, got ${newCalls.length}`);
+		// 1 PV: 1 channel + 6 states = 7
+		assert.strictEqual(newCalls.length, 7, `Expected 7 calls for 1 PV, got ${newCalls.length}`);
 	});
 
 	it("creates 4 PV inputs with correct channel names", async function () {
@@ -2116,8 +2189,8 @@ describe("deviceContext – createPvStates extended", function () {
 		const callsBefore = extendCalls.length;
 		await ctx.createPvStates(4);
 		const newCalls = extendCalls.slice(callsBefore);
-		// 4 PVs * (1 channel + 5 states) = 24
-		assert.strictEqual(newCalls.length, 24, `Expected 24 calls, got ${newCalls.length}`);
+		// 4 PVs * (1 channel + 6 states) = 28
+		assert.strictEqual(newCalls.length, 28, `Expected 28 calls, got ${newCalls.length}`);
 		// Check channel names
 		const channels = newCalls.filter(c => c[1].type === "channel");
 		assert.strictEqual(channels.length, 4);
@@ -3740,9 +3813,15 @@ describe("deviceContext – handleNetworkInfo / handleDevConfigFetch", function 
 			updateConnectionState: async () => {},
 		};
 
+		// Single-package grid profile: CountryStd=768, Version=8193 (big-endian).
 		const mockProtobuf = {
 			getType: () => ({
 				decode: () => ({}),
+				toObject: () => ({
+					data: new Uint8Array([0x03, 0x00, 0x20, 0x01]),
+					currentPackage: 0,
+					totalPackages: 1,
+				}),
 			}),
 		};
 
@@ -3759,8 +3838,8 @@ describe("deviceContext – handleNetworkInfo / handleDevConfigFetch", function 
 
 		ctx["handleDevConfigFetch"](Buffer.alloc(0));
 		assert.ok(
-			debugMsgs.some(m => m.includes("DevConfig")),
-			"Should log DevConfig debug",
+			debugMsgs.some(m => m.includes("grid profile")),
+			"Should log grid profile debug",
 		);
 	});
 
@@ -4711,5 +4790,134 @@ describe("deviceContext – handleHistPower decode error", function () {
 
 		await ctx["handleHistPower"](Buffer.alloc(0));
 		assert.ok(warnMsg.includes("hist decode boom"), "Should log HistPower decode error");
+	});
+});
+
+// ============================================================
+// deviceContext – cloud grid-profile handshake ordering
+// ============================================================
+// The relay must mirror the real DTU's handshake when the cloud reads the grid
+// profile (action 41): ack (0x22 0x05) + status (0x22 0x06) first, then the grid
+// file (0x22 0x0e) ONLY after the cloud acks the status with 0x23 0x06. Sending
+// the file up front makes the cloud display "no data".
+describe("deviceContext – cloud grid-profile handshake ordering", function () {
+	let handler;
+	const RAW_BLOB = Buffer.from([0x03, 0x00, 0x20, 0x00, 0x0a, 0x08]); // even length, big-endian
+	const GRID_DTU_SN = Buffer.from("4143A01CEDE4", "hex"); // raw serial bytes (dtu_sn is bytes)
+	const GRID_DEV_SN = Buffer.from("1412A01CEDE4", "hex"); // raw serial bytes (dev_sn is bytes)
+
+	before(async function () {
+		this.timeout(10000);
+		handler = new ProtobufHandler();
+		await handler.loadProtos();
+	});
+
+	function makeCtx() {
+		const adapter = {
+			log: { info: () => {}, warn: () => {}, debug: () => {}, error: () => {} },
+			setStateAsync: async () => {},
+			extendObjectAsync: async () => {},
+			setInterval: () => undefined,
+			clearInterval: () => {},
+			setTimeout: () => undefined,
+			clearTimeout: () => {},
+			subscribeStates: () => {},
+			unsubscribeStates: () => {},
+			devices: new Map(),
+			matchLocalDeviceToCloud: () => {},
+			onRelayDataSent: () => {},
+			onLocalConnected: () => {},
+			onLocalDisconnected: () => {},
+			onSendTimeUpdated: () => {},
+			updateConnectionState: async () => {},
+		};
+		const sent = [];
+		const ctx = new DeviceContext({
+			adapter,
+			protobuf: handler,
+			host: "192.168.1.1",
+			enableLocal: false,
+			enableCloud: false,
+			enableCloudRelay: true,
+			dataInterval: 15,
+			slowPollFactor: 6,
+		});
+		ctx.cloudRelay = { sendFrame: b => sent.push(b) };
+		ctx.dtuSerial = "4143A01CEDE4";
+		ctx["inverterSn"] = "1412A01CEDE4";
+		ctx["gridBlob"] = Buffer.from(RAW_BLOB);
+		// dtu_sn/dev_sn are echoed verbatim from the local read as raw bytes
+		ctx["gridDtuSn"] = Buffer.from(GRID_DTU_SN);
+		ctx["gridDevSn"] = Buffer.from(GRID_DEV_SN);
+		return { ctx, sent };
+	}
+
+	const tags = sent => sent.map(f => [f[2], f[3]]);
+
+	function actionCmd(action, tid) {
+		const ResDTO = handler.getType("CommandPB", "CommandResDTO");
+		const payload = ResDTO.encode(ResDTO.create({ action, tid })).finish();
+		return { cmdHigh: 0x23, cmdLow: 0x05, seq: 1, payload: Buffer.from(payload) };
+	}
+
+	function statusAck(action, tid) {
+		const StatusRes = handler.getType("CommandPB", "CommandStatusResDTO");
+		const payload = StatusRes.encode(StatusRes.create({ action, tid })).finish();
+		return { cmdHigh: 0x23, cmdLow: 0x06, seq: 2, payload: Buffer.from(payload) };
+	}
+
+	it("on action 41 sends ack (0x22 0x05) + status (0x22 0x06) but NOT the grid file yet", function () {
+		const { ctx, sent } = makeCtx();
+		ctx["handleCloudCommand"](actionCmd(41, 12345));
+		assert.deepStrictEqual(tags(sent), [
+			[0x22, 0x05],
+			[0x22, 0x06],
+		]);
+		assert.ok(
+			!tags(sent).some(([, low]) => low === 0x0e),
+			"grid file (0x22 0x0e) must not be sent before the status-ack",
+		);
+	});
+
+	it("sends the grid file (0x22 0x0e) only after the cloud status-ack (0x23 0x06)", function () {
+		const { ctx, sent } = makeCtx();
+		ctx["handleCloudCommand"](actionCmd(41, 12345));
+		ctx["handleCloudCommand"](statusAck(41, 12345));
+		assert.deepStrictEqual(tags(sent), [
+			[0x22, 0x05],
+			[0x22, 0x06],
+			[0x22, 0x0e],
+		]);
+	});
+
+	it("grid file echoes the command tid, the byte-swapped blob and the raw serial bytes", function () {
+		const { ctx, sent } = makeCtx();
+		ctx["handleCloudCommand"](actionCmd(41, 43981));
+		ctx["handleCloudCommand"](statusAck(41, 43981));
+		const fileFrame = sent.find(f => f[2] === 0x22 && f[3] === 0x0e);
+		assert.ok(fileFrame, "grid file frame present");
+		const parsed = handler.parseResponse(fileFrame);
+		const ReqDTO = handler.getType("DevConfig", "DevConfigFetchReqDTO");
+		const obj = ReqDTO.toObject(ReqDTO.decode(parsed.payload), { longs: Number, defaults: true });
+		assert.strictEqual(Number(obj.transactionId), 43981);
+		assert.deepStrictEqual(Buffer.from(obj.data), byteSwap16(Buffer.from(RAW_BLOB)));
+		// dtu_sn/dev_sn are echoed verbatim as the raw bytes the DTU sent (not ASCII serials)
+		assert.deepStrictEqual(Buffer.from(obj.dtuSn), GRID_DTU_SN);
+		assert.deepStrictEqual(Buffer.from(obj.devSn), GRID_DEV_SN);
+	});
+
+	it("does not upload the grid file when the DTU serials were not cached", function () {
+		const { ctx, sent } = makeCtx();
+		ctx["gridDtuSn"] = null;
+		ctx["gridDevSn"] = null;
+		ctx["handleCloudCommand"](actionCmd(41, 7));
+		ctx["handleCloudCommand"](statusAck(41, 7));
+		assert.ok(!sent.some(f => f[2] === 0x22 && f[3] === 0x0e), "no grid file without cached serials");
+	});
+
+	it("ignores a stray status-ack when no grid-profile read is pending", function () {
+		const { ctx, sent } = makeCtx();
+		ctx["handleCloudCommand"](statusAck(41, 999));
+		assert.strictEqual(sent.length, 0);
 	});
 });
