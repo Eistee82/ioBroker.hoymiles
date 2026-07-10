@@ -261,7 +261,7 @@ class CloudPoller {
                 await this.pollFirmwareStatus(stationId);
             }
         }
-        await this.pollDevicesAndInverters(stationId, slowPoll);
+        await this.pollDevicesAndInverters(stationId, slowPoll, online);
         this.adapter.log.debug(`Cloud data (station ${stationId}): ${data.real_power}W, today=${toKwh(data.today_eq).toFixed(2)}kWh, total=${toKwh(data.total_eq).toFixed(2)}kWh, online=${online}`);
     }
     isStationFresh(stationId, dataTime) {
@@ -363,7 +363,7 @@ class CloudPoller {
             this.adapter.log.debug(`Cloud station details failed for ${stationId}: ${errorMessage(err)}`);
         }
     }
-    async pollDevicesAndInverters(stationId, isSlowPoll) {
+    async pollDevicesAndInverters(stationId, isSlowPoll, online) {
         let hasCloudOnlyDtus = false;
         for (const d of this.devices.values()) {
             if (d.cloudStationId === stationId && d.dtuSerial && !d.connection?.connected) {
@@ -384,7 +384,7 @@ class CloudPoller {
         if (isSlowPoll && deviceTree.length > 0) {
             await this.updateDeviceVersions(deviceTree);
         }
-        await this.pollInverterRealtimeData(stationId, deviceTree);
+        await this.pollInverterRealtimeData(stationId, deviceTree, online);
     }
     async updateCloudConnectedStates(deviceTree) {
         for (const dtu of deviceTree) {
@@ -433,7 +433,7 @@ class CloudPoller {
             await Promise.all(writes);
         }
     }
-    async pollInverterRealtimeData(stationId, deviceTree) {
+    async pollInverterRealtimeData(stationId, deviceTree, online) {
         if (deviceTree.length === 0) {
             return;
         }
@@ -469,7 +469,8 @@ class CloudPoller {
             try {
                 this.lastRealtimeFetch.set(sn, now);
                 const s = this.boundSetState;
-                const cs = (id, val) => s(id, { val, ack: true, q: 0x40 }).then(() => { });
+                const q = online ? 0x00 : 0x42;
+                const cs = (id, val) => s(id, { val, ack: true, q }).then(() => { });
                 const values = await this.cloud.getMicroRealtimeData(stationId, microIds, today, [
                     "MI_POWER",
                     "MI_NET_V",

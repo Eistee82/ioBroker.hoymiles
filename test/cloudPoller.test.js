@@ -807,6 +807,60 @@ describe("CloudPoller – pollDevicesAndInverters", function () {
 		poller.stop();
 	});
 
+	it("writes per-inverter cloud values with quality 0x00 when the station is fresh and 0x42 when stale", async function () {
+		const run = async dataTime => {
+			const writes = {};
+			const cloud = makeMockCloud();
+			cloud.ensureToken = async () => {};
+			cloud.getStationRealtime = async () => ({
+				real_power: "200",
+				today_eq: "0",
+				month_eq: "0",
+				year_eq: "0",
+				total_eq: "0",
+				co2_emission_reduction: "0",
+				plant_tree: "0",
+				data_time: dataTime,
+			});
+			cloud.getStationDetails = async () => ({});
+			cloud.getDeviceTree = async () => [
+				{
+					sn: "DTU_SN_1",
+					id: 10,
+					children: [{ sn: "INV_SN_1", id: 100, model_no: "HMS-800W-2T", warn_data: { connect: true } }],
+				},
+			];
+			cloud.getMicroRealtimeData = async () => ({ MI_NET_V: 230 });
+			cloud.getModuleRealtimeData = async () => ({});
+
+			const adapter = makeMockAdapter();
+			adapter.setStateAsync = async (id, val) => {
+				writes[id] = val;
+			};
+			const devices = new Map();
+			devices.set("DTU_SN_1", {
+				dtuSerial: "DTU_SN_1",
+				cloudStationId: 42,
+				connection: null,
+				burstActive: false,
+				pvStatesCreated: true,
+				pvCount: 2,
+				createPvStates: async () => {},
+			});
+			const poller = makePoller({ cloud, adapter, devices, stationDevices: new Set([42]), slowPollFactor: 1 });
+			await poller.poll();
+			poller.stop();
+			return writes;
+		};
+
+		// No data_time → treated as fresh → good quality.
+		const fresh = await run(undefined);
+		assert.strictEqual(fresh["DTU_SN_1.grid.voltage"].q, 0x00);
+		// Very old upload → stale → device-not-connected quality.
+		const stale = await run("2020-01-01 00:00:00");
+		assert.strictEqual(stale["DTU_SN_1.grid.voltage"].q, 0x42);
+	});
+
 	it("skips locally connected DTUs in pollInverterRealtimeData", async function () {
 		const microCalls = [];
 		const cloud = makeMockCloud();

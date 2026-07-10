@@ -427,7 +427,7 @@ class CloudPoller {
 		}
 
 		// Device tree + per-inverter data
-		await this.pollDevicesAndInverters(stationId, slowPoll);
+		await this.pollDevicesAndInverters(stationId, slowPoll, online);
 
 		this.adapter.log.debug(
 			`Cloud data (station ${stationId}): ${data.real_power}W, today=${toKwh(data.today_eq).toFixed(2)}kWh, total=${toKwh(data.total_eq).toFixed(2)}kWh, online=${online}`,
@@ -591,7 +591,7 @@ class CloudPoller {
 		}
 	}
 
-	private async pollDevicesAndInverters(stationId: number, isSlowPoll: boolean): Promise<void> {
+	private async pollDevicesAndInverters(stationId: number, isSlowPoll: boolean, online: boolean): Promise<void> {
 		let hasCloudOnlyDtus = false;
 		for (const d of this.devices.values()) {
 			if (d.cloudStationId === stationId && d.dtuSerial && !d.connection?.connected) {
@@ -618,7 +618,7 @@ class CloudPoller {
 		}
 
 		// Per-inverter + per-PV realtime data
-		await this.pollInverterRealtimeData(stationId, deviceTree);
+		await this.pollInverterRealtimeData(stationId, deviceTree, online);
 	}
 
 	/**
@@ -704,6 +704,7 @@ class CloudPoller {
 	private async pollInverterRealtimeData(
 		stationId: number,
 		deviceTree: Awaited<ReturnType<CloudConnection["getDeviceTree"]>>,
+		online: boolean,
 	): Promise<void> {
 		if (deviceTree.length === 0) {
 			return;
@@ -757,9 +758,12 @@ class CloudPoller {
 			try {
 				this.lastRealtimeFetch.set(sn, now);
 				const s = this.boundSetState;
-				// Cloud-sourced data states use q=0x40 (substitute value from device/instance)
+				// Fresh cloud values are good (0x00); when the station's last upload is stale they
+				// are flagged 0x42 (device not connected) so consumers can tell the last reading is
+				// frozen — same semantics as the station-level states.
+				const q: ioBroker.STATE_QUALITY[keyof ioBroker.STATE_QUALITY] = online ? 0x00 : 0x42;
 				const cs = (id: string, val: ioBroker.StateValue): Promise<void> =>
-					s(id, { val, ack: true, q: 0x40 }).then(() => {});
+					s(id, { val, ack: true, q }).then(() => {});
 
 				// Inverter-level metrics
 				const values = await this.cloud.getMicroRealtimeData(stationId, microIds, today, [
