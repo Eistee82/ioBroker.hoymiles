@@ -60,6 +60,49 @@ Login is a single v3 flow followed by a profile probe (`region_c → pre-insp �
 
 When in doubt, click the **Test cloud login** button next to the password field. It runs the four phases once with your current credentials (`region_c`, `pre-insp`, `login`, `probe`) and reports `v` and salt presence from pre-insp, whether the login produced a token, and which profile the probe assigned (`installer` / `home`). The result is logged so you can paste it into a forum bug report. The test does not store a token or change adapter state.
 
+## Redirect Inverter to ioBroker
+
+Newer inverters with an integrated WiFi DTU (e.g. **HMS-800-2WB**) no longer open a local TCP port — their only local channel is Bluetooth LE, and all data goes straight to the Hoymiles cloud. To read their realtime data (and later control them) locally, the adapter can act as a **relay server**: you redirect the inverter's cloud upload to ioBroker, and the adapter forwards every packet 1:1 to the real Hoymiles cloud while reading a copy. The cloud portal and the S-Miles app keep working unchanged.
+
+There are two independent local paths — pick the one your hardware supports:
+
+| Inverter | Local channel | Use |
+| --- | --- | --- |
+| Older HMS-*-*T (open TCP port 10081) | direct TCP | **Local Connection (TCP)** above |
+| HMS-800-2WB & newer (BLE only, no TCP) | redirect to ioBroker | **this section** |
+
+### 1. Enable the relay server in the adapter
+
+In the adapter settings (Cloud tab), enable **Relay server (redirect inverter to ioBroker)** and set:
+
+- **Relay server port** — the TCP port the adapter listens on (default `10081`). You enter exactly this port in the inverter later.
+- **Hoymiles target server** — the regional cloud server the relay forwards to. This **must** be your account's region (e.g. `dataeu.hoymiles.com` for Europe), otherwise the cloud/app stop receiving data.
+- **Hoymiles target port** — default `10081`.
+
+Make sure the ioBroker host is reachable from the inverter's network and the chosen port is not blocked by a firewall.
+
+### 2. Redirect the inverter with the web tool
+
+The redirect itself is done over Bluetooth with a small browser tool — no app install:
+
+**[Open the redirect tool →](https://eistee82.github.io/ioBroker.hoymiles/app/)** (or scan the QR code shown in the adapter settings with your phone)
+
+> **Important:** the tool uses **Web Bluetooth**, which only works in **Chrome / Edge on Android or a desktop**. **iOS / Safari is not supported** (Apple does not implement Web Bluetooth). Use an Android phone or a laptop in Bluetooth range of the inverter.
+
+Steps in the tool:
+
+1. Tap **Connect** and pick your inverter (name starts with `RMI-…` / `HMS-…`).
+2. Enter the inverter's **Bluetooth PIN** (the one you set during setup in the S-Miles app; factory default is `123456` if never changed). The tool never stores it.
+3. Once paired, the live data appears (AC power, grid voltage/frequency, temperature, per-string PV values).
+4. In the **Server** section, choose **Custom address** and enter the **ioBroker IP** and the **relay server port** from step 1. Save.
+5. The inverter now uploads to ioBroker. Within a few minutes the adapter starts filling the `<dtuSerial>.*` states.
+
+### 3. Restore the factory server
+
+The tool remembers each inverter's original Hoymiles server (per serial number) the first time you connect. To undo the redirect, open the tool, connect, and pick the entry marked **"device default"** in the server list (or select the matching regional server), then save.
+
+The web tool also works standalone as a **local live-data viewer** for any supported inverter, without redirecting anything.
+
 ## Connection Modes
 
 The adapter supports several connection modes depending on the configuration:
