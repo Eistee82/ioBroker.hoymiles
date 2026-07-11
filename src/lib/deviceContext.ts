@@ -1262,9 +1262,13 @@ class DeviceContext {
 			if (!this.deviceId && info.dtuSn) {
 				const existing = this.adapter.devices.get(info.dtuSn);
 				if (existing && existing !== this) {
-					if (!existing.enableLocal && this.enableLocal) {
-						// Cloud-only context exists — local takes over
-						this.adapter.log.info(`[${this.host}] Taking over cloud-only device for SN ${info.dtuSn}`);
+					// A live local TCP connection takes over any context that has no live local socket —
+					// cloud-only (enableLocal:false) OR relay-fed (enableLocal:true but host:"" / no socket).
+					// Only a genuinely-connected local peer for the same serial is a real duplicate.
+					if (!existing.connection?.connected && this.enableLocal) {
+						this.adapter.log.info(
+							`[${this.host}] Taking over socket-less device context for SN ${info.dtuSn}`,
+						);
 						this.cloudStationId = existing.cloudStationId;
 						this.adapter.devices.delete(info.dtuSn);
 					} else {

@@ -790,8 +790,8 @@ class DeviceContext {
             if (!this.deviceId && info.dtuSn) {
                 const existing = this.adapter.devices.get(info.dtuSn);
                 if (existing && existing !== this) {
-                    if (!existing.enableLocal && this.enableLocal) {
-                        this.adapter.log.info(`[${this.host}] Taking over cloud-only device for SN ${info.dtuSn}`);
+                    if (!existing.connection?.connected && this.enableLocal) {
+                        this.adapter.log.info(`[${this.host}] Taking over socket-less device context for SN ${info.dtuSn}`);
                         this.cloudStationId = existing.cloudStationId;
                         this.adapter.devices.delete(info.dtuSn);
                     }
