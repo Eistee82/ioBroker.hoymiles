@@ -27,6 +27,25 @@ export const CLOUD_DEFAULT_REALDATA_INTERVAL_MS = 300000;
 export const CLOUD_MIN_REALDATA_INTERVAL_MS = 60000;
 export const ENSURE_TOKEN_TIMEOUT_MS = 30000;
 
+// Relay server (for redirected DTUs with no local TCP port, e.g. HMS-800-2WB)
+/** Default listen port for the relay server — matches the port the DTU normally dials out to. */
+export const RELAY_SERVER_DEFAULT_PORT = 10081;
+/**
+ * Default upstream cloud port the relay server forwards to. Verified via packet capture
+ * (see reference_grid_profile_cloud_protocol memory) — dataeu.hoymiles.com listens on 10081,
+ * not the 10083 sometimes quoted informally.
+ */
+export const RELAY_SERVER_DEFAULT_CLOUD_PORT = 10081;
+/** Per-session sniff buffer guard — matches DtuConnection's local receive-buffer cap. */
+export const RELAY_SERVER_MAX_BUFFER_SIZE = 131072;
+/**
+ * No traffic at all (either direction) for this long ⇒ treat the session as dead and force a
+ * reconnect. The cloud protocol's own cadence is ~60s (heartbeat + realdata poll), so this
+ * tolerates a couple of missed cycles before declaring the data stale — mirrors
+ * `CLOUD_STATION_STALE_MS`'s "tolerate a few misses" reasoning for the REST poll path.
+ */
+export const RELAY_SERVER_IDLE_TIMEOUT_MS = 180000; // 3min
+
 // Protobuf protocol
 export const DTU_TIME_OFFSET = 28800; // 8h in seconds
 export const MIN_PROTOBUF_PAYLOAD_SIZE = 4;

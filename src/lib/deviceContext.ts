@@ -1,6 +1,12 @@
 import DtuConnection from "./dtuConnection.js";
 import CloudRelay from "./cloudRelay.js";
-import { type ProtobufHandler, formatDtuVersion, formatSwVersion, formatInvVersion } from "./protobufHandler.js";
+import {
+	type ProtobufHandler,
+	type RealDataResult,
+	formatDtuVersion,
+	formatSwVersion,
+	formatInvVersion,
+} from "./protobufHandler.js";
 import { executeCommand } from "./commandHandler.js";
 import Encryption from "./encryption.js";
 import { channels, states } from "./stateDefinitions.js";
@@ -1110,7 +1116,24 @@ class DeviceContext {
 			this.adapter.log.debug(
 				`[${this.deviceId || this.host}] RealData: power=${data.dtuPower}W, dailyEnergy=${data.dtuDailyEnergy}, sgs=${data.sgs.length}, pv=${data.pv.length}, meter=${data.meter.length}`,
 			);
+			await this.applyRealData(data);
+		} catch (err) {
+			this.adapter.log.warn(`[${this.deviceId || this.host}] Error decoding RealData: ${errorMessage(err)}`);
+		}
+	}
 
+	/**
+	 * Write RealData-derived states from an already-decoded result. Extracted from
+	 * {@link handleRealData} so the same mapping logic can be fed by the local poll-response
+	 * handler AND by relay-server-sniffed cloud RealData frames (`0x22 0x0c`/`0x0d`) for
+	 * inverters redirected to our relay (e.g. HMS-800-2WB, which has no local TCP port) —
+	 * the payload shape is identical (RealDataNewReqDTO) either way, only the wire framing
+	 * differs. Callers are responsible for catching decode errors before calling this.
+	 *
+	 * @param data - Decoded RealData result
+	 */
+	async applyRealData(data: RealDataResult): Promise<void> {
+		try {
 			const entries: Array<[string, ioBroker.StateValue]> = [
 				["info.lastResponse", unixSeconds()],
 				["inverter.active", data.sgs.length > 0 && data.dtuPower > 0],
@@ -1186,8 +1209,36 @@ class DeviceContext {
 
 			await this.setStates(entries, true);
 		} catch (err) {
-			this.adapter.log.warn(`[${this.deviceId || this.host}] Error decoding RealData: ${errorMessage(err)}`);
+			this.adapter.log.warn(`[${this.deviceId || this.host}] Error applying RealData: ${errorMessage(err)}`);
 		}
+	}
+
+	/**
+	 * Mark this device as actively receiving data again via a relay-server session (the
+	 * redirected inverter — e.g. HMS-800-2WB — (re)connected to our relay). Resets any
+	 * q=0x42-marked cache entries so the next relay-fed write isn't suppressed as a no-op
+	 * duplicate (mirrors the local-connection {@link onConnected} cache reset), and flips
+	 * `info.connected`. Quality reflects data freshness, not source — same convention as
+	 * the local TCP path.
+	 */
+	async markRelaySessionActive(): Promise<void> {
+		for (const [, cached] of this.stateCache) {
+			if (cached.q === DeviceContext.Q_DEVICE_DISCONNECTED) {
+				cached.q = 0;
+			}
+		}
+		await this.setState("info.connected", true, true);
+	}
+
+	/**
+	 * Mark this device's data states as disconnected (q=0x42) because its relay-server
+	 * session ended — the redirected inverter dropped its connection to our relay, or the
+	 * relay's upstream connection to the real cloud died. Mirrors the local TCP disconnect
+	 * path ({@link markStatesDisconnected}); quality reflects freshness, not source.
+	 */
+	async markRelaySessionLost(): Promise<void> {
+		await this.setState("info.connected", false, true);
+		await this.markStatesDisconnected();
 	}
 
 	private async handleInfoData(payload: Buffer): Promise<void> {

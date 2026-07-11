@@ -783,6 +783,113 @@ describe("deviceContext – markStatesDisconnected", function () {
 });
 
 // ============================================================
+// deviceContext – markRelaySessionActive / markRelaySessionLost
+// (relay-server session quality tracking — see src/lib/relayServer.ts)
+// ============================================================
+describe("deviceContext – markRelaySessionActive / markRelaySessionLost", function () {
+	function createTrackingAdapter() {
+		const calls = [];
+		return {
+			calls,
+			adapter: {
+				log: { info: () => {}, warn: () => {}, debug: () => {}, error: () => {} },
+				setStateAsync: async (...args) => {
+					calls.push(args);
+				},
+				extendObjectAsync: async () => {},
+				setObjectNotExistsAsync: async () => {},
+				getStateAsync: async () => null,
+				setInterval: () => undefined,
+				clearInterval: () => {},
+				setTimeout: () => undefined,
+				clearTimeout: () => {},
+				subscribeStates: () => {},
+				unsubscribeStates: () => {},
+				devices: new Map(),
+				matchLocalDeviceToCloud: () => {},
+				onRelayDataSent: () => {},
+				onLocalConnected: () => {},
+				onLocalDisconnected: () => {},
+				onSendTimeUpdated: () => {},
+				updateConnectionState: async () => {},
+			},
+		};
+	}
+
+	async function createReadyCtx(adapter) {
+		const ctx = new DeviceContext({
+			adapter,
+			protobuf: null,
+			host: "",
+			enableLocal: true,
+			enableCloud: false,
+			enableCloudRelay: false,
+			dataInterval: 15,
+			slowPollFactor: 6,
+		});
+		await ctx.initFromSerial("RELAY1234");
+		return ctx;
+	}
+
+	it("markRelaySessionLost sets info.connected=false and marks data states q=0x42", async function () {
+		const { calls, adapter } = createTrackingAdapter();
+		const ctx = await createReadyCtx(adapter);
+		await ctx["setState"]("grid.power", 300, true);
+
+		const callsBefore = calls.length;
+		await ctx.markRelaySessionLost();
+		const newCalls = calls.slice(callsBefore);
+
+		const connectedCall = newCalls.find(c => c[0] === "RELAY1234.info.connected");
+		assert.ok(connectedCall, "should write info.connected");
+		assert.strictEqual(connectedCall[1], false);
+
+		const gridPowerCall = newCalls.find(c => c[0] === "RELAY1234.grid.power");
+		assert.ok(gridPowerCall, "should mark grid.power as disconnected");
+		assert.strictEqual(gridPowerCall[1].q, 0x42);
+	});
+
+	it("markRelaySessionActive sets info.connected=true", async function () {
+		const { calls, adapter } = createTrackingAdapter();
+		const ctx = await createReadyCtx(adapter);
+
+		const callsBefore = calls.length;
+		await ctx.markRelaySessionActive();
+		const newCalls = calls.slice(callsBefore);
+
+		assert.strictEqual(newCalls.length, 1);
+		assert.strictEqual(newCalls[0][0], "RELAY1234.info.connected");
+		assert.strictEqual(newCalls[0][1], true);
+	});
+
+	it("markRelaySessionActive resets cached q=0x42 entries back to q=0x00 (mirrors local onConnected)", async function () {
+		const { adapter } = createTrackingAdapter();
+		const ctx = await createReadyCtx(adapter);
+		await ctx["setState"]("grid.power", 300, true);
+		await ctx.markRelaySessionLost(); // caches grid.power at q=0x42
+		assert.strictEqual(ctx["stateCache"].get("grid.power").q, 0x42);
+
+		await ctx.markRelaySessionActive();
+		assert.strictEqual(
+			ctx["stateCache"].get("grid.power").q,
+			0,
+			"cache quality should be reset for the next fresh write",
+		);
+	});
+
+	it("markRelaySessionLost is a no-op beyond info.connected when no data states were cached", async function () {
+		const { calls, adapter } = createTrackingAdapter();
+		const ctx = await createReadyCtx(adapter);
+
+		const callsBefore = calls.length;
+		await ctx.markRelaySessionLost();
+		const newCalls = calls.slice(callsBefore);
+		assert.strictEqual(newCalls.length, 1, "only info.connected should be written");
+		assert.strictEqual(newCalls[0][0], "RELAY1234.info.connected");
+	});
+});
+
+// ============================================================
 // deviceContext – createPvStates
 // ============================================================
 describe("deviceContext – createPvStates", function () {
