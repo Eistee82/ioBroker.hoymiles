@@ -4,16 +4,20 @@ import CloudManager from "./lib/cloudManager.js";
 import CloudConnection from "./lib/cloudConnection.js";
 import DeviceContext from "./lib/deviceContext.js";
 import { ProtobufHandler } from "./lib/protobufHandler.js";
+import RelayServer from "./lib/relayServer.js";
 import { discoverDtus, probeHost } from "./lib/networkDiscovery.js";
 import { destroyAgent } from "./lib/httpClient.js";
-import { DISCOVERY_CONCURRENCY, DISCOVERY_TIMEOUT_MS, PROBE_TIMEOUT_MS, UNLOAD_TIMEOUT_MS } from "./lib/constants.js";
+import { DISCOVERY_CONCURRENCY, DISCOVERY_TIMEOUT_MS, PROBE_TIMEOUT_MS, UNLOAD_TIMEOUT_MS, RELAY_SERVER_DEFAULT_PORT, RELAY_SERVER_DEFAULT_CLOUD_PORT, } from "./lib/constants.js";
 import { anonymize, errorMessage, mapLimit } from "./lib/utils.js";
 class Hoymiles extends utils.Adapter {
     devices;
     localContexts;
     cloudManager;
+    relayServer;
     sharedProtobuf;
     lastConnectionState;
+    dataInterval;
+    slowPollFactor;
     constructor(options = {}) {
         super({ ...options, name: "hoymiles" });
         this.on("ready", this.onReady.bind(this));
@@ -23,14 +27,18 @@ class Hoymiles extends utils.Adapter {
         this.devices = new Map();
         this.localContexts = [];
         this.cloudManager = null;
+        this.relayServer = null;
+        this.dataInterval = 5;
+        this.slowPollFactor = 6;
         this.sharedProtobuf = null;
     }
     async onReady() {
         const cfg = this.config;
         const enableLocal = cfg.enableLocal !== false;
         const enableCloud = cfg.enableCloud === true;
-        if (!enableLocal && !enableCloud) {
-            this.log.error("Neither local nor cloud connection is enabled. Please enable at least one in the adapter settings.");
+        const enableRelayServer = cfg.enableRelayServer === true;
+        if (!enableLocal && !enableCloud && !enableRelayServer) {
+            this.log.error("Neither local, cloud, nor relay-server connection is enabled. Please enable at least one in the adapter settings.");
             return;
         }
         await this.migrateConfig(cfg);
@@ -40,6 +48,8 @@ class Hoymiles extends utils.Adapter {
         const slowPollFactor = Number.isNaN(rawSlowPoll) || rawSlowPoll < 1 ? 6 : rawSlowPoll;
         const enableCloudRelay = cfg.enableCloudRelay !== false;
         const enableRealtimeBurst = cfg.enableRealtimeBurst !== false;
+        this.dataInterval = dataInterval;
+        this.slowPollFactor = slowPollFactor;
         this.sharedProtobuf = new ProtobufHandler();
         try {
             await this.sharedProtobuf.loadProtos();
@@ -112,7 +122,91 @@ class Hoymiles extends utils.Adapter {
                 }
             }
         }
+        if (enableRelayServer) {
+            this.startRelayServer(cfg);
+        }
         await this.updateConnectionState();
+    }
+    startRelayServer(cfg) {
+        const cloudHost = (cfg.relayCloudServer || "").trim();
+        if (!cloudHost) {
+            this.log.warn("Relay server enabled but no upstream cloud host configured — not starting.");
+            return;
+        }
+        if (!this.sharedProtobuf) {
+            this.log.warn("Relay server enabled but protobuf definitions are unavailable — not starting.");
+            return;
+        }
+        const port = Number(cfg.relayServerPort) > 0 ? Number(cfg.relayServerPort) : RELAY_SERVER_DEFAULT_PORT;
+        const cloudPort = Number(cfg.relayCloudPort) > 0 ? Number(cfg.relayCloudPort) : RELAY_SERVER_DEFAULT_CLOUD_PORT;
+        const relay = new RelayServer(this.sharedProtobuf, msg => this.log.debug(`Relay server: ${msg}`));
+        relay.on("listening", (listenPort) => {
+            this.log.info(`Relay server listening on port ${listenPort}, forwarding to ${cloudHost}:${cloudPort}`);
+        });
+        relay.on("connection", (evt) => {
+            this.log.info(`Relay server: connection from ${evt.remoteAddress} (session ${evt.sessionId})`);
+        });
+        relay.on("deviceIdentified", (evt) => {
+            void this.onRelayDeviceIdentified(evt.dtuSn).catch(err => this.log.warn(`Relay server: device identification failed for ${evt.dtuSn}: ${errorMessage(err)}`));
+        });
+        relay.on("realData", (evt) => {
+            if (!evt.data || !evt.dtuSn) {
+                return;
+            }
+            const ctx = this.devices.get(evt.dtuSn);
+            if (!ctx) {
+                this.log.debug(`Relay server: RealData for unmatched DTU ${evt.dtuSn} (no device registered yet)`);
+                return;
+            }
+            void ctx
+                .applyRealData(evt.data)
+                .catch(err => this.log.warn(`Relay server: applyRealData failed for ${evt.dtuSn}: ${errorMessage(err)}`));
+        });
+        relay.on("disconnection", (evt) => {
+            this.log.info(`Relay server: session ${evt.sessionId} ended (${evt.reason})`);
+            if (!evt.dtuSn) {
+                return;
+            }
+            const ctx = this.devices.get(evt.dtuSn);
+            if (ctx) {
+                void ctx
+                    .markRelaySessionLost()
+                    .catch(err => this.log.warn(`Relay server: markRelaySessionLost failed for ${evt.dtuSn}: ${errorMessage(err)}`));
+            }
+        });
+        relay.on("command", (evt) => {
+            this.log.debug(`Relay server: [diag] ${evt.direction} command 0x${evt.cmdHigh.toString(16)} 0x${evt.cmdLow.toString(16)} (dtu=${evt.dtuSn || "?"}, ${evt.payload.length}B)`);
+        });
+        relay.on("error", (err) => {
+            this.log.warn(`Relay server: ${errorMessage(err)}`);
+        });
+        relay.start(port, cloudHost, cloudPort);
+        this.relayServer = relay;
+    }
+    async onRelayDeviceIdentified(dtuSn) {
+        if (!dtuSn) {
+            return;
+        }
+        let ctx = this.devices.get(dtuSn);
+        if (!ctx) {
+            if (!this.sharedProtobuf) {
+                return;
+            }
+            ctx = new DeviceContext({
+                adapter: this,
+                protobuf: this.sharedProtobuf,
+                host: "",
+                enableLocal: true,
+                enableCloud: false,
+                enableCloudRelay: false,
+                dataInterval: this.dataInterval,
+                slowPollFactor: this.slowPollFactor,
+            });
+            await ctx.initFromSerial(dtuSn);
+            this.devices.set(dtuSn, ctx);
+            this.log.info(`Relay server: created device for redirected DTU ${dtuSn}`);
+        }
+        await ctx.markRelaySessionActive();
     }
     async migrateConfig(cfg) {
         if (cfg.host && !cfg.devices) {
@@ -385,6 +479,23 @@ class Hoymiles extends utils.Adapter {
             }
             catch (err) {
                 this.log.warn(`CloudManager stop error: ${errorMessage(err)}`);
+            }
+            try {
+                if (this.relayServer) {
+                    this.relayServer.stop();
+                    this.relayServer = null;
+                }
+            }
+            catch (err) {
+                this.log.warn(`RelayServer stop error: ${errorMessage(err)}`);
+            }
+            for (const ctx of this.devices.values()) {
+                try {
+                    ctx.disconnect();
+                }
+                catch (err) {
+                    this.log.warn(`Device disconnect error: ${errorMessage(err)}`);
+                }
             }
             this.devices.clear();
             this.sharedProtobuf = null;

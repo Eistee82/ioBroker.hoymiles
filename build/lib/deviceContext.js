@@ -1,6 +1,6 @@
 import DtuConnection from "./dtuConnection.js";
 import CloudRelay from "./cloudRelay.js";
-import { formatDtuVersion, formatSwVersion, formatInvVersion } from "./protobufHandler.js";
+import { formatDtuVersion, formatSwVersion, formatInvVersion, } from "./protobufHandler.js";
 import { executeCommand } from "./commandHandler.js";
 import Encryption from "./encryption.js";
 import { channels, states } from "./stateDefinitions.js";
@@ -729,6 +729,14 @@ class DeviceContext {
         try {
             const data = this.protobuf.decodeRealDataNew(payload);
             this.adapter.log.debug(`[${this.deviceId || this.host}] RealData: power=${data.dtuPower}W, dailyEnergy=${data.dtuDailyEnergy}, sgs=${data.sgs.length}, pv=${data.pv.length}, meter=${data.meter.length}`);
+            await this.applyRealData(data);
+        }
+        catch (err) {
+            this.adapter.log.warn(`[${this.deviceId || this.host}] Error decoding RealData: ${errorMessage(err)}`);
+        }
+    }
+    async applyRealData(data) {
+        try {
             const entries = [
                 ["info.lastResponse", unixSeconds()],
                 ["inverter.active", data.sgs.length > 0 && data.dtuPower > 0],
@@ -759,8 +767,20 @@ class DeviceContext {
             await this.setStates(entries, true);
         }
         catch (err) {
-            this.adapter.log.warn(`[${this.deviceId || this.host}] Error decoding RealData: ${errorMessage(err)}`);
+            this.adapter.log.warn(`[${this.deviceId || this.host}] Error applying RealData: ${errorMessage(err)}`);
         }
+    }
+    async markRelaySessionActive() {
+        for (const [, cached] of this.stateCache) {
+            if (cached.q === DeviceContext.Q_DEVICE_DISCONNECTED) {
+                cached.q = 0;
+            }
+        }
+        await this.setState("info.connected", true, true);
+    }
+    async markRelaySessionLost() {
+        await this.setState("info.connected", false, true);
+        await this.markStatesDisconnected();
     }
     async handleInfoData(payload) {
         try {
