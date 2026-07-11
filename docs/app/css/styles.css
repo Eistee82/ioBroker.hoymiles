@@ -1,0 +1,735 @@
+/* styles.css — HMS-800-2WB BLE tool.
+   Design direction: an instrument panel, not a dashboard template. This is a diagnostic tool that
+   reads a physical inverter's own display over Bluetooth, so the surface borrows straight from
+   that world — PCB solder-mask panels, copper-trace borders, screw-terminal cards for the two PV
+   strings, and a phosphor/7-segment-style amber readout for the number that matters most: AC
+   power. Two independent crypto paths, one visual language.
+*/
+
+/* ---------- tokens ---------- */
+:root {
+  color-scheme: dark;
+  --pcb: #0c1712;
+  --pcb-elev: #142821;
+  --pcb-elev-2: #1c352b;
+  --silk: #eef4ec;
+  --silk-dim: #93ab9d;
+  --copper: #cf8e54;
+  --copper-dim: #8a6440;
+  --phosphor: #ffb703;
+  --phosphor-glow: rgba(255, 183, 3, 0.5);
+  --probe: #6bd3e0;
+  --led-green: #5fd68a;
+  --led-amber: #ffcf5c;
+  --led-red: #ff6b6b;
+  --border: rgba(238, 244, 236, 0.12);
+  --border-strong: rgba(238, 244, 236, 0.22);
+  --shadow: rgba(0, 0, 0, 0.55);
+  --danger-bg: rgba(255, 107, 107, 0.12);
+  --good-bg: rgba(95, 214, 138, 0.12);
+  --warn-bg: rgba(255, 207, 92, 0.12);
+
+  --font-display: -apple-system, "Segoe UI", Roboto, system-ui, sans-serif;
+  --font-mono: ui-monospace, "Cascadia Mono", "SFMono-Regular", Menlo, Consolas, "Liberation Mono", monospace;
+
+  --radius: 14px;
+  --radius-sm: 8px;
+  --gap: 14px;
+}
+
+:root[data-theme="light"] {
+  color-scheme: light;
+  --pcb: #eef1ea;
+  --pcb-elev: #ffffff;
+  --pcb-elev-2: #e3e9de;
+  --silk: #17251b;
+  --silk-dim: #4b5c50;
+  --copper: #a15a26;
+  --copper-dim: #c9834a;
+  --phosphor: #a3620a;
+  --phosphor-glow: rgba(163, 98, 10, 0.28);
+  --probe: #0f7c8c;
+  --led-green: #1f9d55;
+  --led-amber: #a8790c;
+  --led-red: #c8433a;
+  --border: rgba(23, 37, 27, 0.14);
+  --border-strong: rgba(23, 37, 27, 0.26);
+  --shadow: rgba(30, 40, 32, 0.14);
+  --danger-bg: rgba(200, 67, 58, 0.1);
+  --good-bg: rgba(31, 157, 85, 0.1);
+  --warn-bg: rgba(168, 121, 12, 0.12);
+}
+
+@media (prefers-color-scheme: light) {
+  :root:not([data-theme="dark"]) {
+    color-scheme: light;
+    --pcb: #eef1ea;
+    --pcb-elev: #ffffff;
+    --pcb-elev-2: #e3e9de;
+    --silk: #17251b;
+    --silk-dim: #4b5c50;
+    --copper: #a15a26;
+    --copper-dim: #c9834a;
+    --phosphor: #a3620a;
+    --phosphor-glow: rgba(163, 98, 10, 0.28);
+    --probe: #0f7c8c;
+    --led-green: #1f9d55;
+    --led-amber: #a8790c;
+    --led-red: #c8433a;
+    --border: rgba(23, 37, 27, 0.14);
+    --border-strong: rgba(23, 37, 27, 0.26);
+    --shadow: rgba(30, 40, 32, 0.14);
+    --danger-bg: rgba(200, 67, 58, 0.1);
+    --good-bg: rgba(31, 157, 85, 0.1);
+    --warn-bg: rgba(168, 121, 12, 0.12);
+  }
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body {
+  margin: 0;
+  padding: 0;
+}
+
+body {
+  background: var(--pcb);
+  color: var(--silk);
+  font-family: var(--font-display);
+  font-size: 15px;
+  line-height: 1.45;
+  min-height: 100vh;
+  background-image: radial-gradient(circle at 15% -10%, rgba(207, 142, 84, 0.08), transparent 45%), radial-gradient(circle at 85% 0%, rgba(107, 211, 224, 0.06), transparent 40%);
+}
+
+.visually-hidden {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip: rect(0 0 0 0);
+  white-space: nowrap;
+}
+
+a {
+  color: var(--probe);
+}
+
+button,
+input,
+select {
+  font-family: inherit;
+  color: inherit;
+}
+
+button:focus-visible,
+input:focus-visible,
+select:focus-visible,
+summary:focus-visible,
+a:focus-visible {
+  outline: 2px solid var(--probe);
+  outline-offset: 2px;
+}
+
+/* ---------- layout shell ---------- */
+.shell {
+  max-width: 640px;
+  margin: 0 auto;
+  padding: 0 14px 48px;
+}
+
+header.topbar {
+  position: sticky;
+  top: 0;
+  z-index: 20;
+  background: color-mix(in srgb, var(--pcb) 88%, transparent);
+  backdrop-filter: blur(8px);
+  border-bottom: 1px solid var(--border);
+  padding: 12px 14px;
+  margin: 0 -14px 18px;
+}
+
+.topbar-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  max-width: 640px;
+  margin: 0 auto;
+}
+
+.brand {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex: 1;
+  min-width: 0;
+}
+
+.brand h1 {
+  font-size: 0.98rem;
+  font-weight: 700;
+  letter-spacing: 0.02em;
+  margin: 0;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.brand .sub {
+  font-size: 0.72rem;
+  color: var(--silk-dim);
+  margin-top: 1px;
+}
+
+.icon-btn {
+  background: transparent;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  width: 34px;
+  height: 34px;
+  display: grid;
+  place-items: center;
+  cursor: pointer;
+  font-size: 1rem;
+  flex: none;
+}
+.icon-btn:hover {
+  border-color: var(--border-strong);
+  background: var(--pcb-elev);
+}
+
+/* ---------- LED status indicator ---------- */
+.led {
+  --led-color: var(--silk-dim);
+  width: 11px;
+  height: 11px;
+  border-radius: 50%;
+  background: var(--led-color);
+  box-shadow: 0 0 0 2px color-mix(in srgb, var(--pcb) 60%, black), 0 0 8px 1px var(--led-color);
+  flex: none;
+}
+.led[data-state="off"] {
+  --led-color: var(--silk-dim);
+  box-shadow: none;
+  opacity: 0.6;
+}
+.led[data-state="connecting"] {
+  --led-color: var(--led-amber);
+  animation: led-pulse 1.1s ease-in-out infinite;
+}
+.led[data-state="handshake"] {
+  --led-color: var(--led-amber);
+  animation: led-pulse 0.6s ease-in-out infinite;
+}
+.led[data-state="paired"] {
+  --led-color: var(--led-green);
+}
+.led[data-state="error"] {
+  --led-color: var(--led-red);
+}
+@keyframes led-pulse {
+  0%,
+  100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0.35;
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .led {
+    animation: none !important;
+  }
+}
+
+.status-line {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 0.82rem;
+  color: var(--silk-dim);
+}
+
+/* ---------- buttons ---------- */
+.btn {
+  appearance: none;
+  border: 1px solid var(--border-strong);
+  background: var(--pcb-elev);
+  color: var(--silk);
+  border-radius: var(--radius-sm);
+  padding: 9px 16px;
+  font-size: 0.88rem;
+  font-weight: 600;
+  cursor: pointer;
+  white-space: nowrap;
+}
+.btn:hover:not(:disabled) {
+  background: var(--pcb-elev-2);
+}
+.btn:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+.btn-primary {
+  background: linear-gradient(180deg, var(--copper), var(--copper-dim));
+  border-color: var(--copper-dim);
+  color: #1a1006;
+}
+.btn-primary:hover:not(:disabled) {
+  filter: brightness(1.08);
+}
+.btn-block {
+  width: 100%;
+}
+.btn-row {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+/* ---------- diagnostics banner ---------- */
+.banner {
+  border: 1px solid var(--border-strong);
+  background: var(--danger-bg);
+  border-radius: var(--radius);
+  padding: 12px 14px;
+  font-size: 0.85rem;
+  margin-bottom: var(--gap);
+  display: none;
+}
+.banner.show {
+  display: block;
+}
+.banner.warn {
+  background: var(--warn-bg);
+}
+
+/* ---------- section shell ---------- */
+.panel {
+  background: var(--pcb-elev);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 16px;
+  margin-bottom: var(--gap);
+  position: relative;
+}
+
+.panel-label {
+  font-size: 0.7rem;
+  font-weight: 700;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: var(--copper);
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 0 0 12px;
+}
+.panel-label::before {
+  content: "";
+  display: inline-block;
+  width: 3px;
+  height: 13px;
+  background: var(--copper);
+  border-radius: 2px;
+}
+.panel-label .led {
+  margin-left: auto;
+}
+
+/* mounting-hole corner rivets, purely decorative, mirrors real instrument-panel screws */
+.rivets::before,
+.rivets::after,
+.rivets .rivet-tr,
+.rivets .rivet-bl {
+  content: "";
+  position: absolute;
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: radial-gradient(circle at 35% 30%, var(--border-strong), transparent 70%), var(--pcb-elev-2);
+  border: 1px solid var(--border);
+}
+.rivets::before {
+  top: 8px;
+  left: 8px;
+}
+.rivets::after {
+  bottom: 8px;
+  right: 8px;
+}
+.rivets .rivet-tr {
+  top: 8px;
+  right: 8px;
+}
+.rivets .rivet-bl {
+  bottom: 8px;
+  left: 8px;
+}
+
+/* ---------- instrument readout (hero) ---------- */
+.readout {
+  background: linear-gradient(180deg, var(--pcb-elev-2), var(--pcb-elev));
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius);
+  padding: 22px 18px 16px;
+  position: relative;
+  overflow: hidden;
+}
+.readout::before {
+  /* faint scanline texture, static — no motion */
+  content: "";
+  position: absolute;
+  inset: 0;
+  background: repeating-linear-gradient(180deg, rgba(255, 255, 255, 0.025) 0px, rgba(255, 255, 255, 0.025) 1px, transparent 1px, transparent 3px);
+  pointer-events: none;
+}
+
+.readout-value-row {
+  display: flex;
+  align-items: baseline;
+  justify-content: center;
+  gap: 6px;
+  position: relative;
+}
+.readout-value {
+  font-family: var(--font-mono);
+  font-variant-numeric: tabular-nums;
+  font-weight: 600;
+  font-size: clamp(2.6rem, 13vw, 4.2rem);
+  color: var(--phosphor);
+  text-shadow: 0 0 18px var(--phosphor-glow), 0 0 2px var(--phosphor-glow);
+  letter-spacing: 0.01em;
+  line-height: 1;
+}
+.readout-unit {
+  font-family: var(--font-mono);
+  font-size: 1.1rem;
+  color: var(--phosphor);
+  opacity: 0.75;
+  font-weight: 600;
+}
+.readout-caption {
+  text-align: center;
+  font-size: 0.72rem;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: var(--silk-dim);
+  margin-top: 4px;
+}
+
+.probe-row {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  margin-top: 16px;
+  border-top: 1px dashed var(--border-strong);
+  padding-top: 12px;
+  position: relative;
+}
+.probe {
+  text-align: center;
+  padding: 0 4px;
+  border-left: 1px dashed var(--border);
+}
+.probe:first-child {
+  border-left: none;
+}
+.probe-value {
+  font-family: var(--font-mono);
+  font-variant-numeric: tabular-nums;
+  font-size: 1.05rem;
+  color: var(--probe);
+  font-weight: 600;
+}
+.probe-label {
+  font-size: 0.62rem;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  color: var(--silk-dim);
+  margin-top: 2px;
+}
+
+.readout-note {
+  text-align: center;
+  font-size: 0.78rem;
+  color: var(--silk-dim);
+  margin-top: 12px;
+}
+
+/* ---------- PV terminal-block cards ---------- */
+.pv-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
+  gap: 10px;
+}
+.pv-card {
+  background: var(--pcb-elev-2);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  padding: 0;
+  overflow: hidden;
+}
+.pv-card-terminals {
+  display: flex;
+  gap: 3px;
+  padding: 6px 8px 0;
+}
+.pv-card-terminals span {
+  width: 8px;
+  height: 8px;
+  border-radius: 2px;
+  background: var(--copper-dim);
+  border: 1px solid var(--border-strong);
+}
+.pv-card-body {
+  padding: 8px 12px 12px;
+}
+.pv-card-label {
+  font-size: 0.72rem;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  color: var(--copper);
+  margin-bottom: 6px;
+}
+.pv-card-row {
+  display: flex;
+  justify-content: space-between;
+  font-family: var(--font-mono);
+  font-size: 0.85rem;
+  padding: 2px 0;
+}
+.pv-card-row .k {
+  color: var(--silk-dim);
+  font-family: var(--font-display);
+  font-size: 0.76rem;
+}
+.pv-card-daily {
+  margin-top: 6px;
+  padding-top: 6px;
+  border-top: 1px dashed var(--border);
+  font-family: var(--font-mono);
+  font-size: 0.82rem;
+  display: flex;
+  justify-content: space-between;
+}
+.pv-empty {
+  color: var(--silk-dim);
+  font-size: 0.85rem;
+  text-align: center;
+  padding: 10px 0;
+}
+
+/* ---------- PIN panel ---------- */
+.pin-panel {
+  border-color: var(--led-amber);
+  background: var(--warn-bg);
+}
+.pin-row {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+.pin-row input[type="password"],
+.pin-row input[type="text"] {
+  flex: 1;
+  min-width: 140px;
+}
+.field-hint {
+  font-size: 0.78rem;
+  color: var(--silk-dim);
+  margin-top: 8px;
+}
+
+/* ---------- form controls ---------- */
+label.field-label {
+  display: block;
+  font-size: 0.75rem;
+  font-weight: 600;
+  letter-spacing: 0.03em;
+  color: var(--silk-dim);
+  margin: 10px 0 5px;
+}
+label.field-label:first-child {
+  margin-top: 0;
+}
+select,
+input[type="text"],
+input[type="number"],
+input[type="password"] {
+  width: 100%;
+  background: var(--pcb);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-sm);
+  padding: 9px 11px;
+  font-size: 0.9rem;
+  font-family: var(--font-mono);
+}
+
+.field-row {
+  display: grid;
+  grid-template-columns: 1fr 110px;
+  gap: 8px;
+}
+
+.badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  background: var(--good-bg);
+  color: var(--led-green);
+  border: 1px solid color-mix(in srgb, var(--led-green) 40%, transparent);
+  border-radius: 999px;
+  padding: 4px 10px;
+  font-size: 0.72rem;
+  font-weight: 700;
+  letter-spacing: 0.02em;
+}
+.badge::before {
+  content: "★";
+  font-size: 0.7rem;
+}
+
+.current-server {
+  font-family: var(--font-mono);
+  font-size: 0.88rem;
+  background: var(--pcb);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  padding: 8px 11px;
+  margin-bottom: 10px;
+  word-break: break-all;
+}
+
+.save-status {
+  font-size: 0.82rem;
+  margin-top: 10px;
+  min-height: 1.1em;
+}
+.save-status.ok {
+  color: var(--led-green);
+}
+.save-status.err {
+  color: var(--led-red);
+}
+
+/* ---------- log console ---------- */
+details.log-details {
+  background: var(--pcb-elev);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  margin-bottom: var(--gap);
+  overflow: hidden;
+}
+summary.log-summary {
+  cursor: pointer;
+  padding: 14px 16px;
+  font-size: 0.7rem;
+  font-weight: 700;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: var(--copper);
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  list-style: none;
+}
+summary.log-summary::-webkit-details-marker {
+  display: none;
+}
+summary.log-summary::before {
+  content: "▶";
+  font-size: 0.6rem;
+  transition: transform 0.15s ease;
+  color: var(--silk-dim);
+}
+details[open] summary.log-summary::before {
+  transform: rotate(90deg);
+}
+@media (prefers-reduced-motion: reduce) {
+  summary.log-summary::before {
+    transition: none;
+  }
+}
+
+.log-toolbar {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 0 16px 12px;
+  font-size: 0.78rem;
+  color: var(--silk-dim);
+}
+.log-toolbar label {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+}
+.log-toolbar button {
+  margin-left: auto;
+}
+
+#logConsole {
+  background: var(--pcb);
+  border-top: 1px solid var(--border);
+  font-family: var(--font-mono);
+  font-size: 0.72rem;
+  line-height: 1.6;
+  padding: 10px 14px;
+  max-height: 46vh;
+  overflow-y: auto;
+  white-space: pre-wrap;
+  word-break: break-all;
+}
+.log-line {
+  padding: 1px 0;
+}
+.log-sys {
+  color: var(--silk-dim);
+}
+.log-in {
+  color: var(--probe);
+}
+.log-out {
+  color: var(--copper);
+}
+.log-ok {
+  color: var(--led-green);
+}
+.log-err {
+  color: var(--led-red);
+}
+.log-time {
+  opacity: 0.55;
+  margin-right: 6px;
+}
+
+footer.foot {
+  text-align: center;
+  font-size: 0.72rem;
+  color: var(--silk-dim);
+  padding: 10px 0 24px;
+}
+
+/* ---------- small utility ---------- */
+.hidden {
+  display: none !important;
+}
+.checkbox-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 0.78rem;
+  color: var(--silk-dim);
+}
+.checkbox-row input {
+  width: auto;
+}
+
+@media (min-width: 560px) {
+  .readout-value {
+    font-size: 4.4rem;
+  }
+}
