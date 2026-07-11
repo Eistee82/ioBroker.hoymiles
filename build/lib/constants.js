@@ -21,6 +21,7 @@ export const ENSURE_TOKEN_TIMEOUT_MS = 30000;
 export const BURST_MIN_INTERVAL_MS = 1500;
 export const BURST_MAX_INTERVAL_MS = 10000;
 export const BURST_URI_REFRESH_MS = 240000;
+export const BURST_MAX_FAILURES = 3;
 export const DTU_TIME_OFFSET = 28800;
 export const MIN_PROTOBUF_PAYLOAD_SIZE = 4;
 export const SCALE_VOLTAGE = 10;

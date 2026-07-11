@@ -1,9 +1,19 @@
 import type CloudConnection from "./cloudConnection.js";
 import type { BurstInverter, BurstStationPower } from "./cloudConnection.js";
 import type DeviceContext from "./deviceContext.js";
-import { BURST_MIN_INTERVAL_MS, BURST_MAX_INTERVAL_MS, BURST_URI_REFRESH_MS } from "./constants.js";
+import {
+	BURST_MIN_INTERVAL_MS,
+	BURST_MAX_INTERVAL_MS,
+	BURST_URI_REFRESH_MS,
+	BURST_MAX_FAILURES,
+	CLOUD_POLL_CONCURRENCY,
+} from "./constants.js";
 import { stationStateMap, buildStateCommon } from "./stateDefinitions.js";
-import { anonymize, errorMessage } from "./utils.js";
+import { anonymize, errorMessage, mapLimit } from "./utils.js";
+
+// The burst endpoint types its power fields as numbers, but the main cloud API is known to
+// deliver numerics as strings — coerce defensively before persisting into number-typed states.
+const num = (v: unknown): number => (typeof v === "number" ? v : parseFloat(String(v)) || 0);
 
 interface BurstPollerOptions {
 	cloud: CloudConnection;
@@ -36,6 +46,13 @@ interface StationBurst {
 	targets: Map<string, InverterTarget>;
 	timer: ioBroker.Timeout | undefined;
 	stopped: boolean;
+	/** Consecutive failed polls — at {@link BURST_MAX_FAILURES} the state claim is released. */
+	consecutiveFailures: number;
+	/**
+	 * True while the claim on `grid.power`/`pvN.power` is released back to the slow cloud
+	 * poller (after persistent failures). The loop keeps polling and re-claims on success.
+	 */
+	claimReleased: boolean;
 }
 
 /**
@@ -76,7 +93,7 @@ class BurstPoller {
 
 	/** Start a realtime burst loop for every station that has at least one cloud-only DTU. */
 	async start(): Promise<void> {
-		for (const stationId of this.stationDevices) {
+		await mapLimit([...this.stationDevices], CLOUD_POLL_CONCURRENCY, async stationId => {
 			if (this.stopped) {
 				return;
 			}
@@ -85,7 +102,7 @@ class BurstPoller {
 			} catch (err) {
 				this.adapter.log.debug(`Burst: station ${stationId} start failed: ${errorMessage(err)}`);
 			}
-		}
+		});
 	}
 
 	/** Stop all burst loops, clear timers, and release the cloud poller's `grid.power`/`pvN.power` gate. */
@@ -123,8 +140,11 @@ class BurstPoller {
 
 		for (const dtu of deviceTree) {
 			const dev = this.devices.get(dtu.sn);
-			// Only cloud-only DTUs: skip locally/relay-connected ones (they own their realtime data).
-			if (!dev?.dtuSerial || dev.connection?.connected) {
+			// Only cloud-only DTUs. A locally-configured DTU (enableLocal) owns its realtime data
+			// even while its TCP link is down (e.g. overnight) — claiming it here would double-write
+			// grid.power/pvN.power once the local connection resumes, because the claim is never
+			// re-evaluated. `connection?.connected` stays as a belt-and-braces guard.
+			if (!dev?.dtuSerial || dev.enableLocal || dev.connection?.connected) {
 				continue;
 			}
 			for (const inv of dtu.children ?? []) {
@@ -151,6 +171,8 @@ class BurstPoller {
 			targets,
 			timer: undefined,
 			stopped: false,
+			consecutiveFailures: 0,
+			claimReleased: false,
 		};
 		this.stations.set(stationId, sb);
 		this.adapter.log.info(
@@ -183,6 +205,17 @@ class BurstPoller {
 				t: 1,
 			});
 
+			// The poll works again — take the power states back from the slow cloud poller.
+			if (sb.claimReleased) {
+				for (const t of sb.targets.values()) {
+					t.dev.burstActive = true;
+				}
+				this.burstActiveStations.add(sb.stationId);
+				sb.claimReleased = false;
+				this.adapter.log.info(`Burst realtime for station ${sb.stationId} resumed`);
+			}
+			sb.consecutiveFailures = 0;
+
 			// `con:1` = the DTU is live-streaming → the values are genuinely current (good, 0x00).
 			// Anything else means the stream is not live, so mark the sample as stale (0x42).
 			const quality: ioBroker.STATE_QUALITY[keyof ioBroker.STATE_QUALITY] = data.con === 1 ? 0x00 : 0x42;
@@ -207,6 +240,20 @@ class BurstPoller {
 			// A stale k-token surfaces as HTTP 400/401 — force a URL refresh on the next tick.
 			sb.uriFetchedAt = 0;
 			nextDelay = BURST_MAX_INTERVAL_MS;
+			sb.consecutiveFailures++;
+			// On a persistent outage, release the claim so the slow cloud poller resumes writing
+			// (and freshness-flagging) grid.power/pvN.power — otherwise they would stay frozen at
+			// their last "good" value forever. The loop keeps polling and re-claims on success.
+			if (!sb.claimReleased && sb.consecutiveFailures >= BURST_MAX_FAILURES) {
+				for (const t of sb.targets.values()) {
+					t.dev.burstActive = false;
+				}
+				this.burstActiveStations.delete(sb.stationId);
+				sb.claimReleased = true;
+				this.adapter.log.info(
+					`Burst realtime for station ${sb.stationId} paused after ${BURST_MAX_FAILURES} consecutive failures — the slow cloud poller takes over until the burst recovers`,
+				);
+			}
 			this.adapter.log.debug(`Burst: poll failed for station ${sb.stationId}: ${errorMessage(err)}`);
 		}
 
@@ -240,20 +287,22 @@ class BurstPoller {
 		const cs = (id: string, val: number): Promise<void> =>
 			this.adapter.setStateAsync(id, { val, ack: true, q: quality }).then(() => {});
 
-		const strings = [inv.p1, inv.p2, inv.p3, inv.p4];
+		const strings = [inv.p1, inv.p2, inv.p3, inv.p4].map(num);
 		// Highest populated PV index (a string that ever produced > 0). Ensures the pv states exist.
 		const activePv = strings.reduce((max, p, i) => (p > 0 ? i + 1 : max), 0);
 		if (activePv > target.dev.pvCount && target.dev.deviceId) {
 			await target.dev.createPvStates(activePv, true);
 		}
 
-		const writes: Array<Promise<void>> = [cs(`${sn}.grid.power`, inv.pac)];
+		const writes: Array<Promise<void>> = [cs(`${sn}.grid.power`, num(inv.pac))];
 		for (let i = 0; i < target.dev.pvCount; i++) {
 			writes.push(cs(`${sn}.pv${i}.power`, strings[i] ?? 0));
 		}
-		await Promise.all(writes);
+		// allSettled: a single failed setState must not abort the sibling writes or bubble into
+		// poll()'s catch (which would count it as a burst outage and back off the whole station).
+		await Promise.allSettled(writes);
 		this.adapter.log.debug(
-			`Burst ${anonymize(sn, "dtu")}: pac=${inv.pac}W pv=[${strings.slice(0, target.dev.pvCount).join(",")}]`,
+			`Burst ${anonymize(sn, "dtu")}: pac=${num(inv.pac)}W pv=[${strings.slice(0, target.dev.pvCount).join(",")}]`,
 		);
 	}
 
@@ -274,12 +323,12 @@ class BurstPoller {
 		const deviceId = `station-${stationId}`;
 		const ws = (suffix: string, val: number): Promise<void> =>
 			this.writeStationState(deviceId, suffix, val, quality);
-		await Promise.all([
-			ws("grid.power", power.pv),
-			ws("grid.gridPower", power.grid),
-			ws("grid.loadPower", power.load),
-			ws("grid.batteryPower", power.bat),
-			ws("grid.pvUtilization", power.pvr),
+		await Promise.allSettled([
+			ws("grid.power", num(power.pv)),
+			ws("grid.gridPower", num(power.grid)),
+			ws("grid.loadPower", num(power.load)),
+			ws("grid.batteryPower", num(power.bat)),
+			ws("grid.pvUtilization", num(power.pvr)),
 		]);
 	}
 

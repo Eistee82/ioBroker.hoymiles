@@ -1,6 +1,7 @@
-import { BURST_MIN_INTERVAL_MS, BURST_MAX_INTERVAL_MS, BURST_URI_REFRESH_MS } from "./constants.js";
+import { BURST_MIN_INTERVAL_MS, BURST_MAX_INTERVAL_MS, BURST_URI_REFRESH_MS, BURST_MAX_FAILURES, CLOUD_POLL_CONCURRENCY, } from "./constants.js";
 import { stationStateMap, buildStateCommon } from "./stateDefinitions.js";
-import { anonymize, errorMessage } from "./utils.js";
+import { anonymize, errorMessage, mapLimit } from "./utils.js";
+const num = (v) => (typeof v === "number" ? v : parseFloat(String(v)) || 0);
 class BurstPoller {
     cloud;
     adapter;
@@ -21,7 +22,7 @@ class BurstPoller {
         this.stopped = false;
     }
     async start() {
-        for (const stationId of this.stationDevices) {
+        await mapLimit([...this.stationDevices], CLOUD_POLL_CONCURRENCY, async (stationId) => {
             if (this.stopped) {
                 return;
             }
@@ -31,7 +32,7 @@ class BurstPoller {
             catch (err) {
                 this.adapter.log.debug(`Burst: station ${stationId} start failed: ${errorMessage(err)}`);
             }
-        }
+        });
     }
     stop() {
         this.stopped = true;
@@ -60,7 +61,7 @@ class BurstPoller {
         }
         for (const dtu of deviceTree) {
             const dev = this.devices.get(dtu.sn);
-            if (!dev?.dtuSerial || dev.connection?.connected) {
+            if (!dev?.dtuSerial || dev.enableLocal || dev.connection?.connected) {
                 continue;
             }
             for (const inv of dtu.children ?? []) {
@@ -84,6 +85,8 @@ class BurstPoller {
             targets,
             timer: undefined,
             stopped: false,
+            consecutiveFailures: 0,
+            claimReleased: false,
         };
         this.stations.set(stationId, sb);
         this.adapter.log.info(`Burst realtime started for station ${stationId} (${targets.size} cloud-only inverter(s))`);
@@ -104,6 +107,15 @@ class BurstPoller {
                 mis: [...sb.targets.keys()],
                 t: 1,
             });
+            if (sb.claimReleased) {
+                for (const t of sb.targets.values()) {
+                    t.dev.burstActive = true;
+                }
+                this.burstActiveStations.add(sb.stationId);
+                sb.claimReleased = false;
+                this.adapter.log.info(`Burst realtime for station ${sb.stationId} resumed`);
+            }
+            sb.consecutiveFailures = 0;
             const quality = data.con === 1 ? 0x00 : 0x42;
             for (const inv of data.mis ?? []) {
                 await this.writeInverter(sb, inv, quality);
@@ -118,6 +130,15 @@ class BurstPoller {
         catch (err) {
             sb.uriFetchedAt = 0;
             nextDelay = BURST_MAX_INTERVAL_MS;
+            sb.consecutiveFailures++;
+            if (!sb.claimReleased && sb.consecutiveFailures >= BURST_MAX_FAILURES) {
+                for (const t of sb.targets.values()) {
+                    t.dev.burstActive = false;
+                }
+                this.burstActiveStations.delete(sb.stationId);
+                sb.claimReleased = true;
+                this.adapter.log.info(`Burst realtime for station ${sb.stationId} paused after ${BURST_MAX_FAILURES} consecutive failures — the slow cloud poller takes over until the burst recovers`);
+            }
             this.adapter.log.debug(`Burst: poll failed for station ${sb.stationId}: ${errorMessage(err)}`);
         }
         if (sb.stopped || this.stopped) {
@@ -135,27 +156,27 @@ class BurstPoller {
         }
         const sn = target.dtuSerial;
         const cs = (id, val) => this.adapter.setStateAsync(id, { val, ack: true, q: quality }).then(() => { });
-        const strings = [inv.p1, inv.p2, inv.p3, inv.p4];
+        const strings = [inv.p1, inv.p2, inv.p3, inv.p4].map(num);
         const activePv = strings.reduce((max, p, i) => (p > 0 ? i + 1 : max), 0);
         if (activePv > target.dev.pvCount && target.dev.deviceId) {
             await target.dev.createPvStates(activePv, true);
         }
-        const writes = [cs(`${sn}.grid.power`, inv.pac)];
+        const writes = [cs(`${sn}.grid.power`, num(inv.pac))];
         for (let i = 0; i < target.dev.pvCount; i++) {
             writes.push(cs(`${sn}.pv${i}.power`, strings[i] ?? 0));
         }
-        await Promise.all(writes);
-        this.adapter.log.debug(`Burst ${anonymize(sn, "dtu")}: pac=${inv.pac}W pv=[${strings.slice(0, target.dev.pvCount).join(",")}]`);
+        await Promise.allSettled(writes);
+        this.adapter.log.debug(`Burst ${anonymize(sn, "dtu")}: pac=${num(inv.pac)}W pv=[${strings.slice(0, target.dev.pvCount).join(",")}]`);
     }
     async writeStation(stationId, power, quality) {
         const deviceId = `station-${stationId}`;
         const ws = (suffix, val) => this.writeStationState(deviceId, suffix, val, quality);
-        await Promise.all([
-            ws("grid.power", power.pv),
-            ws("grid.gridPower", power.grid),
-            ws("grid.loadPower", power.load),
-            ws("grid.batteryPower", power.bat),
-            ws("grid.pvUtilization", power.pvr),
+        await Promise.allSettled([
+            ws("grid.power", num(power.pv)),
+            ws("grid.gridPower", num(power.grid)),
+            ws("grid.loadPower", num(power.load)),
+            ws("grid.batteryPower", num(power.bat)),
+            ws("grid.pvUtilization", num(power.pvr)),
         ]);
     }
     async writeStationState(deviceId, suffix, val, quality) {

@@ -769,8 +769,12 @@ class CloudPoller {
 				const s = this.boundSetState;
 				// Fresh cloud values are good (0x00); when the station's last upload is stale they
 				// are flagged 0x42 (device not connected) so consumers can tell the last reading is
-				// frozen — same semantics as the station-level states.
-				const q: ioBroker.STATE_QUALITY[keyof ioBroker.STATE_QUALITY] = online ? 0x00 : 0x42;
+				// frozen — same semantics as the station-level states. Station freshness alone is
+				// not enough: in a multi-DTU station one inverter can be individually offline while
+				// the station still uploads, so intersect with this DTU's own warn_data.connect
+				// (the same source updateCloudConnectedStates uses for info.connected).
+				const devConnected = dtu.children?.some(inv => inv.warn_data?.connect) ?? false;
+				const q: ioBroker.STATE_QUALITY[keyof ioBroker.STATE_QUALITY] = online && devConnected ? 0x00 : 0x42;
 				const cs = (id: string, val: ioBroker.StateValue): Promise<void> =>
 					s(id, { val, ack: true, q }).then(() => {});
 
@@ -815,9 +819,12 @@ class CloudPoller {
 				const pvTasks: Array<Promise<void>> = [];
 				const children = dtu.children || [];
 
-				// Ensure PV states exist for the max port count across all inverter children
+				// Ensure PV states exist for the max port count across all inverter children.
+				// Seed with the already-known pvCount so this can only grow it — the burst poller
+				// may have discovered more live strings than the model-number regex predicts, and
+				// createPvStates() would otherwise shrink pvCount back down.
 				if (!dtuDev.pvStatesCreated && children.length > 0) {
-					let maxPorts = 0;
+					let maxPorts = dtuDev.pvCount;
 					for (const inv of children) {
 						const m = CloudPoller.PORT_COUNT_RE.exec(inv.model_no || "");
 						maxPorts = Math.max(maxPorts, Math.min(Math.max(m ? parseInt(m[1], 10) : 2, 1), 6));

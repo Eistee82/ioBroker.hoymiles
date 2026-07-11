@@ -474,7 +474,8 @@ class CloudPoller {
             try {
                 this.lastRealtimeFetch.set(sn, now);
                 const s = this.boundSetState;
-                const q = online ? 0x00 : 0x42;
+                const devConnected = dtu.children?.some(inv => inv.warn_data?.connect) ?? false;
+                const q = online && devConnected ? 0x00 : 0x42;
                 const cs = (id, val) => s(id, { val, ack: true, q }).then(() => { });
                 const values = await this.cloud.getMicroRealtimeData(stationId, microIds, today, [
                     "MI_POWER",
@@ -507,7 +508,7 @@ class CloudPoller {
                 const pvTasks = [];
                 const children = dtu.children || [];
                 if (!dtuDev.pvStatesCreated && children.length > 0) {
-                    let maxPorts = 0;
+                    let maxPorts = dtuDev.pvCount;
                     for (const inv of children) {
                         const m = CloudPoller.PORT_COUNT_RE.exec(inv.model_no || "");
                         maxPorts = Math.max(maxPorts, Math.min(Math.max(m ? parseInt(m[1], 10) : 2, 1), 6));

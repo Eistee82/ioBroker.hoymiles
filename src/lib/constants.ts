@@ -33,6 +33,9 @@ export const BURST_MIN_INTERVAL_MS = 1500;
 export const BURST_MAX_INTERVAL_MS = 10000;
 // Proactively re-fetch the short-lived k-token URL well before it can expire.
 export const BURST_URI_REFRESH_MS = 240000;
+// After this many consecutive poll failures the burst releases its claim on the overlapping
+// power states so the slow cloud poller resumes writing (and freshness-flagging) them.
+export const BURST_MAX_FAILURES = 3;
 
 // Protobuf protocol
 export const DTU_TIME_OFFSET = 28800; // 8h in seconds
