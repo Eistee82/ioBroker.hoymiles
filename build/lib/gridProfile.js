@@ -259,6 +259,26 @@ export function byteSwap16(buf) {
     }
     return out;
 }
+export function mapCloudGridProfile(params) {
+    const byPos = new Map();
+    for (const p of GRID_PROFILE_SCHEMA) {
+        byPos.set(p.pos, p);
+    }
+    const values = {};
+    for (const param of params) {
+        if (param.position == null || param.content == null) {
+            continue;
+        }
+        const schema = byPos.get(param.position);
+        if (!schema) {
+            continue;
+        }
+        values[schema.key] = schema.flag ? param.content !== 0 : param.content;
+    }
+    const code = typeof values.countryStdCode === "number" ? values.countryStdCode : null;
+    const standard = code != null ? COUNTRY_STD_NAMES[code] || `code ${code}` : "";
+    return { values, standard };
+}
 export function decodeGridProfile(blob) {
     const values = {};
     for (const p of GRID_PROFILE_SCHEMA) {

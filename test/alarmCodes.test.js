@@ -27,8 +27,21 @@ describe("alarmCodes", function () {
 		assert.strictEqual(getAlarmDescription(1), "Reset");
 	});
 
-	it("ALARM_CODES has 110 entries", function () {
-		assert.strictEqual(Object.keys(ALARM_CODES).length, 110);
+	it("ALARM_CODES has 223 entries (55 hand-maintained + 168 from the cloud mwc dictionary)", function () {
+		assert.strictEqual(Object.keys(ALARM_CODES).length, 223);
+	});
+
+	it("localizes into additional languages from the cloud mwc dictionary", function () {
+		assert.strictEqual(getAlarmDescription(141, "ru"), "Перенапряжение электросети");
+		assert.strictEqual(getAlarmDescription(141, "fr"), "Surtension du réseau");
+		assert.strictEqual(getAlarmDescription(141, "zh-cn"), "电网过压");
+	});
+
+	it("falls back to EN when a language is unavailable for a code", function () {
+		// Hoymiles does not localize Ukrainian, so uk resolves to the English text.
+		assert.strictEqual(getAlarmDescription(141, "uk"), getAlarmDescription(141, "en"));
+		// Hand-maintained EXTRA_CODES carry only en/de, so other languages fall back to en.
+		assert.strictEqual(getAlarmDescription(1, "ru"), "Reset");
 	});
 });
 
@@ -41,10 +54,13 @@ describe("alarmCodes – extended", function () {
 		assert.strictEqual(getAlarmDescription(38, "de"), "Eingangsleistung zu gering (Abschaltung)");
 	});
 
-	it("all codes have both EN and DE translations", function () {
+	it("every code has an EN base text and resolves non-empty in EN and DE", function () {
+		// The model is "en required, other languages optional with en-fallback" — a code whose DE
+		// text equals EN omits the redundant DE entry, but getAlarmDescription must still resolve it.
 		for (const [code, entry] of Object.entries(ALARM_CODES)) {
-			assert.ok(entry.en, `Code ${code} missing EN translation`);
-			assert.ok(entry.de, `Code ${code} missing DE translation`);
+			assert.ok(entry.en, `Code ${code} missing EN base translation`);
+			assert.ok(getAlarmDescription(Number(code), "en"), `Code ${code} resolves empty in EN`);
+			assert.ok(getAlarmDescription(Number(code), "de"), `Code ${code} resolves empty in DE`);
 		}
 	});
 

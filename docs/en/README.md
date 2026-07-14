@@ -212,8 +212,8 @@ PV channels are created dynamically based on the inverter model (1T = 1 channel,
 | `inverter.temperature` | number | °C | no | Inverter temperature |
 | `inverter.powerLimit` | number | % | **yes** | **Runtime** power limit (RAM-only, **no flash/NVM wear — safe to write every second**). **Use this state to realize zero-export (Nulleinspeisung)** / dynamic curtailment. 2-100%, local |
 | `inverter.activePowerLimit` | number | % | no | Active power limit (live, local) |
-| `inverter.active` | boolean | — | **yes** | Turn inverter on/off (local) |
-| `inverter.reboot` | boolean | — | **yes** | Reboot inverter (button, local) |
+| `inverter.active` | boolean | — | **yes** | Turn inverter on/off (local; via the cloud for cloud-only devices) |
+| `inverter.reboot` | boolean | — | **yes** | Reboot inverter (button, local; via the cloud for cloud-only devices) |
 | `inverter.powerFactorLimit` | number | — | **yes** | Power factor limit (-1 to 1, local) |
 | `inverter.reactivePowerLimit` | number | ° | **yes** | Reactive power limit (-50 to 50, local) |
 | `inverter.cleanWarnings` | boolean | — | **yes** | Clean warnings (button, local) |
@@ -316,7 +316,7 @@ Grid- and meter-level warning flags from the cloud's `station/find` record. All 
 | `alarms.lastCode` | number | Last alarm code |
 | `alarms.lastStartTime` | number | Last alarm start time |
 | `alarms.lastEndTime` | number | Last alarm end time |
-| `alarms.lastMessage` | string | Last alarm message (German) |
+| `alarms.lastMessage` | string | Last alarm message (in the ioBroker system language, English otherwise) |
 | `alarms.lastData1` | number | Last alarm data 1 (raw sensor value) |
 | `alarms.lastData2` | number | Last alarm data 2 (raw sensor value) |
 
@@ -340,7 +340,7 @@ Grid- and meter-level warning flags from the cloud's `station/find` record. All 
 | `config.wifiMacAddress` | string | — | no | WiFi MAC address |
 | `config.dtuApSsid` | string | — | no | DTU access point SSID |
 
-### `<dtuSerial>.gridProfile.*` — Grid Profile (per DTU, local)
+### `<dtuSerial>.gridProfile.*` — Grid Profile (per DTU, local — read via the cloud for cloud-only devices)
 
 The inverter's grid-connection profile (safety/grid-code parameters), read locally via DevConfigFetch. All read-only. Voltage/frequency values follow the active grid standard (e.g. `DE_VDE4105_2018`). Function flags are booleans (`true` = function active).
 

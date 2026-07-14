@@ -67,7 +67,9 @@ class Hoymiles extends utils.Adapter {
 	private slowPollFactor: number;
 
 	constructor(options: Partial<utils.AdapterOptions> = {}) {
-		super({ ...options, name: "hoymiles" });
+		// useFormatDate makes `this.language` (the ioBroker system language) available, which the
+		// alarm handling uses to localize warn messages instead of hard-coding a single language.
+		super({ ...options, name: "hoymiles", useFormatDate: true });
 		this.on("ready", this.onReady.bind(this));
 		this.on("stateChange", this.onStateChange.bind(this));
 		this.on("message", this.onMessage.bind(this));
@@ -409,6 +411,21 @@ class Hoymiles extends utils.Adapter {
 	 */
 	matchLocalDeviceToCloud(ctx: DeviceContext): void {
 		this.cloudManager?.matchLocalDeviceToCloud(ctx);
+	}
+
+	/**
+	 * Send a device control command over the cloud (fallback for command states on devices with
+	 * no local link). Rejects when the cloud is disabled.
+	 *
+	 * @param devSn - Micro-inverter serial number (unprefixed).
+	 * @param dtuSn - DTU serial number (unprefixed).
+	 * @param action - Control action code (see DEVICE_COMMAND_* constants).
+	 */
+	async sendCloudDeviceCommand(devSn: string, dtuSn: string, action: number): Promise<void> {
+		if (!this.cloudManager) {
+			throw new Error("Cloud is not enabled");
+		}
+		await this.cloudManager.sendDeviceCommand(devSn, dtuSn, action);
 	}
 
 	// --- State change routing ---

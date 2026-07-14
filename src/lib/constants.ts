@@ -104,6 +104,27 @@ export const CLOUD_DC_HOSTS: Record<number, string> = {
 };
 /** Home-account station info (incl. lat/lon/address) — not delivered by `find_c`. */
 export const STATION_AK_FIND_PATH = "/pvm-ext/api/0/station-ak/find";
+
+// Cloud device control channel (pvm-ctl). All operations are async: a "start" call fires the
+// command and returns a task id, a "status" call polls it (code 2 = the DTU is still processing,
+// 0 = done). Endpoints and action codes were taken from the S-Miles web portal's device code.
+//
+// setting/read: reads a device setting (e.g. the grid profile) — the only way to obtain the grid
+// profile of a cloud-only device (no local TCP path, e.g. HMS-800-2WB).
+export const PVM_CTL_SETTING_READ_PATH = "/pvm-ctl/api/0/dev/setting/read";
+export const PVM_CTL_SETTING_STATUS_PATH = "/pvm-ctl/api/0/dev/setting/status";
+/** action=41: read the device's grid-connection profile (verified live for HMS-800W-2T and 2WB). */
+export const DEVICE_SETTING_ACTION_GRID_READ = 41;
+// command/put: sends a control command (reboot / power on / power off). `put_status` polls it.
+export const PVM_CTL_COMMAND_PUT_PATH = "/pvm-ctl/api/0/dev/command/put";
+export const PVM_CTL_COMMAND_STATUS_PATH = "/pvm-ctl/api/0/dev/command/put_status";
+/** Micro-inverter control command action codes (from the portal's device-maintenance dialog). */
+export const DEVICE_COMMAND_REBOOT = 3;
+export const DEVICE_COMMAND_POWER_ON = 6;
+export const DEVICE_COMMAND_POWER_OFF = 7;
+/** Poll cadence and cap for a device-control/setting task (≈2 s × 15 ≈ 30 s ceiling). */
+export const DEVICE_SETTING_POLL_INTERVAL_MS = 2000;
+export const DEVICE_SETTING_POLL_MAX = 15;
 // v3 auth — region_c first to get the regional host + dc, then pre-insp + login.
 // pre-insp returns a nonce, optional salt (`a`), and `v`. Until 2026 we used `v` as
 // the profile signal (v=3 ⇒ home, v=2 ⇒ installer), but Hoymiles since unified all

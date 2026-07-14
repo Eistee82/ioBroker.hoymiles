@@ -19,7 +19,7 @@ class Hoymiles extends utils.Adapter {
     dataInterval;
     slowPollFactor;
     constructor(options = {}) {
-        super({ ...options, name: "hoymiles" });
+        super({ ...options, name: "hoymiles", useFormatDate: true });
         this.on("ready", this.onReady.bind(this));
         this.on("stateChange", this.onStateChange.bind(this));
         this.on("message", this.onMessage.bind(this));
@@ -259,6 +259,12 @@ class Hoymiles extends utils.Adapter {
     }
     matchLocalDeviceToCloud(ctx) {
         this.cloudManager?.matchLocalDeviceToCloud(ctx);
+    }
+    async sendCloudDeviceCommand(devSn, dtuSn, action) {
+        if (!this.cloudManager) {
+            throw new Error("Cloud is not enabled");
+        }
+        await this.cloudManager.sendDeviceCommand(devSn, dtuSn, action);
     }
     async onStateChange(id, state) {
         if (!state || state.ack) {

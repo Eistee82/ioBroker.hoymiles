@@ -212,8 +212,8 @@ PV-Channels werden dynamisch basierend auf dem Wechselrichter-Modell erstellt (1
 | `inverter.temperature` | number | °C | nein | Temperatur |
 | `inverter.powerLimit` | number | % | **ja** | **Laufzeit**-Leistungslimit (RAM-only, **kein Flash-/NVM-Verschleiß — sekündliches Schreiben unbedenklich**). **Mit diesem Datenpunkt lässt sich eine Nulleinspeisung realisieren** / dynamische Drosselung. 2-100%, lokal |
 | `inverter.activePowerLimit` | number | % | nein | Aktives Leistungslimit (live, lokal) |
-| `inverter.active` | boolean | — | **ja** | Wechselrichter ein/aus (lokal) |
-| `inverter.reboot` | boolean | — | **ja** | Wechselrichter neustarten (lokal) |
+| `inverter.active` | boolean | — | **ja** | Wechselrichter ein/aus (lokal; bei reinen Cloud-Geräten über die Cloud) |
+| `inverter.reboot` | boolean | — | **ja** | Wechselrichter neustarten (lokal; bei reinen Cloud-Geräten über die Cloud) |
 | `inverter.powerFactorLimit` | number | — | **ja** | Leistungsfaktor-Limit (-1 bis 1, lokal) |
 | `inverter.reactivePowerLimit` | number | ° | **ja** | Blindleistungs-Limit (-50 bis 50, lokal) |
 | `inverter.cleanWarnings` | boolean | — | **ja** | Warnungen löschen (lokal) |
@@ -316,7 +316,7 @@ Netz- und Zähler-Warnflags aus dem Cloud-Datensatz `station/find`. Alle boolesc
 | `alarms.lastCode` | number | Letzter Alarm-Code |
 | `alarms.lastStartTime` | number | Letzter Alarm Startzeit |
 | `alarms.lastEndTime` | number | Letzter Alarm Endzeit |
-| `alarms.lastMessage` | string | Letzte Alarmmeldung (Deutsch) |
+| `alarms.lastMessage` | string | Letzte Alarmmeldung (in der ioBroker-Systemsprache, sonst Englisch) |
 | `alarms.lastData1` | number | Letzter Alarm Daten 1 (Rohwert Sensor) |
 | `alarms.lastData2` | number | Letzter Alarm Daten 2 (Rohwert Sensor) |
 
@@ -340,7 +340,7 @@ Netz- und Zähler-Warnflags aus dem Cloud-Datensatz `station/find`. Alle boolesc
 | `config.wifiMacAddress` | string | — | nein | WLAN MAC-Adresse |
 | `config.dtuApSsid` | string | — | nein | DTU Access-Point SSID |
 
-### `<dtuSerial>.gridProfile.*` — Netzprofil (pro DTU, lokal)
+### `<dtuSerial>.gridProfile.*` — Netzprofil (pro DTU, lokal — bei reinen Cloud-Geräten über die Cloud gelesen)
 
 Das Netz-Anschlussprofil des Wechselrichters (Netz-/Sicherheitsparameter), lokal über DevConfigFetch gelesen. Alle nur lesbar. Spannungs-/Frequenzwerte richten sich nach der aktiven Netznorm (z. B. `DE_VDE4105_2018`). Funktions-Flags sind boolesch (`true` = Funktion aktiv).
 

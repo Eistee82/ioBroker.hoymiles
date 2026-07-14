@@ -11,10 +11,18 @@ import {
 	IAM_REGION_PATH,
 	PROFILE_PROBE_PATH,
 	STATION_AK_FIND_PATH,
+	PVM_CTL_SETTING_READ_PATH,
+	PVM_CTL_SETTING_STATUS_PATH,
+	DEVICE_SETTING_ACTION_GRID_READ,
+	PVM_CTL_COMMAND_PUT_PATH,
+	PVM_CTL_COMMAND_STATUS_PATH,
+	DEVICE_SETTING_POLL_INTERVAL_MS,
+	DEVICE_SETTING_POLL_MAX,
 	APP_USER_AGENT_PREFIX,
 	APP_VERSION,
 	APP_TID,
 } from "./constants.js";
+import type { CloudGridProfileParam } from "./gridProfile.js";
 import {
 	errorMessage,
 	withTimeout,
@@ -443,6 +451,15 @@ class CloudConnection {
 	/** Last data-center marker from region_c. -1 = account unknown to that region; null = region_c not yet called. */
 	getLastDc(): number | null {
 		return this.lastDc;
+	}
+
+	/**
+	 * Current session auth token (null before login). Exposed for maintainer dev-scripts under
+	 * `.dev-server/` that issue raw authenticated requests the adapter itself never needs — e.g.
+	 * regenerating the localized alarm-code table from the cloud's `monitor/.../mwc` dictionary.
+	 */
+	getToken(): string | null {
+		return this.token;
 	}
 
 	/** Build the S-Miles-Home-app-style User-Agent for the current data-center marker. */
@@ -1209,6 +1226,91 @@ class CloudConnection {
 			token: this.token,
 			userAgent: this.getUserAgent(),
 		});
+	}
+
+	/**
+	 * Run an async pvm-ctl device task: fire the start call (which returns a task id), then poll the
+	 * status endpoint until the DTU has finished (status `code` leaves 2 = "processing"). Shared by
+	 * the grid-profile read and the control commands.
+	 *
+	 * @param startPath - Endpoint that fires the task and returns a task id in `data`.
+	 * @param startBody - Body for the start call (must carry `action` and device identifiers).
+	 * @param statusPath - Endpoint polled with `{ id }` until the task is done.
+	 * @returns The terminal status `data` object (contains the result array for reads).
+	 */
+	private async runDeviceTask<T extends { code?: number }>(
+		startPath: string,
+		startBody: Record<string, unknown>,
+		statusPath: string,
+	): Promise<T> {
+		await this.ensureToken();
+		const started = await this._post<string>(startPath, startBody);
+		if (started.status !== "0" || !started.data) {
+			throw new Error(`Device task ${startPath} start failed: ${started.message}`);
+		}
+		const taskId = started.data;
+		for (let attempt = 0; attempt < DEVICE_SETTING_POLL_MAX; attempt++) {
+			await new Promise<void>(resolve => setTimeout(resolve, DEVICE_SETTING_POLL_INTERVAL_MS));
+			const status = await this._post<T>(statusPath, { id: taskId });
+			if (status.status !== "0") {
+				throw new Error(`Device task ${statusPath} failed: ${status.message}`);
+			}
+			// code 2 = the DTU is still processing; any other code is terminal.
+			const code = status.data?.code;
+			if (code !== 2) {
+				if (code === 0) {
+					return status.data ?? ({} as T);
+				}
+				throw new Error(`Device task ${startPath} returned code ${code}`);
+			}
+		}
+		throw new Error(`Device task ${startPath} timed out waiting for the device`);
+	}
+
+	/**
+	 * Read a device's grid-connection profile through the cloud control channel (pvm-ctl action 41).
+	 * This is the only way to obtain the grid profile of a cloud-only device (no local TCP port,
+	 * e.g. HMS-800-2WB): the cloud tells the DTU to report it, then decodes the blob into named
+	 * parameters. Map the result onto `gridProfile.*` states via `mapCloudGridProfile`.
+	 *
+	 * @param devSn - Micro-inverter serial number (unprefixed).
+	 * @param dtuSn - Serial number of the DTU the inverter is connected to (unprefixed).
+	 * @param devType - Device type (3 = micro-inverter; the only type observed).
+	 */
+	async readGridProfileViaCloud(devSn: string, dtuSn: string, devType = 3): Promise<CloudGridProfileParam[]> {
+		if (!devSn || !dtuSn) {
+			throw new Error("readGridProfileViaCloud: devSn and dtuSn are required");
+		}
+		const result = await this.runDeviceTask<{ code?: number; data?: CloudGridProfileParam[] }>(
+			PVM_CTL_SETTING_READ_PATH,
+			{ action: DEVICE_SETTING_ACTION_GRID_READ, dev_sn: devSn, dev_type: devType, dtu_sn: dtuSn },
+			PVM_CTL_SETTING_STATUS_PATH,
+		);
+		return result.data ?? [];
+	}
+
+	/**
+	 * Send a control command (reboot / power on / power off) to a micro-inverter via the cloud
+	 * (pvm-ctl command/put). Works for cloud-only devices with no local link. Fires the command and
+	 * waits for the DTU to acknowledge it. Resolves on success, rejects on failure/timeout.
+	 *
+	 * The command physically actuates the inverter — callers must gate it behind explicit user
+	 * intent (a writable command state), never poll-driven automation.
+	 *
+	 * @param action - Command action code (see DEVICE_COMMAND_* constants).
+	 * @param devSn - Micro-inverter serial number (unprefixed).
+	 * @param dtuSn - Serial number of the DTU the inverter is connected to (unprefixed).
+	 * @param devType - Device type (3 = micro-inverter).
+	 */
+	async sendDeviceCommand(action: number, devSn: string, dtuSn: string, devType = 3): Promise<void> {
+		if (!devSn || !dtuSn) {
+			throw new Error("sendDeviceCommand: devSn and dtuSn are required");
+		}
+		await this.runDeviceTask<{ code?: number }>(
+			PVM_CTL_COMMAND_PUT_PATH,
+			{ action, dev_sn: devSn, dev_type: devType, dtu_sn: dtuSn, data: {} },
+			PVM_CTL_COMMAND_STATUS_PATH,
+		);
 	}
 }
 

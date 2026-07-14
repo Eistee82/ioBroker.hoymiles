@@ -18,6 +18,7 @@ import {
 	stationWallClockToEpoch,
 } from "./utils.js";
 import { stationStateMap, buildStateCommon } from "./stateDefinitions.js";
+import { mapCloudGridProfile } from "./gridProfile.js";
 
 /**
  * Parse a string to number, returning 0 for NaN/undefined.
@@ -114,6 +115,8 @@ class CloudPoller {
 	private lastCloudConnected: boolean | undefined;
 	/** State-objects already created via `writeStationState`. Avoids re-issuing extendObjectAsync per poll. */
 	private readonly stationStateObjects: Set<string> = new Set();
+	/** DTU serials whose grid profile was already read via the cloud (read once — it rarely changes). */
+	private readonly gridProfileRead: Set<string> = new Set();
 
 	/**
 	 * @param options - Cloud poller configuration
@@ -624,10 +627,52 @@ class CloudPoller {
 		// DTU/inverter versions (slow poll only)
 		if (isSlowPoll && deviceTree.length > 0) {
 			await this.updateDeviceVersions(deviceTree);
+			// Read the grid profile of cloud-only DTUs once (after versions so the micro serial is cached).
+			await this.pollGridProfiles(deviceTree);
 		}
 
 		// Per-inverter + per-PV realtime data
 		await this.pollInverterRealtimeData(stationId, deviceTree, online);
+	}
+
+	/**
+	 * Read the grid profile of each cloud-only DTU via the cloud (pvm-ctl action 41) and write it
+	 * to `<dtuSerial>.gridProfile.*` — the same states the local path fills. Done once per DTU
+	 * (the profile rarely changes); a failure is retried on the next slow poll. Locally-connected
+	 * DTUs are skipped: they read their profile over the local link.
+	 *
+	 * @param deviceTree - Device tree from `getDeviceTree()`.
+	 */
+	private async pollGridProfiles(deviceTree: Awaited<ReturnType<CloudConnection["getDeviceTree"]>>): Promise<void> {
+		for (const dtu of deviceTree) {
+			const dev = this.devices.get(dtu.sn);
+			if (!dev?.dtuSerial || dev.connection?.connected || this.gridProfileRead.has(dev.dtuSerial)) {
+				continue;
+			}
+			const inv = dtu.children?.[0];
+			if (!inv?.sn) {
+				continue;
+			}
+			try {
+				const params = await this.cloud.readGridProfileViaCloud(inv.sn, dtu.sn);
+				const decoded = mapCloudGridProfile(params);
+				const writes: Array<Promise<unknown>> = [
+					this.boundSetState(`${dev.dtuSerial}.gridProfile.standard`, decoded.standard, true),
+				];
+				for (const [key, val] of Object.entries(decoded.values)) {
+					writes.push(this.boundSetState(`${dev.dtuSerial}.gridProfile.${key}`, val, true));
+				}
+				await Promise.all(writes);
+				this.gridProfileRead.add(dev.dtuSerial);
+				this.adapter.log.debug(
+					`Grid profile read via cloud for ${anonymize(dev.dtuSerial, "dtu")}: ${decoded.standard}`,
+				);
+			} catch (err) {
+				this.adapter.log.debug(
+					`Cloud grid profile read failed for ${anonymize(dev.dtuSerial, "dtu")}: ${errorMessage(err)}`,
+				);
+			}
+		}
 	}
 
 	/**
@@ -696,6 +741,10 @@ class CloudPoller {
 			writeIfFilled(`${sn}.dtu.hwVersion`, dtu.hard_ver || "");
 			if (dtu.children?.[0]) {
 				const inv = dtu.children[0];
+				// Cache the micro serial so cloud control commands can address a cloud-only device.
+				if (inv.sn) {
+					dtuDevice.setCloudInverterSn(inv.sn);
+				}
 				writeIfFilled(`${sn}.inverter.model`, inv.model_no || "");
 				writeIfFilled(`${sn}.inverter.serialNumber`, inv.sn || "");
 				writeIfFilled(`${sn}.inverter.swVersion`, inv.soft_ver || "");

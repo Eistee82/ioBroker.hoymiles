@@ -3,6 +3,7 @@ import { CLOUD_POLL_CONCURRENCY, CLOUD_STATION_STALE_MS, DEFAULT_POLL_MS, MIN_PO
 import { formatDtuVersion, formatSwVersion } from "./protobufHandler.js";
 import { anonymize, deriveStationTzOffsetMs, errorMessage, logOnError, mapLimit, stationWallClockToEpoch, } from "./utils.js";
 import { stationStateMap, buildStateCommon } from "./stateDefinitions.js";
+import { mapCloudGridProfile } from "./gridProfile.js";
 const num = (v) => parseFloat(v) || 0;
 const WEATHER_DESCRIPTIONS = {
     "01d": { en: "Clear sky", de: "Klarer Himmel" },
@@ -47,6 +48,7 @@ class CloudPoller {
     boundSetState;
     lastCloudConnected;
     stationStateObjects = new Set();
+    gridProfileRead = new Set();
     constructor(options) {
         this.cloud = options.cloud;
         this.adapter = options.adapter;
@@ -388,8 +390,37 @@ class CloudPoller {
         await this.updateCloudConnectedStates(deviceTree);
         if (isSlowPoll && deviceTree.length > 0) {
             await this.updateDeviceVersions(deviceTree);
+            await this.pollGridProfiles(deviceTree);
         }
         await this.pollInverterRealtimeData(stationId, deviceTree, online);
+    }
+    async pollGridProfiles(deviceTree) {
+        for (const dtu of deviceTree) {
+            const dev = this.devices.get(dtu.sn);
+            if (!dev?.dtuSerial || dev.connection?.connected || this.gridProfileRead.has(dev.dtuSerial)) {
+                continue;
+            }
+            const inv = dtu.children?.[0];
+            if (!inv?.sn) {
+                continue;
+            }
+            try {
+                const params = await this.cloud.readGridProfileViaCloud(inv.sn, dtu.sn);
+                const decoded = mapCloudGridProfile(params);
+                const writes = [
+                    this.boundSetState(`${dev.dtuSerial}.gridProfile.standard`, decoded.standard, true),
+                ];
+                for (const [key, val] of Object.entries(decoded.values)) {
+                    writes.push(this.boundSetState(`${dev.dtuSerial}.gridProfile.${key}`, val, true));
+                }
+                await Promise.all(writes);
+                this.gridProfileRead.add(dev.dtuSerial);
+                this.adapter.log.debug(`Grid profile read via cloud for ${anonymize(dev.dtuSerial, "dtu")}: ${decoded.standard}`);
+            }
+            catch (err) {
+                this.adapter.log.debug(`Cloud grid profile read failed for ${anonymize(dev.dtuSerial, "dtu")}: ${errorMessage(err)}`);
+            }
+        }
     }
     async updateCloudConnectedStates(deviceTree) {
         for (const dtu of deviceTree) {
@@ -427,6 +458,9 @@ class CloudPoller {
             writeIfFilled(`${sn}.dtu.hwVersion`, dtu.hard_ver || "");
             if (dtu.children?.[0]) {
                 const inv = dtu.children[0];
+                if (inv.sn) {
+                    dtuDevice.setCloudInverterSn(inv.sn);
+                }
                 writeIfFilled(`${sn}.inverter.model`, inv.model_no || "");
                 writeIfFilled(`${sn}.inverter.serialNumber`, inv.sn || "");
                 writeIfFilled(`${sn}.inverter.swVersion`, inv.soft_ver || "");

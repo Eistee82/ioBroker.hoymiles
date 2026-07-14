@@ -1,5 +1,5 @@
 import assert from "node:assert";
-import { COMMANDS, executeCommand } from "../build/lib/commandHandler.js";
+import { COMMANDS, executeCommand, executeCloudCommand } from "../build/lib/commandHandler.js";
 import { ProtobufHandler } from "../build/lib/protobufHandler.js";
 
 // ============================================================
@@ -199,5 +199,80 @@ describe("commandHandler – executeCommand", function () {
 		const { ctx, sent } = createMockContext(handler);
 		await executeCommand("unknown.state", { val: 42, ack: false, ts: 0, lc: 0, from: "", q: 0 }, ctx);
 		assert.strictEqual(sent.length, 0);
+	});
+});
+
+// ============================================================
+// commandHandler — cloud command fallback
+// ============================================================
+describe("commandHandler – executeCloudCommand", function () {
+	/** Build a cloud command context that records sent actions and reset buttons. */
+	function createCloudCtx() {
+		const sent = [];
+		const acks = [];
+		const resets = [];
+		const ctx = {
+			deviceId: "DTU1",
+			log: { info: () => {}, warn: () => {} },
+			send: async action => {
+				sent.push(action);
+			},
+			setState: async (id, val, ack) => {
+				acks.push({ id, val, ack });
+			},
+			resetButton: id => resets.push(id),
+		};
+		return { ctx, sent, acks, resets };
+	}
+
+	const st = val => ({ val, ack: false, ts: 0, lc: 0, from: "", q: 0 });
+
+	it("maps inverter.reboot to action 3 and resets the button", async function () {
+		const { ctx, sent, resets } = createCloudCtx();
+		const handled = await executeCloudCommand("inverter.reboot", st(true), ctx);
+		assert.strictEqual(handled, true);
+		assert.deepStrictEqual(sent, [3]);
+		assert.deepStrictEqual(resets, ["inverter.reboot"]);
+	});
+
+	it("maps inverter.active on/off to action 6/7 and acks", async function () {
+		const on = createCloudCtx();
+		await executeCloudCommand("inverter.active", st(true), on.ctx);
+		assert.deepStrictEqual(on.sent, [6]);
+		assert.deepStrictEqual(on.acks, [{ id: "inverter.active", val: true, ack: true }]);
+
+		const off = createCloudCtx();
+		await executeCloudCommand("inverter.active", st(false), off.ctx);
+		assert.deepStrictEqual(off.sent, [7]);
+	});
+
+	it("does not fire a button command on a falsy value but reports it handled", async function () {
+		const { ctx, sent } = createCloudCtx();
+		const handled = await executeCloudCommand("inverter.reboot", st(false), ctx);
+		assert.strictEqual(handled, true);
+		assert.strictEqual(sent.length, 0);
+	});
+
+	it("returns false for a local-only command (not cloud-capable)", async function () {
+		const { ctx, sent } = createCloudCtx();
+		const handled = await executeCloudCommand("inverter.powerLimit", st(50), ctx);
+		assert.strictEqual(handled, false);
+		assert.strictEqual(sent.length, 0);
+	});
+
+	it("does not throw when the cloud send fails", async function () {
+		const { resets } = createCloudCtx();
+		const ctx = {
+			deviceId: "DTU1",
+			log: { info: () => {}, warn: () => {} },
+			send: async () => {
+				throw new Error("cloud offline");
+			},
+			setState: async () => {},
+			resetButton: id => resets.push(id),
+		};
+		const handled = await executeCloudCommand("inverter.reboot", st(true), ctx);
+		assert.strictEqual(handled, true);
+		assert.deepStrictEqual(resets, ["inverter.reboot"]); // button still reset in finally
 	});
 });

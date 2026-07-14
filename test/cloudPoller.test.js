@@ -713,6 +713,7 @@ describe("CloudPoller – pollDevicesAndInverters", function () {
 			cloudStationId: 42,
 			connection: null, // not locally connected
 			pvStatesCreated: false,
+			setCloudInverterSn: () => {},
 			createPvStates: async () => {},
 		});
 
@@ -790,6 +791,7 @@ describe("CloudPoller – pollDevicesAndInverters", function () {
 			connection: null,
 			burstActive: true, // burst poller owns power for this DTU
 			pvStatesCreated: false,
+			setCloudInverterSn: () => {},
 			createPvStates: async () => {},
 		});
 
@@ -846,6 +848,7 @@ describe("CloudPoller – pollDevicesAndInverters", function () {
 				burstActive: false,
 				pvStatesCreated: true,
 				pvCount: 2,
+				setCloudInverterSn: () => {},
 				createPvStates: async () => {},
 			});
 			const poller = makePoller({ cloud, adapter, devices, stationDevices: new Set([42]), slowPollFactor: 1 });
@@ -899,6 +902,7 @@ describe("CloudPoller – pollDevicesAndInverters", function () {
 			burstActive: false,
 			pvStatesCreated: true,
 			pvCount: 2,
+			setCloudInverterSn: () => {},
 			createPvStates: async () => {},
 		});
 		const poller = makePoller({ cloud, adapter, devices, stationDevices: new Set([42]), slowPollFactor: 1 });
@@ -1020,6 +1024,7 @@ describe("CloudPoller – pollDevicesAndInverters", function () {
 			cloudStationId: 1,
 			connection: null,
 			pvStatesCreated: true,
+			setCloudInverterSn: () => {},
 			createPvStates: async () => {},
 		});
 
@@ -1097,6 +1102,7 @@ describe("CloudPoller – pollDevicesAndInverters", function () {
 			cloudStationId: 1,
 			connection: null,
 			pvStatesCreated: true,
+			setCloudInverterSn: () => {},
 			createPvStates: async () => {},
 		});
 
@@ -1157,6 +1163,7 @@ describe("CloudPoller – pollDevicesAndInverters", function () {
 			cloudStationId: 1,
 			connection: null, // cloud-only
 			pvStatesCreated: true,
+			setCloudInverterSn: () => {},
 			createPvStates: async () => {},
 		});
 
@@ -1207,6 +1214,7 @@ describe("CloudPoller – pollDevicesAndInverters", function () {
 			cloudStationId: 1,
 			connection: null,
 			pvStatesCreated: true,
+			setCloudInverterSn: () => {},
 			createPvStates: async () => {},
 		});
 
@@ -1263,6 +1271,7 @@ describe("CloudPoller – info.connected source discipline", function () {
 		const devices = new Map();
 		devices.set(deviceOverrides.dtuSerial, {
 			pvStatesCreated: true,
+			setCloudInverterSn: () => {},
 			createPvStates: async () => {},
 			...deviceOverrides,
 		});
@@ -1839,6 +1848,7 @@ describe("CloudPoller – setPvStates (via pollInverterRealtimeData)", function 
 			cloudStationId: 1,
 			connection: null,
 			pvStatesCreated: false,
+			setCloudInverterSn: () => {},
 			createPvStates: async () => {},
 		});
 
@@ -1896,6 +1906,7 @@ describe("CloudPoller – setPvStates (via pollInverterRealtimeData)", function 
 			cloudStationId: 1,
 			connection: null,
 			pvStatesCreated: true,
+			setCloudInverterSn: () => {},
 			createPvStates: async () => {},
 		});
 

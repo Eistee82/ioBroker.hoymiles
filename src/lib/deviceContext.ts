@@ -7,7 +7,7 @@ import {
 	formatSwVersion,
 	formatInvVersion,
 } from "./protobufHandler.js";
-import { executeCommand } from "./commandHandler.js";
+import { executeCommand, executeCloudCommand } from "./commandHandler.js";
 import Encryption from "./encryption.js";
 import { channels, states } from "./stateDefinitions.js";
 import { getAlarmDescription } from "./alarmCodes.js";
@@ -35,6 +35,8 @@ export interface HoymilesAdapter extends ioBroker.Adapter {
 	onSendTimeUpdated(ctx: DeviceContext): void;
 	/** Adapter-weiten Verbindungsstatus neu berechnen. */
 	updateConnectionState(): Promise<void>;
+	/** Steuerbefehl über die Cloud senden (für Geräte ohne lokale Verbindung). */
+	sendCloudDeviceCommand(devSn: string, dtuSn: string, action: number): Promise<void>;
 }
 
 interface DeviceContextOptions {
@@ -1551,6 +1553,9 @@ class DeviceContext {
 
 		const activeAlarms = alarms.filter(a => a.active);
 
+		// Localize warn messages to the ioBroker system language (falls back to English inside
+		// getAlarmDescription when a code has no translation for that language).
+		const lang = this.adapter.language || "en";
 		const latestActive = activeAlarms[activeAlarms.length - 1];
 		const entries: Array<[string, ioBroker.StateValue]> = [
 			["alarms.count", alarms.length],
@@ -1558,7 +1563,7 @@ class DeviceContext {
 			["alarms.hasActive", activeAlarms.length > 0],
 			["alarms.json", safeJsonStringify(alarms)],
 			// Authoritative warn message from the WCode-based alarm list (same source the S-Miles app uses)
-			["inverter.warnMessage", latestActive ? latestActive.descriptionEn : ""],
+			["inverter.warnMessage", latestActive ? getAlarmDescription(latestActive.code, lang) : ""],
 		];
 
 		if (alarms.length > 0) {
@@ -1567,7 +1572,7 @@ class DeviceContext {
 				["alarms.lastCode", last.code],
 				["alarms.lastStartTime", last.startTime],
 				["alarms.lastEndTime", last.endTime],
-				["alarms.lastMessage", `${last.descriptionDe} (Code ${last.code})`],
+				["alarms.lastMessage", `${getAlarmDescription(last.code, lang)} (Code ${last.code})`],
 				["alarms.lastData1", last.data1],
 				["alarms.lastData2", last.data2],
 			);
@@ -1802,29 +1807,64 @@ class DeviceContext {
 	 * @param state - The new state value
 	 */
 	async handleStateChange(stateId: string, state: ioBroker.State): Promise<void> {
-		if (!this.connection || !this.connection.connected) {
-			this.adapter.log.warn(`[${this.deviceId}] Cannot send command: not connected to DTU`);
+		// Local link takes precedence: a locally-connected DTU is actuated directly over TCP.
+		if (this.connection?.connected) {
+			await executeCommand(stateId, state, {
+				connection: this.connection,
+				protobuf: this.protobuf,
+				deviceId: this.deviceId,
+				host: this.host,
+				log: this.adapter.log,
+				setState: (id, val, ack) => this.setState(id, val, ack),
+				resetButton: id => this.scheduleButtonReset(id),
+			});
 			return;
 		}
-		await executeCommand(stateId, state, {
-			connection: this.connection,
-			protobuf: this.protobuf,
-			deviceId: this.deviceId,
-			host: this.host,
-			log: this.adapter.log,
-			setState: (id, val, ack) => this.setState(id, val, ack),
-			resetButton: id => {
-				const handle = this.adapter.setTimeout(() => {
-					this.resetButtonTimers.delete(handle!);
-					this.setState(id, false, true).catch(err =>
-						this.adapter.log.warn(`[${this.deviceId}] resetButton error: ${errorMessage(err)}`),
-					);
-				}, 1000);
-				if (handle) {
-					this.resetButtonTimers.add(handle);
-				}
-			},
-		});
+		// No local link — for a cloud-connected device, send the same command over the cloud.
+		if (this.enableCloud && this.dtuSerial && this.inverterSn) {
+			const handled = await executeCloudCommand(stateId, state, {
+				deviceId: this.deviceId,
+				log: this.adapter.log,
+				send: action => this.adapter.sendCloudDeviceCommand(this.inverterSn, this.dtuSerial, action),
+				setState: (id, val, ack) => this.setState(id, val, ack),
+				resetButton: id => this.scheduleButtonReset(id),
+			});
+			if (handled) {
+				return;
+			}
+			this.adapter.log.warn(`[${this.deviceId}] Command "${stateId}" is not available over the cloud`);
+			return;
+		}
+		this.adapter.log.warn(`[${this.deviceId}] Cannot send command: not connected to DTU`);
+	}
+
+	/**
+	 * Set the micro-inverter serial for a cloud-only device (learned from the cloud device tree),
+	 * so cloud control commands can address it. Does not overwrite a serial already learned locally.
+	 *
+	 * @param sn - Micro-inverter serial number (unprefixed).
+	 */
+	setCloudInverterSn(sn: string): void {
+		if (sn && !this.inverterSn) {
+			this.inverterSn = sn;
+		}
+	}
+
+	/**
+	 * Reset a button state back to false after 1 s (adapter-managed timer, cleared on stop).
+	 *
+	 * @param id - State ID relative to device prefix.
+	 */
+	private scheduleButtonReset(id: string): void {
+		const handle = this.adapter.setTimeout(() => {
+			this.resetButtonTimers.delete(handle!);
+			this.setState(id, false, true).catch(err =>
+				this.adapter.log.warn(`[${this.deviceId}] resetButton error: ${errorMessage(err)}`),
+			);
+		}, 1000);
+		if (handle) {
+			this.resetButtonTimers.add(handle);
+		}
 	}
 
 	// --- Utility ---

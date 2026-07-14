@@ -52,6 +52,16 @@ export const CLOUD_DC_HOSTS = {
     1: CLOUD_HOST_EU,
 };
 export const STATION_AK_FIND_PATH = "/pvm-ext/api/0/station-ak/find";
+export const PVM_CTL_SETTING_READ_PATH = "/pvm-ctl/api/0/dev/setting/read";
+export const PVM_CTL_SETTING_STATUS_PATH = "/pvm-ctl/api/0/dev/setting/status";
+export const DEVICE_SETTING_ACTION_GRID_READ = 41;
+export const PVM_CTL_COMMAND_PUT_PATH = "/pvm-ctl/api/0/dev/command/put";
+export const PVM_CTL_COMMAND_STATUS_PATH = "/pvm-ctl/api/0/dev/command/put_status";
+export const DEVICE_COMMAND_REBOOT = 3;
+export const DEVICE_COMMAND_POWER_ON = 6;
+export const DEVICE_COMMAND_POWER_OFF = 7;
+export const DEVICE_SETTING_POLL_INTERVAL_MS = 2000;
+export const DEVICE_SETTING_POLL_MAX = 15;
 export const IAM_REGION_PATH = "/iam/pub/0/c/region_c";
 export const IAM_PRE_INSPECT_PATH = "/iam/pub/3/auth/pre-insp";
 export const IAM_LOGIN_V3_PATH = "/iam/pub/3/auth/login";

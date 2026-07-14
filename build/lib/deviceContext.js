@@ -1,7 +1,7 @@
 import DtuConnection from "./dtuConnection.js";
 import CloudRelay from "./cloudRelay.js";
 import { formatDtuVersion, formatSwVersion, formatInvVersion, } from "./protobufHandler.js";
-import { executeCommand } from "./commandHandler.js";
+import { executeCommand, executeCloudCommand } from "./commandHandler.js";
 import Encryption from "./encryption.js";
 import { channels, states } from "./stateDefinitions.js";
 import { getAlarmDescription } from "./alarmCodes.js";
@@ -1011,17 +1011,18 @@ class DeviceContext {
             this.adapter.log.debug(`[${this.deviceId || this.host}] Alarms received: ${alarms.length} entries`);
         }
         const activeAlarms = alarms.filter(a => a.active);
+        const lang = this.adapter.language || "en";
         const latestActive = activeAlarms[activeAlarms.length - 1];
         const entries = [
             ["alarms.count", alarms.length],
             ["alarms.activeCount", activeAlarms.length],
             ["alarms.hasActive", activeAlarms.length > 0],
             ["alarms.json", safeJsonStringify(alarms)],
-            ["inverter.warnMessage", latestActive ? latestActive.descriptionEn : ""],
+            ["inverter.warnMessage", latestActive ? getAlarmDescription(latestActive.code, lang) : ""],
         ];
         if (alarms.length > 0) {
             const last = alarms[alarms.length - 1];
-            entries.push(["alarms.lastCode", last.code], ["alarms.lastStartTime", last.startTime], ["alarms.lastEndTime", last.endTime], ["alarms.lastMessage", `${last.descriptionDe} (Code ${last.code})`], ["alarms.lastData1", last.data1], ["alarms.lastData2", last.data2]);
+            entries.push(["alarms.lastCode", last.code], ["alarms.lastStartTime", last.startTime], ["alarms.lastEndTime", last.endTime], ["alarms.lastMessage", `${getAlarmDescription(last.code, lang)} (Code ${last.code})`], ["alarms.lastData1", last.data1], ["alarms.lastData2", last.data2]);
         }
         await this.setStates(entries, true);
     }
@@ -1196,27 +1197,47 @@ class DeviceContext {
         }
     }
     async handleStateChange(stateId, state) {
-        if (!this.connection || !this.connection.connected) {
-            this.adapter.log.warn(`[${this.deviceId}] Cannot send command: not connected to DTU`);
+        if (this.connection?.connected) {
+            await executeCommand(stateId, state, {
+                connection: this.connection,
+                protobuf: this.protobuf,
+                deviceId: this.deviceId,
+                host: this.host,
+                log: this.adapter.log,
+                setState: (id, val, ack) => this.setState(id, val, ack),
+                resetButton: id => this.scheduleButtonReset(id),
+            });
             return;
         }
-        await executeCommand(stateId, state, {
-            connection: this.connection,
-            protobuf: this.protobuf,
-            deviceId: this.deviceId,
-            host: this.host,
-            log: this.adapter.log,
-            setState: (id, val, ack) => this.setState(id, val, ack),
-            resetButton: id => {
-                const handle = this.adapter.setTimeout(() => {
-                    this.resetButtonTimers.delete(handle);
-                    this.setState(id, false, true).catch(err => this.adapter.log.warn(`[${this.deviceId}] resetButton error: ${errorMessage(err)}`));
-                }, 1000);
-                if (handle) {
-                    this.resetButtonTimers.add(handle);
-                }
-            },
-        });
+        if (this.enableCloud && this.dtuSerial && this.inverterSn) {
+            const handled = await executeCloudCommand(stateId, state, {
+                deviceId: this.deviceId,
+                log: this.adapter.log,
+                send: action => this.adapter.sendCloudDeviceCommand(this.inverterSn, this.dtuSerial, action),
+                setState: (id, val, ack) => this.setState(id, val, ack),
+                resetButton: id => this.scheduleButtonReset(id),
+            });
+            if (handled) {
+                return;
+            }
+            this.adapter.log.warn(`[${this.deviceId}] Command "${stateId}" is not available over the cloud`);
+            return;
+        }
+        this.adapter.log.warn(`[${this.deviceId}] Cannot send command: not connected to DTU`);
+    }
+    setCloudInverterSn(sn) {
+        if (sn && !this.inverterSn) {
+            this.inverterSn = sn;
+        }
+    }
+    scheduleButtonReset(id) {
+        const handle = this.adapter.setTimeout(() => {
+            this.resetButtonTimers.delete(handle);
+            this.setState(id, false, true).catch(err => this.adapter.log.warn(`[${this.deviceId}] resetButton error: ${errorMessage(err)}`));
+        }, 1000);
+        if (handle) {
+            this.resetButtonTimers.add(handle);
+        }
     }
     async updateAdapterConnectionState() {
         await this.adapter.updateConnectionState();
