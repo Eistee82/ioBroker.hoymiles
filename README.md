@@ -24,7 +24,7 @@ This adapter is not affiliated with, endorsed by, or connected to Hoymiles Power
 
 ## Description
 
-ioBroker adapter for [**Hoymiles**](https://www.hoymiles.com/) **HMS-xxxW-xT** microinverters with integrated WiFi DTU (DTUBI).
+ioBroker adapter for [**Hoymiles**](https://www.hoymiles.com/) **HMS-xxxW-xT** and **HMS-xxx-xWB** microinverters with integrated WiFi/Bluetooth DTU (DTUBI).
 
 Two connection modes (independently configurable):
 - **Local:** Direct TCP/Protobuf communication on port 10081 — no cloud, no gateway needed
@@ -51,7 +51,7 @@ Two connection modes (independently configurable):
 - Income calculation based on electricity price (cloud)
 - CO2 savings tracking (cloud)
 - Commands: power limit (2-100%), inverter on/off/reboot, DTU reboot, power factor limit, reactive power limit, clean warnings, clean grounding fault, lock/unlock inverter
-- Alarm and warning monitoring (109 codes DE/EN)
+- Alarm and warning monitoring (223 codes, localized in all 11 languages)
 - State quality (`q`): marks data as stale on disconnect, substitute for cloud fallback, auto-reset on reconnect
 - 5-minute idle timeout with automatic reconnect
 - Network discovery module for ioBroker.discovery
@@ -86,35 +86,37 @@ Both connections can be enabled simultaneously. Local data has priority — clou
 
 ## Supported Inverters
 
-This adapter is designed for **Hoymiles HMS microinverters with integrated WiFi DTU** (DTUBI):
+This adapter is designed for **Hoymiles HMS microinverters with an integrated WiFi (or WiFi + Bluetooth) DTU** (DTUBI).
 
-**1 String (1T):**
+**Local** = direct TCP/Protobuf connection on port 10081. **Cloud** = S-Miles Cloud API — auto-discovery, realtime data (fast burst channel ~1.5–3 s), energy aggregates, grid profile, inverter on/off + reboot.
 
-| Model | Status |
-|-------|--------|
-| HMS-300W-1T | Untested |
-| HMS-350W-1T | Untested |
-| HMS-400W-1T | Untested |
-| HMS-450W-1T | Untested |
-| HMS-500W-1T | Untested |
+| Model | Strings | Local (TCP) | Cloud | Status |
+|-------|:---:|:---:|:---:|--------|
+| HMS-300W-1T | 1 | ✅ | ✅ | Untested |
+| HMS-350W-1T | 1 | ✅ | ✅ | Untested |
+| HMS-400W-1T | 1 | ✅ | ✅ | Untested |
+| HMS-450W-1T | 1 | ✅ | ✅ | Untested |
+| HMS-500W-1T | 1 | ✅ | ✅ | Untested |
+| HMS-600W-2T | 2 | ✅ | ✅ | Untested |
+| HMS-700W-2T | 2 | ✅ | ✅ | Untested |
+| HMS-800W-2T | 2 | ✅ | ✅ | **Tested** (Local + Cloud) |
+| HMS-900W-2T | 2 | ✅ | ✅ | Untested |
+| HMS-1000W-2T | 2 | ✅ | ✅ | **Tested** (Local) |
+| HMS-1600DW-4T | 4 | ✅ | ✅ | Untested |
+| HMS-1800DW-4T | 4 | ✅ | ✅ | Untested |
+| HMS-2000DW-4T | 4 | ✅ | ✅ | Untested |
+| HMS-600-2WB | 2 | ❌¹ | ✅ | Untested |
+| HMS-700-2WB | 2 | ❌¹ | ✅ | Untested |
+| HMS-800-2WB | 2 | ❌¹ | ✅ | **Tested** (Cloud: realtime burst, grid profile, on/off + reboot) |
+| HMS-900-2WB | 2 | ❌¹ | ✅ | Untested |
+| HMS-1000-2WB | 2 | ❌¹ | ✅ | Untested |
+| HMS-1600-4WB | 4 | ❌¹ | ✅ | Untested |
+| HMS-1800-4WB | 4 | ❌¹ | ✅ | Untested |
+| HMS-2000-4WB | 4 | ❌¹ | ✅ | Untested |
 
-**2 Strings (2T):**
+¹ The **WB series** (sold as **"HiFlow Pro"**) has no local TCP port — its only local channel is Bluetooth LE, all data goes to the Hoymiles cloud. These inverters work **cloud-only** out of the box; on top of that, local data is possible by redirecting their cloud upload to the adapter's built-in relay server — see [Redirect Inverter to ioBroker](docs/en/README.md#redirect-inverter-to-iobroker). All WB models share the same DTU platform; only the HMS-800-2WB has been tested so far.
 
-| Model | Status |
-|-------|--------|
-| HMS-600W-2T | Untested |
-| HMS-700W-2T | Untested |
-| HMS-800W-2T | **Tested** (Local + Cloud) |
-| HMS-900W-2T | Untested |
-| HMS-1000W-2T | **Tested** (Local) |
-
-**4 Strings (4T) — only DW variant:**
-
-| Model | Status |
-|-------|--------|
-| HMS-1600DW-4T | Untested |
-| HMS-1800DW-4T | Untested |
-| HMS-2000DW-4T | Untested |
+**Cloud-only operation:** any supported inverter in your S-Miles account also works without a local connection at all — the adapter discovers it automatically and provides realtime power (burst channel), energy aggregates, grid profile, and the on/off + reboot commands over the cloud. The remaining commands (power limit, lock, clean warnings, …) require the local TCP link.
 
 > **Important:** This adapter **only** works with HMS models that have **integrated WiFi**. It does **NOT** work with:
 > - HMS-1600/1800/2000-4T **without** "DW" (these use Sub-1G RF and need an external DTU)
@@ -135,32 +137,11 @@ Cloud stations create aggregated device nodes (e.g. `hoymiles.0.station-12345.*`
 
 ## Changelog
 ### **WORK IN PROGRESS**
-- (@Eistee82) Fix the SetConfig write field numbering: the outbound write message (`SetConfigRes`) has no `wifi_rssi` field, so every field from `serverport` onward was off by one against the device (e.g. a written server domain landed on `inv_type` and corrupted the config). Numbering now matches the decompiled S-Miles app and the 2WB firmware decoder (verified on-device); affects the adapter's config writes (server/WiFi/meter fields — power limit and zero-export fields 1–10 were always correct) and the browser redirect tool, which now uses its own write field table instead of reusing the read one
-- (@Eistee82) Localize inverter alarm messages: `alarms.lastMessage` and `inverter.warnMessage` are now written in the ioBroker system language (falling back to English) instead of being hard-coded to German/English. The alarm-code table is generated from the Hoymiles cloud warning-code dictionary in all 11 languages and merged with the hand-maintained codes the cloud doesn't list, growing from 110 to 223 codes
-- (@Eistee82) Read the grid profile of **cloud-only** devices (no local TCP link, e.g. HMS-800-2WB) over the cloud (pvm-ctl action 41), populating the same `<dtuSerial>.gridProfile.*` states the local DevConfigFetch path fills. Read once per device on the slow poll; locally connected inverters keep reading it over the local link
-- (@Eistee82) Inverter on/off (`inverter.active`) and reboot (`inverter.reboot`) now fall back to the cloud for cloud-only devices: the command handler sends over the local TCP link when connected, otherwise issues the same command through the cloud (pvm-ctl `command/put`). Other command states remain local-only
-- (@Eistee82) New **relay server** mode for BLE-only inverters (e.g. HMS-800-2WB) that have no local TCP port: enable `enableRelayServer` and the adapter opens a TCP server (`relayServerPort`, default 10081) that receives the inverter's cloud upload once you redirect it, forwards every packet 1:1 to the real Hoymiles cloud (`relayCloudServer` dropdown of the 7 regional servers + `relayCloudPort`), and reads a copy for the `<dtuSerial>.*` realtime states. Cloud portal and S-Miles app keep working. Adapter can now run in pure relay mode (no local/cloud connection required)
-- (@Eistee82) New **browser redirect/live-view tool** (GitHub Pages, `docs/app/`): a Web-Bluetooth single-page app that connects to the inverter locally (no app install), shows live data like the S-Miles app, and lets you point the inverter's cloud server at ioBroker (or restore the factory server, remembered per serial number). Linked from the adapter settings with a QR code. Android/desktop Chrome/Edge only (Web Bluetooth; iOS unsupported)
-- (@Eistee82) Admin UI: regional Hoymiles server dropdown, relay-server port/target config, and a help link + QR code to the redirect guide/tool
-- (@Eistee82) Extend the realtime burst to the station level (mode `m:0`): `station-<id>.grid.power` now updates live (~1.5–3 s) — verified to be exactly the sum of all inverters — alongside new realtime flow states `grid.gridPower` / `grid.loadPower` / `grid.batteryPower` / `grid.pvUtilization` (non-zero only on metered/battery systems). The slow poller yields `station.grid.power` to the burst while it streams. Note: the burst carries **only power** — per-string voltage/current stay on the slow poller (measured: `MODULE_V`/`MODULE_I` frozen while power updated 10× in 42 s), and the API exposes **no** per-PV-string kWh field (only `MODULE_POWER`/`_V`/`_I`; energy is tracked per inverter, not per string)
-- (@Eistee82) Add a fast realtime "burst" cloud channel for cloud-only DTUs (new option `enableRealtimeBurst`, default on): mirrors the S-Miles app's live view via `get_sd_uri` → `…/rds/api/0/burst/get` on the realtime host, updating `grid.power` and `pvN.power` at the server-dictated ~1.5–3 s cadence instead of only every ~80 s. Live samples are written with good quality (`0x00`) while the stream is active (`0x42` when it isn't), and the slow cloud poller yields `grid.power`/`pvN.power` to the burst (keeping voltage/current/frequency/temperature) so the two never fight over the same states. Only affects DTUs without a local/relay connection; locally connected inverters keep their direct realtime data
-- (@Eistee82) Cloud state quality now reflects freshness, not source: the per-inverter cloud values (`grid.voltage`/`grid.frequency`, `inverter.temperature`, `pvN.voltage`/`pvN.current`) are written `0x00` (good) while the station's cloud upload is fresh **and** the inverter itself reports connected (`warn_data.connect` — an individually offline inverter in a multi-DTU station is flagged stale even while the station keeps uploading), `0x42` (device not connected) otherwise — the previous blanket `0x40` ("substitute value") wrongly flagged fresh live readings as substitutes. Now consistent with the station-level and burst realtime states
-- (@Eistee82) Harden the realtime burst: never claim a locally-configured DTU (previously a DTU that was merely offline overnight could be claimed at cloud login and then double-write `grid.power`/`pvN.power` against the local realtime data after sunrise), and on a persistent burst outage (3 consecutive failed polls) hand `grid.power`/`pvN.power` back to the slow cloud poller so they keep updating and being freshness-flagged instead of freezing at the last "good" value — the burst re-claims them automatically once it recovers. Burst power values are now coerced defensively in case the API delivers them as strings
-- (@Eistee82) Fix `httpClient` dropping the URL query string (`postJson`/`postBinary` now send `pathname + search`) — required for the token-carrying realtime burst URL
-- (@Eistee82) Expose the per-string PV error code as `<dtuSerial>.pvX.errorCode` (PvMO field 8, local only; 0 in normal operation) — the field was already decoded but not surfaced
-- (@Eistee82) Fix paginated warn lists losing entries: the DTU splits long alarm/warn lists across multiple packages (`package_now`/`package_nub`), which were ignored so only the last package survived. The adapter now pulls every package (requesting `package_now + 1` on tag `0xa3 0x04`, like the S-Miles app) and writes the assembled list once complete
-- (@Eistee82) New writable `config.limitPowerMyPower` state for the **persistent** power limit (SetConfig `limit_power_mypower`, stored in the DTU and re-applied on startup). The GetConfig-reported stored limit now feeds this state instead of `inverter.powerLimit`, so the two are cleanly separated: `inverter.powerLimit` is the runtime/RAM-only limit (use it for zero-export — no NVM wear), `config.limitPowerMyPower` is the permanent cap
-- (@Eistee82) Obsolete states/channels from older adapter versions are now removed from a device's object tree on startup (anything no longer in the state definitions, keeping the dynamic PV/meter/history objects), so the tree stays in sync after an update
-- (@Eistee82) Remove 15 config/DTU states that the shared Hoymiles firmware reports but that target hardware the ECR6600 die does not have (verified against the chip datasheet + firmware driver inventory): Ethernet (`config.netIpAddress/netSubnetMask/netGateway/netMacAddress` — no Ethernet MAC on the die), sub-1GHz/RF (`config.channelSelect/sub1gSweepSwitch/sub1gWorkChannel`, `dtu.rfHwVersion/rfSwVersion/sub1gFrequencyBand` — chip is 2.4 GHz WiFi/BLE only), RS485 (`dtu.mode485` — no driver), and the meter/zero-export config that has no consuming subsystem (`config.meterKind/meterInterface/zeroExport433Addr/zeroExportEnable` — no meter interface, the DTU has no autonomous export-regulation). The startup cleanup removes them from existing trees on update. `config.wifiRssi`/`dtu.rssi` confirmed to be real dBm (WiFi stack works in dBm, no %-conversion)
-- (@Eistee82) Read the inverter grid profile (grid-connection file) locally via DevConfigFetch and expose it under `<dtuSerial>.gridProfile.*` (voltage/frequency limits, trip times, reconnect thresholds, ramp rates, Volt-Var/power-factor, function flags)
-- (@Eistee82) Cloud relay now parses downlink server commands instead of discarding them and answers them on behalf of the DTU, so the S-Miles app/portal keep working while the adapter holds the local connection: the grid-profile read (action 41 → ack/status + the locally-read profile as `0x22 0x0e`) and the device version query (action 4 → ack/status echoing the inverter serial; the firmware versions already live in the cloud device tree)
-- (@Eistee82) Fix the cloud grid-profile read showing "no data" in the portal (stuck at 1%). Matched the relay's grid-file upload (`0x22 0x0e`) byte-for-byte to a packet capture of a working read: send it only after the cloud acknowledges the command status with `0x23 0x06` (handshake order), close the single-package upload with `rule_type=1` instead of `current_package` (field 12, not 11), and treat `dtu_sn`/`dev_sn` as the raw `bytes` the DTU reported (not ASCII strings)
-- (@Eistee82) Cloud station data reliability: `station-<id>.grid.*` values are now flagged with quality `0x42` (device not connected) when the station's last cloud upload is stale (>~20 min), and reset to `0x00` once it resumes; when a station comes back online the adapter immediately runs one full refresh (details/devices/firmware/warnings) before returning to the normal poll cadence. Station warning flags are always read from `station/find` (authoritative), never the cached `select_by_page` list summary
-- (@Eistee82) Fix `station-<id>.warn.stationOffline` falsely turning `true` on adapter start: the cloud briefly reports `s_uoff=true` while the relay takes over the DTU's cloud uplink, even though the station keeps uploading — the flag is now cross-checked against realtime data freshness, so a station with fresh data is never reported offline
-- (@Eistee82) S-Miles Home account support: home login (HTTP 403 treated as the "home" verdict), per-station data-center routing for lat/lon/address (incl. `pvm-ext/station-ak/find`), and `warn_data` / timestamps / firmware versions recovered from the `realtime_c` and firmware-compare fallbacks
-- (@Eistee82) Cloud fixes: offline inverters no longer shown as online, station timestamps converted to UTC, new `station-<id>.warn.*` flags, per-station daily firmware check, `warn.deviceAlarm` relabelled "Inverter alarm" (`warn.powerLimited` is installer-only)
-- (@Eistee82) Add anonymized `[diag]` debug logging of raw cloud responses (serials/e-mail hashed, coordinates/address redacted) for safe forum bug reports
-- (@Eistee82) Maintenance: CI/tsconfig to Node 22/24, bump dev deps (`@iobroker/eslint-config`, `rimraf`, `@alcalzone/release-script` 5.2.1 per repochecker E0036) + npm `overrides` for the transitive protobufjs/serialize-javascript advisories, admin i18n placeholder key, CHANGELOG_OLD link
+- (@Eistee82) Support cloud-only WB inverters ("HiFlow Pro", e.g. HMS-800-2WB, no local TCP port): new relay server + browser redirect/live-view tool (Web Bluetooth, linked with QR code from the admin UI) for local data, and inverter on/off, reboot and grid-profile read over the cloud. New supported-device table (local/cloud) in the docs
+- (@Eistee82) Fast cloud realtime "burst" channel for cloud-only devices (option `enableRealtimeBurst`, default on): `grid.power` / `pvN.power` and station realtime states update every ~1.5-3 s like the app's live view instead of every ~80 s, with automatic handover to the slow poller on outages
+- (@Eistee82) Local link additions: read the inverter grid profile via DevConfigFetch (`gridProfile.*`), new persistent power limit `config.limitPowerMyPower` (kept separate from the RAM-only `inverter.powerLimit`), per-string `pvX.errorCode`, complete multi-package alarm/warn lists, and the cloud relay now answers server downlink commands (grid-profile read, version query) so app/portal keep working alongside the adapter
+- (@Eistee82) Reliability & data quality: alarm texts localized in the ioBroker system language (223 codes, all 11 languages), state quality by freshness instead of source (fresh cloud values `0x00`, stale `0x42`), S-Miles Home account support, station offline/online detection fixed (no more false "offline" flags or online-shown offline inverters), UTC timestamps, obsolete states cleaned up on startup, anonymized `[diag]` debug logging
+- (@Eistee82) Fixes & maintenance: SetConfig write field numbering was off by one against the device (server/WiFi config writes landed on the wrong fields), httpClient dropped URL query strings, removed states for hardware the DTU chip doesn't have, CI/deps maintenance (Node 22/24, dev-dep bumps, npm overrides)
 
 ### 0.3.5 (2026-05-13)
 - (copilot) Adapter requires node.js >= 22 now

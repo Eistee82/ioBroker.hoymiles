@@ -1,14 +1,40 @@
 ![Logo](../../admin/hoymiles.png)
 
-# ioBroker.hoymiles — Hoymiles HMS-xxxW-xT
+# ioBroker.hoymiles — Hoymiles HMS-xxxW-xT / HMS-xxx-xWB
 
 ## Unterstützte Wechselrichter
 
-Dieser Adapter ist für **Hoymiles HMS Mikrowechselrichter mit integriertem WiFi DTU** (DTUBI) konzipiert:
+Dieser Adapter ist für **Hoymiles HMS Mikrowechselrichter mit integrierter WiFi- (oder WiFi+Bluetooth-) DTU** (DTUBI) konzipiert.
 
-- **1T** (1 String): HMS-300W-1T, HMS-350W-1T, HMS-400W-1T, HMS-450W-1T, HMS-500W-1T
-- **2T** (2 Strings): HMS-600W-2T, HMS-700W-2T, HMS-800W-2T (**Getestet**), HMS-900W-2T, HMS-1000W-2T (**Getestet Lokal**)
-- **4T** (4 Strings, **nur DW-Variante**): HMS-1600DW-4T, HMS-1800DW-4T, HMS-2000DW-4T
+**Lokal** = direkte TCP/Protobuf-Verbindung auf Port 10081. **Cloud** = S-Miles Cloud API — automatische Erkennung, Echtzeitdaten (schneller Burst-Kanal ~1,5–3 s), Energie-Aggregate, Netzprofil, Wechselrichter ein/aus + Neustart.
+
+| Modell | Strings | Lokal (TCP) | Cloud | Status |
+|--------|:---:|:---:|:---:|--------|
+| HMS-300W-1T | 1 | ✅ | ✅ | Ungetestet |
+| HMS-350W-1T | 1 | ✅ | ✅ | Ungetestet |
+| HMS-400W-1T | 1 | ✅ | ✅ | Ungetestet |
+| HMS-450W-1T | 1 | ✅ | ✅ | Ungetestet |
+| HMS-500W-1T | 1 | ✅ | ✅ | Ungetestet |
+| HMS-600W-2T | 2 | ✅ | ✅ | Ungetestet |
+| HMS-700W-2T | 2 | ✅ | ✅ | Ungetestet |
+| HMS-800W-2T | 2 | ✅ | ✅ | **Getestet** (Lokal + Cloud) |
+| HMS-900W-2T | 2 | ✅ | ✅ | Ungetestet |
+| HMS-1000W-2T | 2 | ✅ | ✅ | **Getestet** (Lokal) |
+| HMS-1600DW-4T | 4 | ✅ | ✅ | Ungetestet |
+| HMS-1800DW-4T | 4 | ✅ | ✅ | Ungetestet |
+| HMS-2000DW-4T | 4 | ✅ | ✅ | Ungetestet |
+| HMS-600-2WB | 2 | ❌¹ | ✅ | Ungetestet |
+| HMS-700-2WB | 2 | ❌¹ | ✅ | Ungetestet |
+| HMS-800-2WB | 2 | ❌¹ | ✅ | **Getestet** (Cloud: Echtzeit-Burst, Netzprofil, ein/aus + Neustart) |
+| HMS-900-2WB | 2 | ❌¹ | ✅ | Ungetestet |
+| HMS-1000-2WB | 2 | ❌¹ | ✅ | Ungetestet |
+| HMS-1600-4WB | 4 | ❌¹ | ✅ | Ungetestet |
+| HMS-1800-4WB | 4 | ❌¹ | ✅ | Ungetestet |
+| HMS-2000-4WB | 4 | ❌¹ | ✅ | Ungetestet |
+
+¹ Die **WB-Serie** (vermarktet als **„HiFlow Pro"**) hat keinen lokalen TCP-Port — der einzige lokale Kanal ist Bluetooth LE, alle Daten gehen an die Hoymiles-Cloud. Diese Wechselrichter funktionieren ab Werk **cloud-only**; zusätzlich sind lokale Daten möglich, indem der Cloud-Upload auf den eingebauten Relay-Server des Adapters umgeleitet wird — siehe [Wechselrichter über ioBroker umleiten](#wechselrichter-über-iobroker-umleiten). Alle WB-Modelle nutzen dieselbe DTU-Plattform; getestet ist bisher nur die HMS-800-2WB.
+
+**Cloud-only-Betrieb:** Jeder unterstützte Wechselrichter im S-Miles-Konto funktioniert auch ganz ohne lokale Verbindung — der Adapter erkennt ihn automatisch und liefert über die Cloud Echtzeitleistung (Burst-Kanal), Energie-Aggregate, das Netzprofil sowie die Befehle ein/aus + Neustart (`inverter.active` / `inverter.reboot`). Die übrigen Befehle (Leistungslimit, Sperren, Warnungen löschen, …) erfordern die lokale TCP-Verbindung.
 
 > Dieser Adapter funktioniert **NICHT** mit: HMS-1600/1800/2000-4T ohne "DW", HM-Serie, MI-Serie, externen DTU-Sticks oder HMT-Dreiphasenmodellen.
 

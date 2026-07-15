@@ -1,14 +1,40 @@
 ![Logo](../../admin/hoymiles.png)
 
-# ioBroker.hoymiles — Hoymiles HMS-xxxW-xT
+# ioBroker.hoymiles — Hoymiles HMS-xxxW-xT / HMS-xxx-xWB
 
 ## Supported Inverters
 
-This adapter is designed for **Hoymiles HMS microinverters with integrated WiFi DTU** (DTUBI):
+This adapter is designed for **Hoymiles HMS microinverters with an integrated WiFi (or WiFi + Bluetooth) DTU** (DTUBI).
 
-- **1T** (1 string): HMS-300W-1T, HMS-350W-1T, HMS-400W-1T, HMS-450W-1T, HMS-500W-1T
-- **2T** (2 strings): HMS-600W-2T, HMS-700W-2T, HMS-800W-2T (**Tested**), HMS-900W-2T, HMS-1000W-2T (**Tested Local**)
-- **4T** (4 strings, **DW variant only**): HMS-1600DW-4T, HMS-1800DW-4T, HMS-2000DW-4T
+**Local** = direct TCP/Protobuf connection on port 10081. **Cloud** = S-Miles Cloud API — auto-discovery, realtime data (fast burst channel ~1.5–3 s), energy aggregates, grid profile, inverter on/off + reboot.
+
+| Model | Strings | Local (TCP) | Cloud | Status |
+|-------|:---:|:---:|:---:|--------|
+| HMS-300W-1T | 1 | ✅ | ✅ | Untested |
+| HMS-350W-1T | 1 | ✅ | ✅ | Untested |
+| HMS-400W-1T | 1 | ✅ | ✅ | Untested |
+| HMS-450W-1T | 1 | ✅ | ✅ | Untested |
+| HMS-500W-1T | 1 | ✅ | ✅ | Untested |
+| HMS-600W-2T | 2 | ✅ | ✅ | Untested |
+| HMS-700W-2T | 2 | ✅ | ✅ | Untested |
+| HMS-800W-2T | 2 | ✅ | ✅ | **Tested** (Local + Cloud) |
+| HMS-900W-2T | 2 | ✅ | ✅ | Untested |
+| HMS-1000W-2T | 2 | ✅ | ✅ | **Tested** (Local) |
+| HMS-1600DW-4T | 4 | ✅ | ✅ | Untested |
+| HMS-1800DW-4T | 4 | ✅ | ✅ | Untested |
+| HMS-2000DW-4T | 4 | ✅ | ✅ | Untested |
+| HMS-600-2WB | 2 | ❌¹ | ✅ | Untested |
+| HMS-700-2WB | 2 | ❌¹ | ✅ | Untested |
+| HMS-800-2WB | 2 | ❌¹ | ✅ | **Tested** (Cloud: realtime burst, grid profile, on/off + reboot) |
+| HMS-900-2WB | 2 | ❌¹ | ✅ | Untested |
+| HMS-1000-2WB | 2 | ❌¹ | ✅ | Untested |
+| HMS-1600-4WB | 4 | ❌¹ | ✅ | Untested |
+| HMS-1800-4WB | 4 | ❌¹ | ✅ | Untested |
+| HMS-2000-4WB | 4 | ❌¹ | ✅ | Untested |
+
+¹ The **WB series** (sold as **"HiFlow Pro"**) has no local TCP port — its only local channel is Bluetooth LE, all data goes to the Hoymiles cloud. These inverters work **cloud-only** out of the box; on top of that, local data is possible by redirecting their cloud upload to the adapter's built-in relay server — see [Redirect Inverter to ioBroker](#redirect-inverter-to-iobroker). All WB models share the same DTU platform; only the HMS-800-2WB has been tested so far.
+
+**Cloud-only operation:** any supported inverter in your S-Miles account also works without a local connection at all — the adapter discovers it automatically and provides realtime power (burst channel), energy aggregates, grid profile, and the on/off + reboot commands (`inverter.active` / `inverter.reboot`) over the cloud. The remaining commands (power limit, lock, clean warnings, …) require the local TCP link.
 
 > This adapter does **NOT** work with: HMS-1600/1800/2000-4T without "DW", HM series, MI series, external DTU sticks, or HMT three-phase models.
 
