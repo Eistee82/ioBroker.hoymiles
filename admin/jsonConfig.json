@@ -408,7 +408,6 @@
             "src": "redirect-tool-qr.png",
             "label": "relayQrCaption",
             "href": "https://eistee82.github.io/ioBroker.hoymiles/app/",
-            "target": "_blank",
             "xs": 12,
             "sm": 12,
             "md": 4,
