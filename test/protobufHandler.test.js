@@ -462,6 +462,46 @@ describe("protobufHandler – additional encoders", function () {
 		assert.strictEqual(obj.serverSendTime, 5);
 	});
 
+	it("encodeSetConfig uses the SetConfigRes wire numbering, not the GetConfig one", function () {
+		// SetConfigRes has no wifi_rssi field, so everything from serverport onward is one lower
+		// than in GetConfig. Round-trips through the same proto can't catch a wrong numbering —
+		// assert the raw wire tags (fieldNo << 3 | wireType) as verified on-device.
+		const msg = handler.encodeSetConfig(1700000000, {
+			serverport: 10081,
+			wifiPassword: "secret",
+			serverDomainName: "dataeu.hoymiles.com",
+		});
+		const parsed = handler.parseResponse(msg);
+		const readVarint = (buf, pos) => {
+			let value = 0;
+			let shift = 0;
+			let b;
+			do {
+				b = buf[pos++];
+				value |= (b & 0x7f) << shift;
+				shift += 7;
+			} while (b & 0x80);
+			return [value, pos];
+		};
+		const tags = [];
+		for (let i = 0; i < parsed.payload.length; ) {
+			let tag;
+			[tag, i] = readVarint(parsed.payload, i);
+			tags.push(tag);
+			if ((tag & 0x07) === 0) {
+				[, i] = readVarint(parsed.payload, i); // skip varint value
+			} else {
+				let len;
+				[len, i] = readVarint(parsed.payload, i);
+				i += len; // skip length-delimited value
+			}
+		}
+		assert.ok(tags.includes((11 << 3) | 0), "serverport must be field 11 (varint)");
+		assert.ok(tags.includes((16 << 3) | 2), "wifi_password must be field 16 (string)");
+		assert.ok(tags.includes((17 << 3) | 2), "server_domain_name must be field 17 (string)");
+		assert.ok(!tags.includes((18 << 3) | 2), "field 18 (inv_type) must not carry a string");
+	});
+
 	it("encodeSetConfig with zeroExportEnable", function () {
 		const msg = handler.encodeSetConfig(1700000000, { zeroExportEnable: 1 });
 		const parsed = handler.parseResponse(msg);

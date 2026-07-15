@@ -148,6 +148,66 @@ const CONFIG_FIELDS_READONLY = [
   { no: 62, name: "dtuApPass", type: "string" },
 ];
 
+// SetConfig (write) has a DIFFERENT field numbering than GetConfig (read): the outbound
+// SetConfigRes message the app sends on tag 0xa310 has no wifi_rssi field, so everything from
+// `serverport` onward is one lower than in CONFIG_FIELDS above, and the tail differs entirely
+// (no ka_nub / wifi_ip_addr; instead mac4/mac5/dtu_ap_* / app_page / wifi_channel / tid).
+// Numbers verified against com.hoymiles.proto.bean.ld.power.SetConfig.SetConfigRes (decompiled app)
+// and the 2WB firmware SetConfig decoder. Field NAMES match CONFIG_FIELDS so a config decoded from
+// GetConfig can be re-encoded here by name. Reusing CONFIG_FIELDS for writes was the off-by-one bug
+// that mis-set server_domain_name (landed on inv_type) and corrupted the config.
+const SET_CONFIG_FIELDS = [
+  { no: 1, name: "offset", type: "int" },
+  { no: 2, name: "time", type: "int" },
+  { no: 3, name: "lockPassword", type: "int" },
+  { no: 4, name: "lockTime", type: "int" },
+  { no: 5, name: "limitPowerMypower", type: "int" },
+  { no: 6, name: "zeroExport433Addr", type: "int" },
+  { no: 7, name: "zeroExportEnable", type: "int" },
+  { no: 8, name: "netmodeSelect", type: "int" },
+  { no: 9, name: "channelSelect", type: "int" },
+  { no: 10, name: "serverSendTime", type: "int" },
+  { no: 11, name: "serverport", type: "int" },
+  { no: 12, name: "apnSet", type: "string" },
+  { no: 13, name: "meterKind", type: "string" },
+  { no: 14, name: "meterInterface", type: "string" },
+  { no: 15, name: "wifiSsid", type: "string" },
+  { no: 16, name: "wifiPassword", type: "string" },
+  { no: 17, name: "serverDomainName", type: "string" },
+  { no: 18, name: "invType", type: "int" },
+  { no: 19, name: "dtuSn", type: "string" },
+  { no: 20, name: "accessModel", type: "int" },
+  { no: 21, name: "mac0", type: "int" },
+  { no: 22, name: "mac1", type: "int" },
+  { no: 23, name: "mac2", type: "int" },
+  { no: 24, name: "mac3", type: "int" },
+  { no: 25, name: "dhcpSwitch", type: "int" },
+  { no: 26, name: "ipAddr0", type: "int" },
+  { no: 27, name: "ipAddr1", type: "int" },
+  { no: 28, name: "ipAddr2", type: "int" },
+  { no: 29, name: "ipAddr3", type: "int" },
+  { no: 30, name: "subnetMask0", type: "int" },
+  { no: 31, name: "subnetMask1", type: "int" },
+  { no: 32, name: "subnetMask2", type: "int" },
+  { no: 33, name: "subnetMask3", type: "int" },
+  { no: 34, name: "defaultGateway0", type: "int" },
+  { no: 35, name: "defaultGateway1", type: "int" },
+  { no: 36, name: "defaultGateway2", type: "int" },
+  { no: 37, name: "defaultGateway3", type: "int" },
+  { no: 38, name: "apnName", type: "string" },
+  { no: 39, name: "apnPassword", type: "string" },
+  { no: 40, name: "sub1gSweepSwitch", type: "int" },
+  { no: 41, name: "sub1gWorkChannel", type: "int" },
+  { no: 42, name: "cableDns0", type: "int" },
+  { no: 43, name: "cableDns1", type: "int" },
+  { no: 44, name: "cableDns2", type: "int" },
+  { no: 45, name: "cableDns3", type: "int" },
+  { no: 46, name: "mac4", type: "int" },
+  { no: 47, name: "mac5", type: "int" },
+  { no: 48, name: "dtuApSsid", type: "string" },
+  { no: 49, name: "dtuApPass", type: "string" },
+];
+
 /** Decode a GetConfigReqDTO (device's config reply) into a plain, named object. */
 export function decodeConfig(buf) {
   const fields = parseMessage(buf);
@@ -166,7 +226,7 @@ export function decodeConfig(buf) {
 export function buildSetConfigRequest(currentConfig, overrides) {
   const merged = { ...currentConfig, ...overrides, offset: TZ_OFFSET_SECONDS, time: unixNow() };
   const w = new ProtoWriter();
-  for (const f of CONFIG_FIELDS) {
+  for (const f of SET_CONFIG_FIELDS) {
     const v = merged[f.name];
     if (v === undefined || v === null || v === "") continue;
     if (f.type === "string") w.string(f.no, v);
