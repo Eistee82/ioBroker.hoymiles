@@ -770,18 +770,6 @@ class DeviceContext {
             this.adapter.log.warn(`[${this.deviceId || this.host}] Error applying RealData: ${errorMessage(err)}`);
         }
     }
-    async markRelaySessionActive() {
-        for (const [, cached] of this.stateCache) {
-            if (cached.q === DeviceContext.Q_DEVICE_DISCONNECTED) {
-                cached.q = 0;
-            }
-        }
-        await this.setState("info.connected", true, true);
-    }
-    async markRelaySessionLost() {
-        await this.setState("info.connected", false, true);
-        await this.markStatesDisconnected();
-    }
     async handleInfoData(payload) {
         try {
             const info = this.protobuf.decodeInfoData(payload);

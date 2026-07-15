@@ -114,7 +114,7 @@ This adapter is designed for **Hoymiles HMS microinverters with an integrated Wi
 | HMS-1800-4WB | 4 | ❌¹ | ✅ | Untested |
 | HMS-2000-4WB | 4 | ❌¹ | ✅ | Untested |
 
-¹ The **WB series** (sold as **"HiFlow Pro"**) has no local TCP port — its only local channel is Bluetooth LE, all data goes to the Hoymiles cloud. These inverters work **cloud-only** out of the box; on top of that, local data is possible by redirecting their cloud upload to the adapter's built-in relay server — see [Redirect Inverter to ioBroker](docs/en/README.md#redirect-inverter-to-iobroker). All WB models share the same DTU platform; only the HMS-800-2WB has been tested so far.
+¹ The **WB series** (sold as **"HiFlow Pro"**) has no local TCP port — its only local channel is Bluetooth LE, and all data goes to the Hoymiles cloud. These inverters therefore work **cloud-only**: enable the cloud connection and the adapter reads them through the S-Miles API (realtime burst, energy, grid profile) and can send the inverter on/off + reboot and DTU reboot commands. All WB models share the same platform; only the HMS-800-2WB has been tested so far.
 
 **Cloud-only operation:** any supported inverter in your S-Miles account also works without a local connection at all — the adapter discovers it automatically and provides realtime power (burst channel), energy aggregates, grid profile, and the inverter on/off + reboot and DTU reboot commands over the cloud. The remaining commands (power limit, lock, clean warnings, …) require the local TCP link.
 
@@ -137,7 +137,7 @@ Cloud stations create aggregated device nodes (e.g. `hoymiles.0.station-12345.*`
 
 ## Changelog
 ### **WORK IN PROGRESS**
-- (@Eistee82) Support cloud-only WB inverters ("HiFlow Pro", e.g. HMS-800-2WB, no local TCP port): new relay server + browser redirect/live-view tool (Web Bluetooth, linked with QR code from the admin UI) for local data, and inverter on/off, inverter reboot, DTU reboot (`dtu.reboot`, now also works over the cloud) and grid-profile read over the cloud. New supported-device table (local/cloud) in the docs
+- (@Eistee82) Support cloud-only WB inverters ("HiFlow Pro", e.g. HMS-800-2WB, no local TCP port): read them over the S-Miles cloud and send inverter on/off, inverter reboot, DTU reboot (`dtu.reboot`, now also works over the cloud) and grid-profile read over the cloud. New supported-device table (local/cloud) in the docs
 - (@Eistee82) Fast cloud realtime "burst" channel for cloud-only devices (option `enableRealtimeBurst`, default on): `grid.power` / `pvN.power` and station realtime states update every ~1.5-3 s like the app's live view instead of every ~80 s, with automatic handover to the slow poller on outages
 - (@Eistee82) Local link additions: read the inverter grid profile via DevConfigFetch (`gridProfile.*`), new persistent power limit `config.limitPowerMyPower` (kept separate from the RAM-only `inverter.powerLimit`), per-string `pvX.errorCode`, complete multi-package alarm/warn lists, and the cloud relay now answers server downlink commands (grid-profile read, version query) so app/portal keep working alongside the adapter
 - (@Eistee82) Reliability & data quality: alarm texts localized in the ioBroker system language (223 codes, all 11 languages), state quality by freshness instead of source (fresh cloud values `0x00`, stale `0x42`), S-Miles Home account support, station offline/online detection fixed (no more false "offline" flags or online-shown offline inverters), UTC timestamps, obsolete states cleaned up on startup, anonymized `[diag]` debug logging
