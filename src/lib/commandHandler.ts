@@ -7,6 +7,9 @@ import {
 	DEVICE_COMMAND_REBOOT,
 	DEVICE_COMMAND_POWER_ON,
 	DEVICE_COMMAND_POWER_OFF,
+	DTU_COMMAND_REBOOT,
+	CLOUD_DEV_TYPE_DTU,
+	CLOUD_DEV_TYPE_MICRO,
 } from "./constants.js";
 import { unixSeconds } from "./utils.js";
 
@@ -141,20 +144,26 @@ async function executeCommand(stateId: string, state: ioBroker.State, ctx: Comma
 interface CloudCommandContext {
 	deviceId: string;
 	log: ioBroker.Logger;
-	/** Send the given control action code to the device via the cloud. */
-	send: (action: number) => Promise<void>;
+	/** Send the given control action code to the device (of the given type) via the cloud. */
+	send: (action: number, devType: number) => Promise<void>;
 	setState: (id: string, value: ioBroker.StateValue, ack: boolean) => Promise<void>;
 	resetButton: (stateId: string) => void;
 }
 
 /**
  * The subset of writable command states that can also be actuated over the cloud (for devices
- * with no local link, e.g. HMS-800-2WB). Maps a state to its cloud action code; on/off-style
- * states resolve the code from the boolean value. Commands not listed here are local-only.
+ * with no local link, e.g. HMS-800-2WB). Maps a state to its cloud action code and device type;
+ * on/off-style states resolve the code from the boolean value. Commands not listed here are
+ * local-only. `devType` defaults to the micro-inverter; DTU-level commands (e.g. `dtu.reboot`)
+ * carry the DTU type so the cloud addresses the DTU itself rather than the connected inverter.
  */
-const CLOUD_COMMANDS: Record<string, { action: (val: ioBroker.StateValue) => number; button?: boolean }> = {
+const CLOUD_COMMANDS: Record<
+	string,
+	{ action: (val: ioBroker.StateValue) => number; button?: boolean; devType?: number }
+> = {
 	"inverter.reboot": { action: () => DEVICE_COMMAND_REBOOT, button: true },
 	"inverter.active": { action: v => (v ? DEVICE_COMMAND_POWER_ON : DEVICE_COMMAND_POWER_OFF) },
+	"dtu.reboot": { action: () => DTU_COMMAND_REBOOT, button: true, devType: CLOUD_DEV_TYPE_DTU },
 };
 
 /**
@@ -176,9 +185,10 @@ async function executeCloudCommand(stateId: string, state: ioBroker.State, ctx: 
 		return true;
 	}
 	const action = cmd.action(state.val);
-	ctx.log.info(`[${ctx.deviceId}] Sending command "${stateId}" via cloud (action ${action})`);
+	const devType = cmd.devType ?? CLOUD_DEV_TYPE_MICRO;
+	ctx.log.info(`[${ctx.deviceId}] Sending command "${stateId}" via cloud (action ${action}, dev_type ${devType})`);
 	try {
-		await ctx.send(action);
+		await ctx.send(action, devType);
 		if (!cmd.button) {
 			await ctx.setState(stateId, state.val, true);
 		}

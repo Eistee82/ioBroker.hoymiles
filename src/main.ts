@@ -417,15 +417,16 @@ class Hoymiles extends utils.Adapter {
 	 * Send a device control command over the cloud (fallback for command states on devices with
 	 * no local link). Rejects when the cloud is disabled.
 	 *
-	 * @param devSn - Micro-inverter serial number (unprefixed).
+	 * @param devSn - Target device serial number (unprefixed): the inverter for micro commands, the DTU for DTU commands.
 	 * @param dtuSn - DTU serial number (unprefixed).
-	 * @param action - Control action code (see DEVICE_COMMAND_* constants).
+	 * @param action - Control action code (see DEVICE_COMMAND_* / DTU_COMMAND_* constants).
+	 * @param devType - Target device type (see CLOUD_DEV_TYPE_* constants; defaults to micro-inverter).
 	 */
-	async sendCloudDeviceCommand(devSn: string, dtuSn: string, action: number): Promise<void> {
+	async sendCloudDeviceCommand(devSn: string, dtuSn: string, action: number, devType?: number): Promise<void> {
 		if (!this.cloudManager) {
 			throw new Error("Cloud is not enabled");
 		}
-		await this.cloudManager.sendDeviceCommand(devSn, dtuSn, action);
+		await this.cloudManager.sendDeviceCommand(devSn, dtuSn, action, devType);
 	}
 
 	// --- State change routing ---

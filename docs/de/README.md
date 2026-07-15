@@ -6,7 +6,7 @@
 
 Dieser Adapter ist für **Hoymiles HMS Mikrowechselrichter mit integrierter WiFi- (oder WiFi+Bluetooth-) DTU** (DTUBI) konzipiert.
 
-**Lokal** = direkte TCP/Protobuf-Verbindung auf Port 10081. **Cloud** = S-Miles Cloud API — automatische Erkennung, Echtzeitdaten (schneller Burst-Kanal ~1,5–3 s), Energie-Aggregate, Netzprofil, Wechselrichter ein/aus + Neustart.
+**Lokal** = direkte TCP/Protobuf-Verbindung auf Port 10081. **Cloud** = S-Miles Cloud API — automatische Erkennung, Echtzeitdaten (schneller Burst-Kanal ~1,5–3 s), Energie-Aggregate, Netzprofil, Wechselrichter ein/aus + Neustart, DTU-Neustart.
 
 | Modell | Strings | Lokal (TCP) | Cloud | Status |
 |--------|:---:|:---:|:---:|--------|
@@ -25,7 +25,7 @@ Dieser Adapter ist für **Hoymiles HMS Mikrowechselrichter mit integrierter WiFi
 | HMS-2000DW-4T | 4 | ✅ | ✅ | Ungetestet |
 | HMS-600-2WB | 2 | ❌¹ | ✅ | Ungetestet |
 | HMS-700-2WB | 2 | ❌¹ | ✅ | Ungetestet |
-| HMS-800-2WB | 2 | ❌¹ | ✅ | **Getestet** (Cloud: Echtzeit-Burst, Netzprofil, ein/aus + Neustart) |
+| HMS-800-2WB | 2 | ❌¹ | ✅ | **Getestet** (Cloud: Echtzeit-Burst, Netzprofil, ein/aus + Neustart, DTU-Neustart) |
 | HMS-900-2WB | 2 | ❌¹ | ✅ | Ungetestet |
 | HMS-1000-2WB | 2 | ❌¹ | ✅ | Ungetestet |
 | HMS-1600-4WB | 4 | ❌¹ | ✅ | Ungetestet |
@@ -34,7 +34,7 @@ Dieser Adapter ist für **Hoymiles HMS Mikrowechselrichter mit integrierter WiFi
 
 ¹ Die **WB-Serie** (vermarktet als **„HiFlow Pro"**) hat keinen lokalen TCP-Port — der einzige lokale Kanal ist Bluetooth LE, alle Daten gehen an die Hoymiles-Cloud. Diese Wechselrichter funktionieren ab Werk **cloud-only**; zusätzlich sind lokale Daten möglich, indem der Cloud-Upload auf den eingebauten Relay-Server des Adapters umgeleitet wird — siehe [Wechselrichter über ioBroker umleiten](#wechselrichter-über-iobroker-umleiten). Alle WB-Modelle nutzen dieselbe DTU-Plattform; getestet ist bisher nur die HMS-800-2WB.
 
-**Cloud-only-Betrieb:** Jeder unterstützte Wechselrichter im S-Miles-Konto funktioniert auch ganz ohne lokale Verbindung — der Adapter erkennt ihn automatisch und liefert über die Cloud Echtzeitleistung (Burst-Kanal), Energie-Aggregate, das Netzprofil sowie die Befehle ein/aus + Neustart (`inverter.active` / `inverter.reboot`). Die übrigen Befehle (Leistungslimit, Sperren, Warnungen löschen, …) erfordern die lokale TCP-Verbindung.
+**Cloud-only-Betrieb:** Jeder unterstützte Wechselrichter im S-Miles-Konto funktioniert auch ganz ohne lokale Verbindung — der Adapter erkennt ihn automatisch und liefert über die Cloud Echtzeitleistung (Burst-Kanal), Energie-Aggregate, das Netzprofil sowie die Befehle Wechselrichter ein/aus + Neustart (`inverter.active` / `inverter.reboot`) und DTU-Neustart (`dtu.reboot`). Die übrigen Befehle (Leistungslimit, Sperren, Warnungen löschen, …) erfordern die lokale TCP-Verbindung.
 
 > Dieser Adapter funktioniert **NICHT** mit: HMS-1600/1800/2000-4T ohne "DW", HM-Serie, MI-Serie, externen DTU-Sticks oder HMT-Dreiphasenmodellen.
 
@@ -250,7 +250,7 @@ PV-Channels werden dynamisch basierend auf dem Wechselrichter-Modell erstellt (1
 | `inverter.linkStatus` | number | — | nein | Verbindungsstatus |
 | `inverter.modulationIndexSignal` | number | — | nein | SGSMO #20, roher gepackter Wert (Modulationsindex + Signal; genaue Dekodierung noch unbestätigt, lokal) |
 
-### `<dtuSerial>.dtu.*` — DTU-Information (pro DTU, nur lokal)
+### `<dtuSerial>.dtu.*` — DTU-Information (pro DTU, nur lokal außer `dtu.reboot`)
 
 | Datenpunkt | Typ | Einheit | Beschreibung |
 |------------|-----|---------|--------------|
@@ -258,7 +258,7 @@ PV-Channels werden dynamisch basierend auf dem Wechselrichter-Modell erstellt (1
 | `dtu.swVersion` | string | — | Software-Version |
 | `dtu.hwVersion` | string | — | Hardware-Version |
 | `dtu.rssi` | number | dBm | Signalstärke |
-| `dtu.reboot` | boolean | — | DTU neustarten (**schreibbar**) |
+| `dtu.reboot` | boolean | — | DTU neustarten (**schreibbar**). Wird über die lokale TCP-Verbindung gesendet, falls verbunden, sonst über die Cloud für cloud-only-Geräte (z. B. HMS-800-2WB) |
 | `dtu.wifiVersion` | string | — | WLAN-Version |
 | `dtu.fwUpdateAvailable` | boolean | — | Firmware-Update verfügbar (1x täglich via Cloud geprüft) |
 | `dtu.stepTime` | number | s | Schrittzeit |

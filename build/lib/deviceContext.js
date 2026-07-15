@@ -6,7 +6,7 @@ import Encryption from "./encryption.js";
 import { channels, states } from "./stateDefinitions.js";
 import { getAlarmDescription } from "./alarmCodes.js";
 import { decodeGridProfile, byteSwap16 } from "./gridProfile.js";
-import { INFO_FALLBACK_TIMEOUT_MS, SCALE_POWER } from "./constants.js";
+import { INFO_FALLBACK_TIMEOUT_MS, SCALE_POWER, CLOUD_DEV_TYPE_DTU } from "./constants.js";
 import { whToKwh } from "./convert.js";
 import { errorMessage, safeJsonStringify, unixSeconds } from "./utils.js";
 const MAX_PV_PORTS = 6;
@@ -1209,11 +1209,17 @@ class DeviceContext {
             });
             return;
         }
-        if (this.enableCloud && this.dtuSerial && this.inverterSn) {
+        if (this.enableCloud && this.dtuSerial) {
             const handled = await executeCloudCommand(stateId, state, {
                 deviceId: this.deviceId,
                 log: this.adapter.log,
-                send: action => this.adapter.sendCloudDeviceCommand(this.inverterSn, this.dtuSerial, action),
+                send: (action, devType) => {
+                    const devSn = devType === CLOUD_DEV_TYPE_DTU ? this.dtuSerial : this.inverterSn;
+                    if (!devSn) {
+                        return Promise.reject(new Error("inverter serial not known yet (device is still being discovered)"));
+                    }
+                    return this.adapter.sendCloudDeviceCommand(devSn, this.dtuSerial, action, devType);
+                },
                 setState: (id, val, ack) => this.setState(id, val, ack),
                 resetButton: id => this.scheduleButtonReset(id),
             });

@@ -1297,10 +1297,10 @@ class CloudConnection {
 	 * The command physically actuates the inverter — callers must gate it behind explicit user
 	 * intent (a writable command state), never poll-driven automation.
 	 *
-	 * @param action - Command action code (see DEVICE_COMMAND_* constants).
-	 * @param devSn - Micro-inverter serial number (unprefixed).
+	 * @param action - Command action code (see DEVICE_COMMAND_* / DTU_COMMAND_* constants).
+	 * @param devSn - Target device serial (unprefixed): the inverter for micro commands, the DTU for DTU commands.
 	 * @param dtuSn - Serial number of the DTU the inverter is connected to (unprefixed).
-	 * @param devType - Device type (3 = micro-inverter).
+	 * @param devType - Device type (see CLOUD_DEV_TYPE_* constants; 3 = micro-inverter, 1 = DTU).
 	 */
 	async sendDeviceCommand(action: number, devSn: string, dtuSn: string, devType = 3): Promise<void> {
 		if (!devSn || !dtuSn) {

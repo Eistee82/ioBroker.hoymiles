@@ -3159,6 +3159,87 @@ describe("deviceContext – handleStateChange", function () {
 		});
 		assert.ok(warnMsg.includes("not connected"), "Should warn when connection.connected is false");
 	});
+
+	/** Cloud-fallback fixture: no local link, cloud enabled, records sendCloudDeviceCommand args. */
+	function makeCloudFallbackCtx() {
+		const cloudCalls = [];
+		let warnMsg = "";
+		const adapter = {
+			log: { info: () => {}, warn: msg => (warnMsg = msg), debug: () => {}, error: () => {} },
+			setStateAsync: async () => {},
+			extendObjectAsync: async () => {},
+			setObjectNotExistsAsync: async () => {},
+			getStateAsync: async () => null,
+			setInterval: () => undefined,
+			clearInterval: () => {},
+			setTimeout: () => undefined,
+			clearTimeout: () => {},
+			subscribeStates: () => {},
+			unsubscribeStates: () => {},
+			devices: new Map(),
+			matchLocalDeviceToCloud: () => {},
+			onRelayDataSent: () => {},
+			onLocalConnected: () => {},
+			onLocalDisconnected: () => {},
+			onSendTimeUpdated: () => {},
+			updateConnectionState: async () => {},
+			sendCloudDeviceCommand: async (devSn, dtuSn, action, devType) => {
+				cloudCalls.push({ devSn, dtuSn, action, devType });
+			},
+		};
+		const ctx = new DeviceContext({
+			adapter,
+			protobuf: null,
+			host: "",
+			enableLocal: false,
+			enableCloud: true,
+			enableCloudRelay: false,
+			dataInterval: 15,
+			slowPollFactor: 6,
+		});
+		return { ctx, cloudCalls, getWarn: () => warnMsg };
+	}
+
+	const button = val => ({ val, ack: false, ts: Date.now(), lc: Date.now(), from: "" });
+
+	it("dtu.reboot over cloud targets the DTU serial with the DTU device type", async function () {
+		const { ctx, cloudCalls } = makeCloudFallbackCtx();
+		await ctx.initFromSerial("DTU9999");
+		ctx.setCloudInverterSn("INV1111");
+
+		await ctx.handleStateChange("dtu.reboot", button(true));
+
+		assert.deepStrictEqual(cloudCalls, [{ devSn: "DTU9999", dtuSn: "DTU9999", action: 1, devType: 1 }]);
+	});
+
+	it("inverter.reboot over cloud targets the inverter serial with the micro device type", async function () {
+		const { ctx, cloudCalls } = makeCloudFallbackCtx();
+		await ctx.initFromSerial("DTU9999");
+		ctx.setCloudInverterSn("INV1111");
+
+		await ctx.handleStateChange("inverter.reboot", button(true));
+
+		assert.deepStrictEqual(cloudCalls, [{ devSn: "INV1111", dtuSn: "DTU9999", action: 3, devType: 3 }]);
+	});
+
+	it("dtu.reboot over cloud works even before the inverter serial is known", async function () {
+		const { ctx, cloudCalls } = makeCloudFallbackCtx();
+		await ctx.initFromSerial("DTU9999"); // no setCloudInverterSn
+
+		await ctx.handleStateChange("dtu.reboot", button(true));
+
+		assert.deepStrictEqual(cloudCalls, [{ devSn: "DTU9999", dtuSn: "DTU9999", action: 1, devType: 1 }]);
+	});
+
+	it("inverter.reboot before the inverter serial is known fails with a clear message, no leak", async function () {
+		const { ctx, cloudCalls, getWarn } = makeCloudFallbackCtx();
+		await ctx.initFromSerial("DTU9999"); // no setCloudInverterSn
+
+		await ctx.handleStateChange("inverter.reboot", button(true));
+
+		assert.strictEqual(cloudCalls.length, 0, "no cloud command sent without an inverter serial");
+		assert.ok(getWarn().includes("inverter serial not known"), "user-facing message, not internal validation");
+	});
 });
 
 // ============================================================

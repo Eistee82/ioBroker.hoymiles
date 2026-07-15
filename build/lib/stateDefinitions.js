@@ -96,7 +96,7 @@ const states = [
     s("dtu.swVersion", "Software version", "Software-Version", "text"),
     n("dtu.rssi", "Signal strength", "Signalstärke", "value", "dBm", { source: "local" }),
     s("dtu.wifiVersion", "WiFi version", "WLAN-Version", "text", { source: "local" }),
-    b("dtu.reboot", "Reboot DTU", "DTU neustarten", "button", { write: true, source: "local" }),
+    b("dtu.reboot", "Reboot DTU", "DTU neustarten", "button", { write: true }),
     n("dtu.stepTime", "Step time", "Schrittzeit", "value", "s", { source: "local" }),
     n("dtu.accessModel", "Network access mode", "Netzwerk-Zugangsart", "value", "", {
         states: { 0: "GPRS", 1: "WiFi", 2: "Ethernet" },

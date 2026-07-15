@@ -209,30 +209,40 @@ describe("commandHandler – executeCloudCommand", function () {
 	/** Build a cloud command context that records sent actions and reset buttons. */
 	function createCloudCtx() {
 		const sent = [];
+		const calls = [];
 		const acks = [];
 		const resets = [];
 		const ctx = {
 			deviceId: "DTU1",
 			log: { info: () => {}, warn: () => {} },
-			send: async action => {
+			send: async (action, devType) => {
 				sent.push(action);
+				calls.push({ action, devType });
 			},
 			setState: async (id, val, ack) => {
 				acks.push({ id, val, ack });
 			},
 			resetButton: id => resets.push(id),
 		};
-		return { ctx, sent, acks, resets };
+		return { ctx, sent, calls, acks, resets };
 	}
 
 	const st = val => ({ val, ack: false, ts: 0, lc: 0, from: "", q: 0 });
 
-	it("maps inverter.reboot to action 3 and resets the button", async function () {
-		const { ctx, sent, resets } = createCloudCtx();
+	it("maps inverter.reboot to action 3 (micro dev_type) and resets the button", async function () {
+		const { ctx, calls, resets } = createCloudCtx();
 		const handled = await executeCloudCommand("inverter.reboot", st(true), ctx);
 		assert.strictEqual(handled, true);
-		assert.deepStrictEqual(sent, [3]);
+		assert.deepStrictEqual(calls, [{ action: 3, devType: 3 }]);
 		assert.deepStrictEqual(resets, ["inverter.reboot"]);
+	});
+
+	it("maps dtu.reboot to action 1 with the DTU dev_type and resets the button", async function () {
+		const { ctx, calls, resets } = createCloudCtx();
+		const handled = await executeCloudCommand("dtu.reboot", st(true), ctx);
+		assert.strictEqual(handled, true);
+		assert.deepStrictEqual(calls, [{ action: 1, devType: 1 }]);
+		assert.deepStrictEqual(resets, ["dtu.reboot"]);
 	});
 
 	it("maps inverter.active on/off to action 6/7 and acks", async function () {

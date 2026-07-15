@@ -260,11 +260,11 @@ class Hoymiles extends utils.Adapter {
     matchLocalDeviceToCloud(ctx) {
         this.cloudManager?.matchLocalDeviceToCloud(ctx);
     }
-    async sendCloudDeviceCommand(devSn, dtuSn, action) {
+    async sendCloudDeviceCommand(devSn, dtuSn, action, devType) {
         if (!this.cloudManager) {
             throw new Error("Cloud is not enabled");
         }
-        await this.cloudManager.sendDeviceCommand(devSn, dtuSn, action);
+        await this.cloudManager.sendDeviceCommand(devSn, dtuSn, action, devType);
     }
     async onStateChange(id, state) {
         if (!state || state.ack) {

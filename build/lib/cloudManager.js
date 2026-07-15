@@ -90,8 +90,8 @@ class CloudManager {
     get hasToken() {
         return !!this.cloud.token;
     }
-    async sendDeviceCommand(devSn, dtuSn, action) {
-        await this.cloud.sendDeviceCommand(action, devSn, dtuSn);
+    async sendDeviceCommand(devSn, dtuSn, action, devType) {
+        await this.cloud.sendDeviceCommand(action, devSn, dtuSn, devType);
     }
     matchLocalDeviceToCloud(ctx) {
         if (!ctx.dtuSerial) {

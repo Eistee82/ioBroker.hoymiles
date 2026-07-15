@@ -1,4 +1,4 @@
-import { POWER_LIMIT_MIN, POWER_LIMIT_MAX, SCALE_POWER, DEVICE_COMMAND_REBOOT, DEVICE_COMMAND_POWER_ON, DEVICE_COMMAND_POWER_OFF, } from "./constants.js";
+import { POWER_LIMIT_MIN, POWER_LIMIT_MAX, SCALE_POWER, DEVICE_COMMAND_REBOOT, DEVICE_COMMAND_POWER_ON, DEVICE_COMMAND_POWER_OFF, DTU_COMMAND_REBOOT, CLOUD_DEV_TYPE_DTU, CLOUD_DEV_TYPE_MICRO, } from "./constants.js";
 import { unixSeconds } from "./utils.js";
 const COMMANDS = {
     "inverter.powerLimit": {
@@ -88,6 +88,7 @@ async function executeCommand(stateId, state, ctx) {
 const CLOUD_COMMANDS = {
     "inverter.reboot": { action: () => DEVICE_COMMAND_REBOOT, button: true },
     "inverter.active": { action: v => (v ? DEVICE_COMMAND_POWER_ON : DEVICE_COMMAND_POWER_OFF) },
+    "dtu.reboot": { action: () => DTU_COMMAND_REBOOT, button: true, devType: CLOUD_DEV_TYPE_DTU },
 };
 async function executeCloudCommand(stateId, state, ctx) {
     const cmd = CLOUD_COMMANDS[stateId];
@@ -98,9 +99,10 @@ async function executeCloudCommand(stateId, state, ctx) {
         return true;
     }
     const action = cmd.action(state.val);
-    ctx.log.info(`[${ctx.deviceId}] Sending command "${stateId}" via cloud (action ${action})`);
+    const devType = cmd.devType ?? CLOUD_DEV_TYPE_MICRO;
+    ctx.log.info(`[${ctx.deviceId}] Sending command "${stateId}" via cloud (action ${action}, dev_type ${devType})`);
     try {
-        await ctx.send(action);
+        await ctx.send(action, devType);
         if (!cmd.button) {
             await ctx.setState(stateId, state.val, true);
         }

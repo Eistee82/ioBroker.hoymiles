@@ -6,7 +6,7 @@
 
 This adapter is designed for **Hoymiles HMS microinverters with an integrated WiFi (or WiFi + Bluetooth) DTU** (DTUBI).
 
-**Local** = direct TCP/Protobuf connection on port 10081. **Cloud** = S-Miles Cloud API — auto-discovery, realtime data (fast burst channel ~1.5–3 s), energy aggregates, grid profile, inverter on/off + reboot.
+**Local** = direct TCP/Protobuf connection on port 10081. **Cloud** = S-Miles Cloud API — auto-discovery, realtime data (fast burst channel ~1.5–3 s), energy aggregates, grid profile, inverter on/off + reboot, DTU reboot.
 
 | Model | Strings | Local (TCP) | Cloud | Status |
 |-------|:---:|:---:|:---:|--------|
@@ -25,7 +25,7 @@ This adapter is designed for **Hoymiles HMS microinverters with an integrated Wi
 | HMS-2000DW-4T | 4 | ✅ | ✅ | Untested |
 | HMS-600-2WB | 2 | ❌¹ | ✅ | Untested |
 | HMS-700-2WB | 2 | ❌¹ | ✅ | Untested |
-| HMS-800-2WB | 2 | ❌¹ | ✅ | **Tested** (Cloud: realtime burst, grid profile, on/off + reboot) |
+| HMS-800-2WB | 2 | ❌¹ | ✅ | **Tested** (Cloud: realtime burst, grid profile, on/off + reboot, DTU reboot) |
 | HMS-900-2WB | 2 | ❌¹ | ✅ | Untested |
 | HMS-1000-2WB | 2 | ❌¹ | ✅ | Untested |
 | HMS-1600-4WB | 4 | ❌¹ | ✅ | Untested |
@@ -34,7 +34,7 @@ This adapter is designed for **Hoymiles HMS microinverters with an integrated Wi
 
 ¹ The **WB series** (sold as **"HiFlow Pro"**) has no local TCP port — its only local channel is Bluetooth LE, all data goes to the Hoymiles cloud. These inverters work **cloud-only** out of the box; on top of that, local data is possible by redirecting their cloud upload to the adapter's built-in relay server — see [Redirect Inverter to ioBroker](#redirect-inverter-to-iobroker). All WB models share the same DTU platform; only the HMS-800-2WB has been tested so far.
 
-**Cloud-only operation:** any supported inverter in your S-Miles account also works without a local connection at all — the adapter discovers it automatically and provides realtime power (burst channel), energy aggregates, grid profile, and the on/off + reboot commands (`inverter.active` / `inverter.reboot`) over the cloud. The remaining commands (power limit, lock, clean warnings, …) require the local TCP link.
+**Cloud-only operation:** any supported inverter in your S-Miles account also works without a local connection at all — the adapter discovers it automatically and provides realtime power (burst channel), energy aggregates, grid profile, and the inverter on/off + reboot (`inverter.active` / `inverter.reboot`) plus DTU reboot (`dtu.reboot`) commands over the cloud. The remaining commands (power limit, lock, clean warnings, …) require the local TCP link.
 
 > This adapter does **NOT** work with: HMS-1600/1800/2000-4T without "DW", HM series, MI series, external DTU sticks, or HMT three-phase models.
 
@@ -250,7 +250,7 @@ PV channels are created dynamically based on the inverter model (1T = 1 channel,
 | `inverter.linkStatus` | number | — | no | Link status |
 | `inverter.modulationIndexSignal` | number | — | no | SGSMO #20, raw packed value (modulation index + signal; exact decode not yet confirmed, local) |
 
-### `<dtuSerial>.dtu.*` — DTU Information (per DTU, local only)
+### `<dtuSerial>.dtu.*` — DTU Information (per DTU, local only except `dtu.reboot`)
 
 | State | Type | Unit | Description |
 |-------|------|------|-------------|
@@ -258,7 +258,7 @@ PV channels are created dynamically based on the inverter model (1T = 1 channel,
 | `dtu.swVersion` | string | — | Software version |
 | `dtu.hwVersion` | string | — | Hardware version |
 | `dtu.rssi` | number | dBm | Signal strength |
-| `dtu.reboot` | boolean | — | Reboot DTU (**writable**, button) |
+| `dtu.reboot` | boolean | — | Reboot DTU (**writable**, button). Sent over the local TCP link when connected, otherwise over the cloud for cloud-only devices (e.g. HMS-800-2WB) |
 | `dtu.wifiVersion` | string | — | WiFi version |
 | `dtu.fwUpdateAvailable` | boolean | — | Firmware update available (checked once daily via cloud) |
 | `dtu.stepTime` | number | s | Step time |

@@ -118,10 +118,17 @@ export const DEVICE_SETTING_ACTION_GRID_READ = 41;
 // command/put: sends a control command (reboot / power on / power off). `put_status` polls it.
 export const PVM_CTL_COMMAND_PUT_PATH = "/pvm-ctl/api/0/dev/command/put";
 export const PVM_CTL_COMMAND_STATUS_PATH = "/pvm-ctl/api/0/dev/command/put_status";
+// Device-type codes for command/put (`dev_type`; EDeviceType in the S-Miles app). The command
+// action code is scoped to the device type — action 1 means "reboot the DTU" for a DTU, but a
+// different command for a micro-inverter — so both must be sent together.
+export const CLOUD_DEV_TYPE_DTU = 1;
+export const CLOUD_DEV_TYPE_MICRO = 3;
 /** Micro-inverter control command action codes (from the portal's device-maintenance dialog). */
 export const DEVICE_COMMAND_REBOOT = 3;
 export const DEVICE_COMMAND_POWER_ON = 6;
 export const DEVICE_COMMAND_POWER_OFF = 7;
+/** DTU control command action code (ECommandAction.DTU_REBOOT, sent with dev_type = DTU). */
+export const DTU_COMMAND_REBOOT = 1;
 /** Poll cadence and cap for a device-control/setting task (≈2 s × 15 ≈ 30 s ceiling). */
 export const DEVICE_SETTING_POLL_INTERVAL_MS = 2000;
 export const DEVICE_SETTING_POLL_MAX = 15;

@@ -131,12 +131,13 @@ class CloudManager {
 	 * Send a device control command over the cloud connection. Used as the fallback path for
 	 * writable command states on cloud-only devices (no local TCP link).
 	 *
-	 * @param devSn - Micro-inverter serial number (unprefixed).
+	 * @param devSn - Target device serial number (unprefixed): the inverter for micro commands, the DTU for DTU commands.
 	 * @param dtuSn - DTU serial number (unprefixed).
-	 * @param action - Control action code (see DEVICE_COMMAND_* constants).
+	 * @param action - Control action code (see DEVICE_COMMAND_* / DTU_COMMAND_* constants).
+	 * @param devType - Target device type (see CLOUD_DEV_TYPE_* constants; defaults to micro-inverter).
 	 */
-	async sendDeviceCommand(devSn: string, dtuSn: string, action: number): Promise<void> {
-		await this.cloud.sendDeviceCommand(action, devSn, dtuSn);
+	async sendDeviceCommand(devSn: string, dtuSn: string, action: number, devType?: number): Promise<void> {
+		await this.cloud.sendDeviceCommand(action, devSn, dtuSn, devType);
 	}
 
 	/**
