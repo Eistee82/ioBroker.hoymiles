@@ -18,6 +18,7 @@ import {
 	stationWallClockToEpoch,
 } from "./utils.js";
 import { stationStateMap, buildStateCommon } from "./stateDefinitions.js";
+import { mapCloudGridProfile } from "./gridProfile.js";
 
 /**
  * Parse a string to number, returning 0 for NaN/undefined.
@@ -58,6 +59,8 @@ interface CloudPollerOptions {
 	stationDevices: Set<number>;
 	slowPollFactor: number;
 	hasRelay: boolean;
+	/** Stations the realtime burst streams — their `grid.power` is left to the burst. */
+	burstActiveStations: Set<number>;
 }
 
 /**
@@ -77,6 +80,7 @@ class CloudPoller {
 	private readonly stationDevices: Set<number>;
 	private readonly slowPollFactor: number;
 	private readonly hasRelay: boolean;
+	private readonly burstActiveStations: Set<number>;
 
 	private state: CloudPollState;
 	private pollCount: number;
@@ -111,6 +115,8 @@ class CloudPoller {
 	private lastCloudConnected: boolean | undefined;
 	/** State-objects already created via `writeStationState`. Avoids re-issuing extendObjectAsync per poll. */
 	private readonly stationStateObjects: Set<string> = new Set();
+	/** DTU serials whose grid profile was already read via the cloud (read once — it rarely changes). */
+	private readonly gridProfileRead: Set<string> = new Set();
 
 	/**
 	 * @param options - Cloud poller configuration
@@ -122,6 +128,7 @@ class CloudPoller {
 		this.stationDevices = options.stationDevices;
 		this.slowPollFactor = options.slowPollFactor;
 		this.hasRelay = options.hasRelay;
+		this.burstActiveStations = options.burstActiveStations;
 
 		this.state = "POLLING_ACTIVE";
 		this.pollCount = 0;
@@ -427,7 +434,7 @@ class CloudPoller {
 		}
 
 		// Device tree + per-inverter data
-		await this.pollDevicesAndInverters(stationId, slowPoll);
+		await this.pollDevicesAndInverters(stationId, slowPoll, online);
 
 		this.adapter.log.debug(
 			`Cloud data (station ${stationId}): ${data.real_power}W, today=${toKwh(data.today_eq).toFixed(2)}kWh, total=${toKwh(data.total_eq).toFixed(2)}kWh, online=${online}`,
@@ -474,8 +481,7 @@ class CloudPoller {
 			`[diag] station ${stationId} lastCloudUpdate: data_time="${data.data_time ?? "<none>"}" ` +
 				`offset=${offsetMs / 3600000}h → ${cloudUpdateEpoch != null ? new Date(cloudUpdateEpoch).toISOString() : "n/a"}`,
 		);
-		await Promise.all([
-			w("grid.power", num(data.real_power)),
+		const writes: Array<Promise<void>> = [
 			w("grid.dailyEnergy", toKwh(data.today_eq)),
 			w("grid.monthEnergy", toKwh(data.month_eq)),
 			w("grid.yearEnergy", toKwh(data.year_eq)),
@@ -488,7 +494,13 @@ class CloudPoller {
 			// Timestamps describe WHEN data last arrived — always good quality, even when stale.
 			w("info.lastCloudUpdate", cloudUpdateEpoch, 0x00),
 			w("info.lastDataTime", stationWallClockToEpoch(data.last_data_time, offsetMs), 0x00),
-		]);
+		];
+		// The realtime burst (m:0) owns the live station power; only write it here when no burst
+		// is streaming this station, so the two don't fight over `grid.power`.
+		if (!this.burstActiveStations.has(stationId)) {
+			writes.push(w("grid.power", num(data.real_power)));
+		}
+		await Promise.all(writes);
 	}
 
 	private async pollStationDetails(
@@ -591,7 +603,7 @@ class CloudPoller {
 		}
 	}
 
-	private async pollDevicesAndInverters(stationId: number, isSlowPoll: boolean): Promise<void> {
+	private async pollDevicesAndInverters(stationId: number, isSlowPoll: boolean, online: boolean): Promise<void> {
 		let hasCloudOnlyDtus = false;
 		for (const d of this.devices.values()) {
 			if (d.cloudStationId === stationId && d.dtuSerial && !d.connection?.connected) {
@@ -615,10 +627,52 @@ class CloudPoller {
 		// DTU/inverter versions (slow poll only)
 		if (isSlowPoll && deviceTree.length > 0) {
 			await this.updateDeviceVersions(deviceTree);
+			// Read the grid profile of cloud-only DTUs once (after versions so the micro serial is cached).
+			await this.pollGridProfiles(deviceTree);
 		}
 
 		// Per-inverter + per-PV realtime data
-		await this.pollInverterRealtimeData(stationId, deviceTree);
+		await this.pollInverterRealtimeData(stationId, deviceTree, online);
+	}
+
+	/**
+	 * Read the grid profile of each cloud-only DTU via the cloud (pvm-ctl action 41) and write it
+	 * to `<dtuSerial>.gridProfile.*` — the same states the local path fills. Done once per DTU
+	 * (the profile rarely changes); a failure is retried on the next slow poll. Locally-connected
+	 * DTUs are skipped: they read their profile over the local link.
+	 *
+	 * @param deviceTree - Device tree from `getDeviceTree()`.
+	 */
+	private async pollGridProfiles(deviceTree: Awaited<ReturnType<CloudConnection["getDeviceTree"]>>): Promise<void> {
+		for (const dtu of deviceTree) {
+			const dev = this.devices.get(dtu.sn);
+			if (!dev?.dtuSerial || dev.connection?.connected || this.gridProfileRead.has(dev.dtuSerial)) {
+				continue;
+			}
+			const inv = dtu.children?.[0];
+			if (!inv?.sn) {
+				continue;
+			}
+			try {
+				const params = await this.cloud.readGridProfileViaCloud(inv.sn, dtu.sn);
+				const decoded = mapCloudGridProfile(params);
+				const writes: Array<Promise<unknown>> = [
+					this.boundSetState(`${dev.dtuSerial}.gridProfile.standard`, decoded.standard, true),
+				];
+				for (const [key, val] of Object.entries(decoded.values)) {
+					writes.push(this.boundSetState(`${dev.dtuSerial}.gridProfile.${key}`, val, true));
+				}
+				await Promise.all(writes);
+				this.gridProfileRead.add(dev.dtuSerial);
+				this.adapter.log.debug(
+					`Grid profile read via cloud for ${anonymize(dev.dtuSerial, "dtu")}: ${decoded.standard}`,
+				);
+			} catch (err) {
+				this.adapter.log.debug(
+					`Cloud grid profile read failed for ${anonymize(dev.dtuSerial, "dtu")}: ${errorMessage(err)}`,
+				);
+			}
+		}
 	}
 
 	/**
@@ -687,6 +741,10 @@ class CloudPoller {
 			writeIfFilled(`${sn}.dtu.hwVersion`, dtu.hard_ver || "");
 			if (dtu.children?.[0]) {
 				const inv = dtu.children[0];
+				// Cache the micro serial so cloud control commands can address a cloud-only device.
+				if (inv.sn) {
+					dtuDevice.setCloudInverterSn(inv.sn);
+				}
 				writeIfFilled(`${sn}.inverter.model`, inv.model_no || "");
 				writeIfFilled(`${sn}.inverter.serialNumber`, inv.sn || "");
 				writeIfFilled(`${sn}.inverter.swVersion`, inv.soft_ver || "");
@@ -704,6 +762,7 @@ class CloudPoller {
 	private async pollInverterRealtimeData(
 		stationId: number,
 		deviceTree: Awaited<ReturnType<CloudConnection["getDeviceTree"]>>,
+		online: boolean,
 	): Promise<void> {
 		if (deviceTree.length === 0) {
 			return;
@@ -757,9 +816,16 @@ class CloudPoller {
 			try {
 				this.lastRealtimeFetch.set(sn, now);
 				const s = this.boundSetState;
-				// Cloud-sourced data states use q=0x40 (substitute value from device/instance)
+				// Fresh cloud values are good (0x00); when the station's last upload is stale they
+				// are flagged 0x42 (device not connected) so consumers can tell the last reading is
+				// frozen — same semantics as the station-level states. Station freshness alone is
+				// not enough: in a multi-DTU station one inverter can be individually offline while
+				// the station still uploads, so intersect with this DTU's own warn_data.connect
+				// (the same source updateCloudConnectedStates uses for info.connected).
+				const devConnected = dtu.children?.some(inv => inv.warn_data?.connect) ?? false;
+				const q: ioBroker.STATE_QUALITY[keyof ioBroker.STATE_QUALITY] = online && devConnected ? 0x00 : 0x42;
 				const cs = (id: string, val: ioBroker.StateValue): Promise<void> =>
-					s(id, { val, ack: true, q: 0x40 }).then(() => {});
+					s(id, { val, ack: true, q }).then(() => {});
 
 				// Inverter-level metrics
 				const values = await this.cloud.getMicroRealtimeData(stationId, microIds, today, [
@@ -776,7 +842,10 @@ class CloudPoller {
 				// (cloud-only DTUs only), so a locally-configured DTU that is merely offline
 				// for the night keeps the `false` its local layer set.
 				const writes: Array<Promise<void>> = [];
-				if (values.MI_POWER !== undefined) {
+				// When the realtime burst poller owns this DTU's power, skip the (slower) power
+				// writes so the two don't fight over `grid.power`; keep the metrics the burst
+				// doesn't deliver (voltage/frequency/temperature).
+				if (values.MI_POWER !== undefined && !dtuDev.burstActive) {
 					writes.push(cs(`${sn}.grid.power`, values.MI_POWER));
 				}
 				if (values.MI_NET_V !== undefined) {
@@ -799,9 +868,12 @@ class CloudPoller {
 				const pvTasks: Array<Promise<void>> = [];
 				const children = dtu.children || [];
 
-				// Ensure PV states exist for the max port count across all inverter children
+				// Ensure PV states exist for the max port count across all inverter children.
+				// Seed with the already-known pvCount so this can only grow it — the burst poller
+				// may have discovered more live strings than the model-number regex predicts, and
+				// createPvStates() would otherwise shrink pvCount back down.
 				if (!dtuDev.pvStatesCreated && children.length > 0) {
-					let maxPorts = 0;
+					let maxPorts = dtuDev.pvCount;
 					for (const inv of children) {
 						const m = CloudPoller.PORT_COUNT_RE.exec(inv.model_no || "");
 						maxPorts = Math.max(maxPorts, Math.min(Math.max(m ? parseInt(m[1], 10) : 2, 1), 6));
@@ -832,7 +904,7 @@ class CloudPoller {
 									"MODULE_V",
 									"MODULE_I",
 								])
-								.then(modValues => this.setPvStates(cs, sn, p - 1, modValues)),
+								.then(modValues => this.setPvStates(cs, sn, p - 1, modValues, dtuDev.burstActive)),
 						);
 					}
 				}
@@ -872,13 +944,15 @@ class CloudPoller {
 		sn: string,
 		pvIndex: number,
 		modValues: Record<string, number> | null,
+		skipPower = false,
 	): Promise<void> {
 		if (!modValues) {
 			return;
 		}
 		const prefix = `${sn}.pv${pvIndex}`;
 		const writes: Array<Promise<void>> = [];
-		if (modValues.MODULE_POWER !== undefined) {
+		// `skipPower` while the burst poller owns per-string power — keep voltage/current here.
+		if (modValues.MODULE_POWER !== undefined && !skipPower) {
 			writes.push(cs(`${prefix}.power`, modValues.MODULE_POWER));
 		}
 		if (modValues.MODULE_V !== undefined) {

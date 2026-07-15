@@ -184,6 +184,15 @@ describe("httpClient", function () {
 						return;
 					}
 
+					// Route: Query-string echo — verifies the client sends pathname + search,
+					// not just pathname (the realtime burst endpoint carries its auth token as
+					// `?k=…&t=…`, which is required, not optional, for the request to succeed).
+					if (url.startsWith("/query-check")) {
+						res.writeHead(200, { "Content-Type": "application/json" });
+						res.end(JSON.stringify({ receivedUrl: url }));
+						return;
+					}
+
 					// Default: 404
 					res.writeHead(404, { "Content-Type": "text/plain" });
 					res.end("Not Found");
@@ -332,6 +341,24 @@ describe("httpClient", function () {
 						return true;
 					},
 				);
+			});
+		});
+
+		// --- Query string forwarding (postJson/postBinary must not drop the search part) ---
+		describe("query string forwarding", function () {
+			it("postJson sends the query string as part of the request path", async function () {
+				this.timeout(10000);
+				const result = await postJson(`${baseUrl}/query-check?k=abc&t=1`, {});
+				assert.strictEqual(result.receivedUrl, "/query-check?k=abc&t=1");
+			});
+
+			it("postBinary sends the query string as part of the request path", async function () {
+				this.timeout(10000);
+				// query-check returns JSON, but postBinary always returns a raw Buffer — parse it.
+				const result = await postBinary(`${baseUrl}/query-check?k=xyz&t=99`, {});
+				assert.ok(Buffer.isBuffer(result));
+				const parsed = JSON.parse(result.toString());
+				assert.strictEqual(parsed.receivedUrl, "/query-check?k=xyz&t=99");
 			});
 		});
 

@@ -1,6 +1,16 @@
 import type { ProtobufHandler } from "./protobufHandler.js";
 import type DtuConnection from "./dtuConnection.js";
-import { POWER_LIMIT_MIN, POWER_LIMIT_MAX, SCALE_POWER } from "./constants.js";
+import {
+	POWER_LIMIT_MIN,
+	POWER_LIMIT_MAX,
+	SCALE_POWER,
+	DEVICE_COMMAND_REBOOT,
+	DEVICE_COMMAND_POWER_ON,
+	DEVICE_COMMAND_POWER_OFF,
+	DTU_COMMAND_REBOOT,
+	CLOUD_DEV_TYPE_DTU,
+	CLOUD_DEV_TYPE_MICRO,
+} from "./constants.js";
 import { unixSeconds } from "./utils.js";
 
 interface CommandContext {
@@ -130,5 +140,68 @@ async function executeCommand(stateId: string, state: ioBroker.State, ctx: Comma
 	}
 }
 
-export { executeCommand, COMMANDS };
-export type { CommandContext };
+/** Context for sending a command over the cloud instead of the local TCP link. */
+interface CloudCommandContext {
+	deviceId: string;
+	log: ioBroker.Logger;
+	/** Send the given control action code to the device (of the given type) via the cloud. */
+	send: (action: number, devType: number) => Promise<void>;
+	setState: (id: string, value: ioBroker.StateValue, ack: boolean) => Promise<void>;
+	resetButton: (stateId: string) => void;
+}
+
+/**
+ * The subset of writable command states that can also be actuated over the cloud (for devices
+ * with no local link, e.g. HMS-800-2WB). Maps a state to its cloud action code and device type;
+ * on/off-style states resolve the code from the boolean value. Commands not listed here are
+ * local-only. `devType` defaults to the micro-inverter; DTU-level commands (e.g. `dtu.reboot`)
+ * carry the DTU type so the cloud addresses the DTU itself rather than the connected inverter.
+ */
+const CLOUD_COMMANDS: Record<
+	string,
+	{ action: (val: ioBroker.StateValue) => number; button?: boolean; devType?: number }
+> = {
+	"inverter.reboot": { action: () => DEVICE_COMMAND_REBOOT, button: true },
+	"inverter.active": { action: v => (v ? DEVICE_COMMAND_POWER_ON : DEVICE_COMMAND_POWER_OFF) },
+	"dtu.reboot": { action: () => DTU_COMMAND_REBOOT, button: true, devType: CLOUD_DEV_TYPE_DTU },
+};
+
+/**
+ * Execute a writable state command over the cloud. Mirrors {@link executeCommand}'s button/ack
+ * semantics but sends via the cloud control channel. Returns true if the state maps to a
+ * cloud-capable command (whether or not it fired), false if the command is local-only.
+ *
+ * @param stateId - State ID relative to device prefix (e.g. "inverter.reboot")
+ * @param state - The new state value
+ * @param ctx - Cloud command context
+ */
+async function executeCloudCommand(stateId: string, state: ioBroker.State, ctx: CloudCommandContext): Promise<boolean> {
+	const cmd = CLOUD_COMMANDS[stateId];
+	if (!cmd) {
+		return false;
+	}
+	// Button commands only trigger on a truthy value; the off-edge is a no-op but still "handled".
+	if (cmd.button && !state.val) {
+		return true;
+	}
+	const action = cmd.action(state.val);
+	const devType = cmd.devType ?? CLOUD_DEV_TYPE_MICRO;
+	ctx.log.info(`[${ctx.deviceId}] Sending command "${stateId}" via cloud (action ${action}, dev_type ${devType})`);
+	try {
+		await ctx.send(action, devType);
+		if (!cmd.button) {
+			await ctx.setState(stateId, state.val, true);
+		}
+	} catch (err) {
+		const msg = err instanceof Error ? err.message : String(err);
+		ctx.log.warn(`[${ctx.deviceId}] Cloud command "${stateId}" failed: ${msg}`);
+	} finally {
+		if (cmd.button) {
+			ctx.resetButton(stateId);
+		}
+	}
+	return true;
+}
+
+export { executeCommand, executeCloudCommand, COMMANDS, CLOUD_COMMANDS };
+export type { CommandContext, CloudCommandContext };

@@ -45,6 +45,7 @@ function makePoller(overrides = {}) {
 		stationDevices: new Set(),
 		hasRelay: false,
 		slowPollFactor: 6,
+		burstActiveStations: new Set(),
 	};
 	return new CloudPoller({ ...defaults, ...overrides });
 }
@@ -712,6 +713,7 @@ describe("CloudPoller – pollDevicesAndInverters", function () {
 			cloudStationId: 42,
 			connection: null, // not locally connected
 			pvStatesCreated: false,
+			setCloudInverterSn: () => {},
 			createPvStates: async () => {},
 		});
 
@@ -735,6 +737,216 @@ describe("CloudPoller – pollDevicesAndInverters", function () {
 		// Verify state writes
 		assert.strictEqual(stateWrites["DTU_SN_1.info.connected"], true);
 		poller.stop();
+	});
+
+	it("yields grid.power/pvN.power to the burst poller when a DTU is burstActive, but keeps voltage/current/temperature", async function () {
+		const stateWrites = {};
+		const cloud = makeMockCloud();
+		cloud.ensureToken = async () => {};
+		cloud.getStationRealtime = async () => ({
+			real_power: "200",
+			today_eq: "0",
+			month_eq: "0",
+			year_eq: "0",
+			total_eq: "0",
+			co2_emission_reduction: "0",
+			plant_tree: "0",
+		});
+		cloud.getStationDetails = async () => ({});
+		cloud.getDeviceTree = async () => [
+			{
+				sn: "DTU_SN_1",
+				soft_ver: "1.0.0",
+				hard_ver: "2.0.0",
+				id: 10,
+				children: [
+					{
+						sn: "INV_SN_1",
+						id: 100,
+						model_no: "HMS-800W-2T",
+						soft_ver: "3.0.0",
+						hard_ver: "4.0.0",
+						warn_data: { connect: true },
+					},
+				],
+			},
+		];
+		cloud.getMicroRealtimeData = async () => ({
+			MI_POWER: 450,
+			MI_NET_V: 230,
+			MI_NET_RATE: 50.01,
+			MI_TEMPERATURE: 38.5,
+		});
+		cloud.getModuleRealtimeData = async () => ({ MODULE_POWER: 225, MODULE_V: 33.2, MODULE_I: 6.8 });
+
+		const adapter = makeMockAdapter();
+		adapter.setStateAsync = async (id, val) => {
+			stateWrites[id] = typeof val === "object" ? val.val : val;
+		};
+
+		const devices = new Map();
+		devices.set("DTU_SN_1", {
+			dtuSerial: "DTU_SN_1",
+			cloudStationId: 42,
+			connection: null,
+			burstActive: true, // burst poller owns power for this DTU
+			pvStatesCreated: false,
+			setCloudInverterSn: () => {},
+			createPvStates: async () => {},
+		});
+
+		const poller = makePoller({ cloud, adapter, devices, stationDevices: new Set([42]), slowPollFactor: 1 });
+		await poller.poll();
+
+		// Power states are yielded to the burst poller.
+		assert.strictEqual(stateWrites["DTU_SN_1.grid.power"], undefined);
+		assert.strictEqual(stateWrites["DTU_SN_1.pv0.power"], undefined);
+		// Metrics the burst does not deliver are still written by the cloud poller.
+		assert.strictEqual(stateWrites["DTU_SN_1.grid.voltage"], 230);
+		assert.strictEqual(stateWrites["DTU_SN_1.grid.frequency"], 50.01);
+		assert.strictEqual(stateWrites["DTU_SN_1.inverter.temperature"], 38.5);
+		assert.strictEqual(stateWrites["DTU_SN_1.pv0.voltage"], 33.2);
+		assert.strictEqual(stateWrites["DTU_SN_1.pv0.current"], 6.8);
+		poller.stop();
+	});
+
+	it("writes per-inverter cloud values with quality 0x00 when the station is fresh and 0x42 when stale", async function () {
+		const run = async dataTime => {
+			const writes = {};
+			const cloud = makeMockCloud();
+			cloud.ensureToken = async () => {};
+			cloud.getStationRealtime = async () => ({
+				real_power: "200",
+				today_eq: "0",
+				month_eq: "0",
+				year_eq: "0",
+				total_eq: "0",
+				co2_emission_reduction: "0",
+				plant_tree: "0",
+				data_time: dataTime,
+			});
+			cloud.getStationDetails = async () => ({});
+			cloud.getDeviceTree = async () => [
+				{
+					sn: "DTU_SN_1",
+					id: 10,
+					children: [{ sn: "INV_SN_1", id: 100, model_no: "HMS-800W-2T", warn_data: { connect: true } }],
+				},
+			];
+			cloud.getMicroRealtimeData = async () => ({ MI_NET_V: 230 });
+			cloud.getModuleRealtimeData = async () => ({});
+
+			const adapter = makeMockAdapter();
+			adapter.setStateAsync = async (id, val) => {
+				writes[id] = val;
+			};
+			const devices = new Map();
+			devices.set("DTU_SN_1", {
+				dtuSerial: "DTU_SN_1",
+				cloudStationId: 42,
+				connection: null,
+				burstActive: false,
+				pvStatesCreated: true,
+				pvCount: 2,
+				setCloudInverterSn: () => {},
+				createPvStates: async () => {},
+			});
+			const poller = makePoller({ cloud, adapter, devices, stationDevices: new Set([42]), slowPollFactor: 1 });
+			await poller.poll();
+			poller.stop();
+			return writes;
+		};
+
+		// No data_time → treated as fresh → good quality.
+		const fresh = await run(undefined);
+		assert.strictEqual(fresh["DTU_SN_1.grid.voltage"].q, 0x00);
+		// Very old upload → stale → device-not-connected quality.
+		const stale = await run("2020-01-01 00:00:00");
+		assert.strictEqual(stale["DTU_SN_1.grid.voltage"].q, 0x42);
+	});
+
+	it("writes per-inverter cloud values with quality 0x42 when the station is fresh but no inverter child reports warn_data.connect", async function () {
+		const writes = {};
+		const cloud = makeMockCloud();
+		cloud.ensureToken = async () => {};
+		cloud.getStationRealtime = async () => ({
+			real_power: "200",
+			today_eq: "0",
+			month_eq: "0",
+			year_eq: "0",
+			total_eq: "0",
+			co2_emission_reduction: "0",
+			plant_tree: "0",
+			// no data_time → station itself is treated as fresh/online
+		});
+		cloud.getStationDetails = async () => ({});
+		cloud.getDeviceTree = async () => [
+			{
+				sn: "DTU_SN_1",
+				id: 10,
+				children: [{ sn: "INV_SN_1", id: 100, model_no: "HMS-800W-2T", warn_data: { connect: false } }],
+			},
+		];
+		cloud.getMicroRealtimeData = async () => ({ MI_NET_V: 230 });
+		cloud.getModuleRealtimeData = async () => ({});
+
+		const adapter = makeMockAdapter();
+		adapter.setStateAsync = async (id, val) => {
+			writes[id] = val;
+		};
+		const devices = new Map();
+		devices.set("DTU_SN_1", {
+			dtuSerial: "DTU_SN_1",
+			cloudStationId: 42,
+			connection: null,
+			burstActive: false,
+			pvStatesCreated: true,
+			pvCount: 2,
+			setCloudInverterSn: () => {},
+			createPvStates: async () => {},
+		});
+		const poller = makePoller({ cloud, adapter, devices, stationDevices: new Set([42]), slowPollFactor: 1 });
+		await poller.poll();
+		poller.stop();
+
+		assert.strictEqual(
+			writes["DTU_SN_1.grid.voltage"].q,
+			0x42,
+			"fresh station but no connected inverter child ⇒ q=0x42",
+		);
+	});
+
+	it("yields station grid.power to the burst (m:0) when the station is burst-active, keeps energy counters", async function () {
+		const writes = {};
+		const cloud = makeMockCloud();
+		cloud.getStationRealtime = async () => ({
+			real_power: "200",
+			today_eq: "1500",
+			month_eq: "0",
+			year_eq: "0",
+			total_eq: "0",
+			co2_emission_reduction: "0",
+			plant_tree: "0",
+		});
+		cloud.getStationDetails = async () => ({});
+		cloud.getDeviceTree = async () => [];
+		const adapter = makeMockAdapter();
+		adapter.setStateAsync = async (id, val) => {
+			writes[id] = typeof val === "object" ? val.val : val;
+		};
+		const poller = makePoller({
+			cloud,
+			adapter,
+			stationDevices: new Set([42]),
+			burstActiveStations: new Set([42]),
+		});
+		await poller.poll();
+		poller.stop();
+
+		// grid.power is left to the burst poller (m:0)…
+		assert.strictEqual(writes["station-42.grid.power"], undefined);
+		// …but the energy counters (which the burst does not deliver) are still written.
+		assert.strictEqual(writes["station-42.grid.dailyEnergy"], 1.5);
 	});
 
 	it("skips locally connected DTUs in pollInverterRealtimeData", async function () {
@@ -812,6 +1024,7 @@ describe("CloudPoller – pollDevicesAndInverters", function () {
 			cloudStationId: 1,
 			connection: null,
 			pvStatesCreated: true,
+			setCloudInverterSn: () => {},
 			createPvStates: async () => {},
 		});
 
@@ -889,6 +1102,7 @@ describe("CloudPoller – pollDevicesAndInverters", function () {
 			cloudStationId: 1,
 			connection: null,
 			pvStatesCreated: true,
+			setCloudInverterSn: () => {},
 			createPvStates: async () => {},
 		});
 
@@ -949,6 +1163,7 @@ describe("CloudPoller – pollDevicesAndInverters", function () {
 			cloudStationId: 1,
 			connection: null, // cloud-only
 			pvStatesCreated: true,
+			setCloudInverterSn: () => {},
 			createPvStates: async () => {},
 		});
 
@@ -999,6 +1214,7 @@ describe("CloudPoller – pollDevicesAndInverters", function () {
 			cloudStationId: 1,
 			connection: null,
 			pvStatesCreated: true,
+			setCloudInverterSn: () => {},
 			createPvStates: async () => {},
 		});
 
@@ -1055,6 +1271,7 @@ describe("CloudPoller – info.connected source discipline", function () {
 		const devices = new Map();
 		devices.set(deviceOverrides.dtuSerial, {
 			pvStatesCreated: true,
+			setCloudInverterSn: () => {},
 			createPvStates: async () => {},
 			...deviceOverrides,
 		});
@@ -1631,6 +1848,7 @@ describe("CloudPoller – setPvStates (via pollInverterRealtimeData)", function 
 			cloudStationId: 1,
 			connection: null,
 			pvStatesCreated: false,
+			setCloudInverterSn: () => {},
 			createPvStates: async () => {},
 		});
 
@@ -1688,6 +1906,7 @@ describe("CloudPoller – setPvStates (via pollInverterRealtimeData)", function 
 			cloudStationId: 1,
 			connection: null,
 			pvStatesCreated: true,
+			setCloudInverterSn: () => {},
 			createPvStates: async () => {},
 		});
 
@@ -1839,6 +2058,7 @@ describe("CloudPoller – freshness & re-online", function () {
 			stationDevices: new Set([42]),
 			hasRelay: false,
 			slowPollFactor: 6,
+			burstActiveStations: new Set(),
 		});
 
 		await poller.poll(true); // force a slow poll so pollStationDetails runs
@@ -1865,6 +2085,7 @@ describe("CloudPoller – freshness & re-online", function () {
 			stationDevices: new Set([42]),
 			hasRelay: false,
 			slowPollFactor: 6,
+			burstActiveStations: new Set(),
 		});
 
 		await poller.poll(true);
@@ -1892,6 +2113,7 @@ describe("CloudPoller – freshness & re-online", function () {
 			stationDevices: new Set([42]),
 			hasRelay: false,
 			slowPollFactor: 6,
+			burstActiveStations: new Set(),
 		});
 		await stalePoller.poll();
 		const stalePower = writes.find(w => w.id === "station-42.grid.power");
@@ -1911,6 +2133,7 @@ describe("CloudPoller – freshness & re-online", function () {
 			stationDevices: new Set([42]),
 			hasRelay: false,
 			slowPollFactor: 6,
+			burstActiveStations: new Set(),
 		});
 		await freshPoller.poll();
 		const freshPower = writes.find(w => w.id === "station-42.grid.power");

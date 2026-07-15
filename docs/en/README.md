@@ -1,14 +1,40 @@
 ![Logo](../../admin/hoymiles.png)
 
-# ioBroker.hoymiles — Hoymiles HMS-xxxW-xT
+# ioBroker.hoymiles — Hoymiles HMS-xxxW-xT / HMS-xxx-xWB
 
 ## Supported Inverters
 
-This adapter is designed for **Hoymiles HMS microinverters with integrated WiFi DTU** (DTUBI):
+This adapter is designed for **Hoymiles HMS microinverters with an integrated WiFi (or WiFi + Bluetooth) DTU** (DTUBI).
 
-- **1T** (1 string): HMS-300W-1T, HMS-350W-1T, HMS-400W-1T, HMS-450W-1T, HMS-500W-1T
-- **2T** (2 strings): HMS-600W-2T, HMS-700W-2T, HMS-800W-2T (**Tested**), HMS-900W-2T, HMS-1000W-2T (**Tested Local**)
-- **4T** (4 strings, **DW variant only**): HMS-1600DW-4T, HMS-1800DW-4T, HMS-2000DW-4T
+**Local** = direct TCP/Protobuf connection on port 10081. **Cloud** = S-Miles Cloud API — auto-discovery, realtime data (fast burst channel ~1.5–3 s), energy aggregates, grid profile, inverter on/off + reboot, DTU reboot.
+
+| Model | Strings | Local (TCP) | Cloud | Status |
+|-------|:---:|:---:|:---:|--------|
+| HMS-300W-1T | 1 | ✅ | ✅ | Untested |
+| HMS-350W-1T | 1 | ✅ | ✅ | Untested |
+| HMS-400W-1T | 1 | ✅ | ✅ | Untested |
+| HMS-450W-1T | 1 | ✅ | ✅ | Untested |
+| HMS-500W-1T | 1 | ✅ | ✅ | Untested |
+| HMS-600W-2T | 2 | ✅ | ✅ | Untested |
+| HMS-700W-2T | 2 | ✅ | ✅ | Untested |
+| HMS-800W-2T | 2 | ✅ | ✅ | **Tested** (Local + Cloud) |
+| HMS-900W-2T | 2 | ✅ | ✅ | Untested |
+| HMS-1000W-2T | 2 | ✅ | ✅ | **Tested** (Local) |
+| HMS-1600DW-4T | 4 | ✅ | ✅ | Untested |
+| HMS-1800DW-4T | 4 | ✅ | ✅ | Untested |
+| HMS-2000DW-4T | 4 | ✅ | ✅ | Untested |
+| HMS-600-2WB | 2 | ❌¹ | ✅ | Untested |
+| HMS-700-2WB | 2 | ❌¹ | ✅ | Untested |
+| HMS-800-2WB | 2 | ❌¹ | ✅ | **Tested** (Cloud: realtime burst, grid profile, on/off + reboot, DTU reboot) |
+| HMS-900-2WB | 2 | ❌¹ | ✅ | Untested |
+| HMS-1000-2WB | 2 | ❌¹ | ✅ | Untested |
+| HMS-1600-4WB | 4 | ❌¹ | ✅ | Untested |
+| HMS-1800-4WB | 4 | ❌¹ | ✅ | Untested |
+| HMS-2000-4WB | 4 | ❌¹ | ✅ | Untested |
+
+¹ The **WB series** (sold as **"HiFlow Pro"**) has no local TCP port — its only local channel is Bluetooth LE, all data goes to the Hoymiles cloud. These inverters work **cloud-only** out of the box; on top of that, local data is possible by redirecting their cloud upload to the adapter's built-in relay server — see [Redirect Inverter to ioBroker](#redirect-inverter-to-iobroker). All WB models share the same DTU platform; only the HMS-800-2WB has been tested so far.
+
+**Cloud-only operation:** any supported inverter in your S-Miles account also works without a local connection at all — the adapter discovers it automatically and provides realtime power (burst channel), energy aggregates, grid profile, and the inverter on/off + reboot (`inverter.active` / `inverter.reboot`) plus DTU reboot (`dtu.reboot`) commands over the cloud. The remaining commands (power limit, lock, clean warnings, …) require the local TCP link.
 
 > This adapter does **NOT** work with: HMS-1600/1800/2000-4T without "DW", HM series, MI series, external DTU sticks, or HMT three-phase models.
 
@@ -33,6 +59,7 @@ Open the adapter configuration in the ioBroker admin interface.
 | **Enable cloud** | off | Enable Hoymiles S-Miles Cloud API |
 | **S-Miles Email** | — | Your S-Miles account email |
 | **S-Miles Password** | — | Your S-Miles account password (stored encrypted) |
+| **Fast realtime data (cloud)** | on | For inverters **without** a local connection, poll fast per-second power data from the cloud (the same "burst" channel the S-Miles app's live view uses). Updates `grid.power` and `pvN.power` roughly every 1.5–3 s (server-dictated) instead of only every ~80 s. Only affects cloud-only devices; locally connected inverters keep their direct local realtime data. |
 
 All inverters in your cloud account are automatically discovered. No manual serial number configuration needed.
 
@@ -58,6 +85,49 @@ Login is a single v3 flow followed by a profile probe (`region_c → pre-insp �
 #### Test cloud login
 
 When in doubt, click the **Test cloud login** button next to the password field. It runs the four phases once with your current credentials (`region_c`, `pre-insp`, `login`, `probe`) and reports `v` and salt presence from pre-insp, whether the login produced a token, and which profile the probe assigned (`installer` / `home`). The result is logged so you can paste it into a forum bug report. The test does not store a token or change adapter state.
+
+## Redirect Inverter to ioBroker
+
+Newer inverters with an integrated WiFi DTU (e.g. **HMS-800-2WB**) no longer open a local TCP port — their only local channel is Bluetooth LE, and all data goes straight to the Hoymiles cloud. To read their realtime data (and later control them) locally, the adapter can act as a **relay server**: you redirect the inverter's cloud upload to ioBroker, and the adapter forwards every packet 1:1 to the real Hoymiles cloud while reading a copy. The cloud portal and the S-Miles app keep working unchanged.
+
+There are two independent local paths — pick the one your hardware supports:
+
+| Inverter | Local channel | Use |
+| --- | --- | --- |
+| Older HMS-*-*T (open TCP port 10081) | direct TCP | **Local Connection (TCP)** above |
+| HMS-800-2WB & newer (BLE only, no TCP) | redirect to ioBroker | **this section** |
+
+### 1. Enable the relay server in the adapter
+
+In the adapter settings (Cloud tab), enable **Relay server (redirect inverter to ioBroker)** and set:
+
+- **Relay server port** — the TCP port the adapter listens on (default `10081`). You enter exactly this port in the inverter later.
+- **Hoymiles target server** — the regional cloud server the relay forwards to. This **must** be your account's region (e.g. `dataeu.hoymiles.com` for Europe), otherwise the cloud/app stop receiving data.
+- **Hoymiles target port** — default `10081`.
+
+Make sure the ioBroker host is reachable from the inverter's network and the chosen port is not blocked by a firewall.
+
+### 2. Redirect the inverter with the web tool
+
+The redirect itself is done over Bluetooth with a small browser tool — no app install:
+
+**[Open the redirect tool →](https://eistee82.github.io/ioBroker.hoymiles/app/)** (or scan the QR code shown in the adapter settings with your phone)
+
+> **Important:** the tool uses **Web Bluetooth**, which only works in **Chrome / Edge on Android or a desktop**. **iOS / Safari is not supported** (Apple does not implement Web Bluetooth). Use an Android phone or a laptop in Bluetooth range of the inverter.
+
+Steps in the tool:
+
+1. Tap **Connect** and pick your inverter (name starts with `RMI-…` / `HMS-…`).
+2. Enter the inverter's **Bluetooth PIN** (the one you set during setup in the S-Miles app; factory default is `123456` if never changed). The tool never stores it.
+3. Once paired, the live data appears (AC power, grid voltage/frequency, temperature, per-string PV values).
+4. In the **Server** section, choose **Custom address** and enter the **ioBroker IP** and the **relay server port** from step 1. Save.
+5. The inverter now uploads to ioBroker. Within a few minutes the adapter starts filling the `<dtuSerial>.*` states.
+
+### 3. Restore the factory server
+
+The tool remembers each inverter's original Hoymiles server (per serial number) the first time you connect. To undo the redirect, open the tool, connect, and pick the entry marked **"device default"** in the server list (or select the matching regional server), then save.
+
+The web tool also works standalone as a **local live-data viewer** for any supported inverter, without redirecting anything.
 
 ## Connection Modes
 
@@ -168,8 +238,8 @@ PV channels are created dynamically based on the inverter model (1T = 1 channel,
 | `inverter.temperature` | number | °C | no | Inverter temperature |
 | `inverter.powerLimit` | number | % | **yes** | **Runtime** power limit (RAM-only, **no flash/NVM wear — safe to write every second**). **Use this state to realize zero-export (Nulleinspeisung)** / dynamic curtailment. 2-100%, local |
 | `inverter.activePowerLimit` | number | % | no | Active power limit (live, local) |
-| `inverter.active` | boolean | — | **yes** | Turn inverter on/off (local) |
-| `inverter.reboot` | boolean | — | **yes** | Reboot inverter (button, local) |
+| `inverter.active` | boolean | — | **yes** | Turn inverter on/off (local; via the cloud for cloud-only devices) |
+| `inverter.reboot` | boolean | — | **yes** | Reboot inverter (button, local; via the cloud for cloud-only devices) |
 | `inverter.powerFactorLimit` | number | — | **yes** | Power factor limit (-1 to 1, local) |
 | `inverter.reactivePowerLimit` | number | ° | **yes** | Reactive power limit (-50 to 50, local) |
 | `inverter.cleanWarnings` | boolean | — | **yes** | Clean warnings (button, local) |
@@ -180,7 +250,7 @@ PV channels are created dynamically based on the inverter model (1T = 1 channel,
 | `inverter.linkStatus` | number | — | no | Link status |
 | `inverter.modulationIndexSignal` | number | — | no | SGSMO #20, raw packed value (modulation index + signal; exact decode not yet confirmed, local) |
 
-### `<dtuSerial>.dtu.*` — DTU Information (per DTU, local only)
+### `<dtuSerial>.dtu.*` — DTU Information (per DTU, local only except `dtu.reboot`)
 
 | State | Type | Unit | Description |
 |-------|------|------|-------------|
@@ -188,7 +258,7 @@ PV channels are created dynamically based on the inverter model (1T = 1 channel,
 | `dtu.swVersion` | string | — | Software version |
 | `dtu.hwVersion` | string | — | Hardware version |
 | `dtu.rssi` | number | dBm | Signal strength |
-| `dtu.reboot` | boolean | — | Reboot DTU (**writable**, button) |
+| `dtu.reboot` | boolean | — | Reboot DTU (**writable**, button). Sent over the local TCP link when connected, otherwise over the cloud for cloud-only devices (e.g. HMS-800-2WB) |
 | `dtu.wifiVersion` | string | — | WiFi version |
 | `dtu.fwUpdateAvailable` | boolean | — | Firmware update available (checked once daily via cloud) |
 | `dtu.stepTime` | number | s | Step time |
@@ -201,7 +271,11 @@ PV channels are created dynamically based on the inverter model (1T = 1 channel,
 
 | State | Type | Unit | Description |
 |-------|------|------|-------------|
-| `grid.power` | number | W | Total station power |
+| `grid.power` | number | W | Total station power (live in ~1.5–3 s via the burst channel when it is active, else ~80 s) |
+| `grid.gridPower` | number | W | Grid exchange power (realtime, +import/−export) — non-zero only on metered systems |
+| `grid.loadPower` | number | W | Load/consumption power (realtime) |
+| `grid.batteryPower` | number | W | Battery power (realtime, +charge/−discharge) — battery systems only |
+| `grid.pvUtilization` | number | % | PV utilization (realtime) |
 | `grid.dailyEnergy` | number | kWh | Daily energy |
 | `grid.monthEnergy` | number | kWh | Monthly energy |
 | `grid.yearEnergy` | number | kWh | Yearly energy |
@@ -268,7 +342,7 @@ Grid- and meter-level warning flags from the cloud's `station/find` record. All 
 | `alarms.lastCode` | number | Last alarm code |
 | `alarms.lastStartTime` | number | Last alarm start time |
 | `alarms.lastEndTime` | number | Last alarm end time |
-| `alarms.lastMessage` | string | Last alarm message (German) |
+| `alarms.lastMessage` | string | Last alarm message (in the ioBroker system language, English otherwise) |
 | `alarms.lastData1` | number | Last alarm data 1 (raw sensor value) |
 | `alarms.lastData2` | number | Last alarm data 2 (raw sensor value) |
 
@@ -292,7 +366,7 @@ Grid- and meter-level warning flags from the cloud's `station/find` record. All 
 | `config.wifiMacAddress` | string | — | no | WiFi MAC address |
 | `config.dtuApSsid` | string | — | no | DTU access point SSID |
 
-### `<dtuSerial>.gridProfile.*` — Grid Profile (per DTU, local)
+### `<dtuSerial>.gridProfile.*` — Grid Profile (per DTU, local — read via the cloud for cloud-only devices)
 
 The inverter's grid-connection profile (safety/grid-code parameters), read locally via DevConfigFetch. All read-only. Voltage/frequency values follow the active grid standard (e.g. `DE_VDE4105_2018`). Function flags are booleans (`true` = function active).
 

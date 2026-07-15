@@ -4,9 +4,23 @@ import CloudManager from "./lib/cloudManager.js";
 import CloudConnection from "./lib/cloudConnection.js";
 import DeviceContext from "./lib/deviceContext.js";
 import { ProtobufHandler } from "./lib/protobufHandler.js";
+import RelayServer, {
+	type RelayConnectionEvent,
+	type RelayDeviceIdentifiedEvent,
+	type RelayDisconnectionEvent,
+	type RelayRealDataEvent,
+	type RelayCommandEvent,
+} from "./lib/relayServer.js";
 import { discoverDtus, probeHost } from "./lib/networkDiscovery.js";
 import { destroyAgent } from "./lib/httpClient.js";
-import { DISCOVERY_CONCURRENCY, DISCOVERY_TIMEOUT_MS, PROBE_TIMEOUT_MS, UNLOAD_TIMEOUT_MS } from "./lib/constants.js";
+import {
+	DISCOVERY_CONCURRENCY,
+	DISCOVERY_TIMEOUT_MS,
+	PROBE_TIMEOUT_MS,
+	UNLOAD_TIMEOUT_MS,
+	RELAY_SERVER_DEFAULT_PORT,
+	RELAY_SERVER_DEFAULT_CLOUD_PORT,
+} from "./lib/constants.js";
 import { anonymize, errorMessage, mapLimit } from "./lib/utils.js";
 
 interface DeviceConfig {
@@ -20,26 +34,42 @@ interface HoymilesConfig {
 	enableLocal?: boolean;
 	enableCloud?: boolean;
 	enableCloudRelay?: boolean;
+	enableRealtimeBurst?: boolean;
 	cloudUser?: string;
 	cloudPassword?: string;
 	dataInterval?: number;
 	slowPollFactor?: number;
 	devices?: DeviceConfig[];
 	host?: string; // Legacy v0.2.0 flat format
+	/** Start the relay server for DTUs with no local port (e.g. HMS-800-2WB, BLE-redirected). */
+	enableRelayServer?: boolean;
+	/** Local port the relay server listens on (the redirected DTU dials this). */
+	relayServerPort?: number;
+	/** Real Hoymiles cloud host the relay server forwards to (e.g. dataeu.hoymiles.com). */
+	relayCloudServer?: string;
+	/** Real Hoymiles cloud port the relay server forwards to. */
+	relayCloudPort?: number;
 }
 
 class Hoymiles extends utils.Adapter {
 	public devices: Map<string, DeviceContext>;
 	private localContexts: DeviceContext[];
 	private cloudManager: CloudManager | null;
+	/** Relay server for DTUs with no local port (e.g. HMS-800-2WB, BLE-redirected to us). */
+	private relayServer: RelayServer | null;
 
 	/** Shared protobuf handler (loaded once, used by all DeviceContexts). */
 	private sharedProtobuf: ProtobufHandler | null;
 	/** Cached connection state to avoid redundant setStateAsync calls. */
 	private lastConnectionState: boolean | undefined;
+	/** dataInterval/slowPollFactor from the last onReady, reused for relay-created DeviceContexts. */
+	private dataInterval: number;
+	private slowPollFactor: number;
 
 	constructor(options: Partial<utils.AdapterOptions> = {}) {
-		super({ ...options, name: "hoymiles" });
+		// useFormatDate makes `this.language` (the ioBroker system language) available, which the
+		// alarm handling uses to localize warn messages instead of hard-coding a single language.
+		super({ ...options, name: "hoymiles", useFormatDate: true });
 		this.on("ready", this.onReady.bind(this));
 		this.on("stateChange", this.onStateChange.bind(this));
 		this.on("message", this.onMessage.bind(this));
@@ -48,6 +78,9 @@ class Hoymiles extends utils.Adapter {
 		this.devices = new Map();
 		this.localContexts = [];
 		this.cloudManager = null;
+		this.relayServer = null;
+		this.dataInterval = 5;
+		this.slowPollFactor = 6;
 		this.sharedProtobuf = null;
 	}
 
@@ -55,10 +88,11 @@ class Hoymiles extends utils.Adapter {
 		const cfg = this.config as HoymilesConfig;
 		const enableLocal = cfg.enableLocal !== false; // default-on (primary use case)
 		const enableCloud = cfg.enableCloud === true; // opt-in
+		const enableRelayServer = cfg.enableRelayServer === true; // opt-in, for DTUs with no local port
 
-		if (!enableLocal && !enableCloud) {
+		if (!enableLocal && !enableCloud && !enableRelayServer) {
 			this.log.error(
-				"Neither local nor cloud connection is enabled. Please enable at least one in the adapter settings.",
+				"Neither local, cloud, nor relay-server connection is enabled. Please enable at least one in the adapter settings.",
 			);
 			return;
 		}
@@ -71,6 +105,11 @@ class Hoymiles extends utils.Adapter {
 		const rawSlowPoll = Number(cfg.slowPollFactor ?? 6);
 		const slowPollFactor = Number.isNaN(rawSlowPoll) || rawSlowPoll < 1 ? 6 : rawSlowPoll;
 		const enableCloudRelay = cfg.enableCloudRelay !== false;
+		// Fast realtime burst for cloud-only DTUs. Default on: it only affects DTUs without a
+		// local/relay link (skipped otherwise) and follows the server-dictated cadence.
+		const enableRealtimeBurst = cfg.enableRealtimeBurst !== false;
+		this.dataInterval = dataInterval;
+		this.slowPollFactor = slowPollFactor;
 
 		// --- Shared protobuf handler (loaded once, shared across all devices) ---
 		this.sharedProtobuf = new ProtobufHandler();
@@ -134,6 +173,7 @@ class Hoymiles extends utils.Adapter {
 					cloudPassword,
 					enableLocal,
 					enableCloudRelay,
+					enableRealtimeBurst,
 					dataInterval,
 					slowPollFactor,
 					localContexts: this.localContexts,
@@ -152,7 +192,128 @@ class Hoymiles extends utils.Adapter {
 			}
 		}
 
+		// --- Relay server (for DTUs with no local port, e.g. HMS-800-2WB) ---
+		if (enableRelayServer) {
+			this.startRelayServer(cfg);
+		}
+
 		await this.updateConnectionState();
+	}
+
+	/**
+	 * Start the relay server: it accepts connections from DTUs that have been BLE-redirected
+	 * to us (they have no local TCP port of their own, e.g. HMS-800-2WB), transparently
+	 * forwards every byte to the real Hoymiles cloud in both directions, and sniffs a copy of
+	 * the traffic to populate states (see {@link "./lib/relayServer.js"}). No-ops if the
+	 * upstream cloud host isn't configured.
+	 *
+	 * @param cfg - Adapter native config.
+	 */
+	private startRelayServer(cfg: HoymilesConfig): void {
+		const cloudHost = (cfg.relayCloudServer || "").trim();
+		if (!cloudHost) {
+			this.log.warn("Relay server enabled but no upstream cloud host configured — not starting.");
+			return;
+		}
+		if (!this.sharedProtobuf) {
+			this.log.warn("Relay server enabled but protobuf definitions are unavailable — not starting.");
+			return;
+		}
+		const port = Number(cfg.relayServerPort) > 0 ? Number(cfg.relayServerPort) : RELAY_SERVER_DEFAULT_PORT;
+		const cloudPort = Number(cfg.relayCloudPort) > 0 ? Number(cfg.relayCloudPort) : RELAY_SERVER_DEFAULT_CLOUD_PORT;
+
+		const relay = new RelayServer(this.sharedProtobuf, msg => this.log.debug(`Relay server: ${msg}`));
+
+		relay.on("listening", (listenPort: number) => {
+			this.log.info(`Relay server listening on port ${listenPort}, forwarding to ${cloudHost}:${cloudPort}`);
+		});
+		relay.on("connection", (evt: RelayConnectionEvent) => {
+			this.log.info(`Relay server: connection from ${evt.remoteAddress} (session ${evt.sessionId})`);
+		});
+		relay.on("deviceIdentified", (evt: RelayDeviceIdentifiedEvent) => {
+			void this.onRelayDeviceIdentified(evt.dtuSn).catch(err =>
+				this.log.warn(`Relay server: device identification failed for ${evt.dtuSn}: ${errorMessage(err)}`),
+			);
+		});
+		relay.on("realData", (evt: RelayRealDataEvent) => {
+			if (!evt.data || !evt.dtuSn) {
+				return;
+			}
+			const ctx = this.devices.get(evt.dtuSn);
+			if (!ctx) {
+				this.log.debug(`Relay server: RealData for unmatched DTU ${evt.dtuSn} (no device registered yet)`);
+				return;
+			}
+			void ctx
+				.applyRealData(evt.data)
+				.catch(err =>
+					this.log.warn(`Relay server: applyRealData failed for ${evt.dtuSn}: ${errorMessage(err)}`),
+				);
+		});
+		relay.on("disconnection", (evt: RelayDisconnectionEvent) => {
+			this.log.info(`Relay server: session ${evt.sessionId} ended (${evt.reason})`);
+			if (!evt.dtuSn) {
+				return;
+			}
+			const ctx = this.devices.get(evt.dtuSn);
+			if (ctx) {
+				void ctx
+					.markRelaySessionLost()
+					.catch(err =>
+						this.log.warn(
+							`Relay server: markRelaySessionLost failed for ${evt.dtuSn}: ${errorMessage(err)}`,
+						),
+					);
+			}
+		});
+		relay.on("command", (evt: RelayCommandEvent) => {
+			this.log.debug(
+				`Relay server: [diag] ${evt.direction} command 0x${evt.cmdHigh.toString(16)} 0x${evt.cmdLow.toString(16)} (dtu=${evt.dtuSn || "?"}, ${evt.payload.length}B)`,
+			);
+		});
+		relay.on("error", (err: Error) => {
+			this.log.warn(`Relay server: ${errorMessage(err)}`);
+		});
+
+		relay.start(port, cloudHost, cloudPort);
+		this.relayServer = relay;
+	}
+
+	/**
+	 * Called when a relay-server session identifies (or re-identifies) a redirected DTU's
+	 * serial. Creates a DeviceContext for it on first sight — `enableLocal: true` so the full
+	 * local-tagged state set is created, since the relay carries the same live RealData the
+	 * local TCP path would (see {@link DeviceContext.applyRealData}); there is deliberately no
+	 * `connection` (no direct socket to the device — data arrives via the relay's events).
+	 * Either way, marks the device active (flips `info.connected`, clears any stale q=0x42
+	 * cache entries left from a previous session).
+	 *
+	 * @param dtuSn - DTU serial learned from the relay session.
+	 */
+	private async onRelayDeviceIdentified(dtuSn: string): Promise<void> {
+		if (!dtuSn) {
+			return;
+		}
+		let ctx = this.devices.get(dtuSn);
+		if (!ctx) {
+			if (!this.sharedProtobuf) {
+				return;
+			}
+			ctx = new DeviceContext({
+				adapter: this,
+				protobuf: this.sharedProtobuf,
+				host: "",
+				enableLocal: true,
+				enableCloud: false,
+				enableCloudRelay: false,
+				dataInterval: this.dataInterval,
+				slowPollFactor: this.slowPollFactor,
+			});
+			await ctx.initFromSerial(dtuSn);
+			this.devices.set(dtuSn, ctx);
+			this.log.info(`Relay server: created device for redirected DTU ${dtuSn}`);
+		}
+		await ctx.markRelaySessionActive();
 	}
 
 	/**
@@ -250,6 +411,22 @@ class Hoymiles extends utils.Adapter {
 	 */
 	matchLocalDeviceToCloud(ctx: DeviceContext): void {
 		this.cloudManager?.matchLocalDeviceToCloud(ctx);
+	}
+
+	/**
+	 * Send a device control command over the cloud (fallback for command states on devices with
+	 * no local link). Rejects when the cloud is disabled.
+	 *
+	 * @param devSn - Target device serial number (unprefixed): the inverter for micro commands, the DTU for DTU commands.
+	 * @param dtuSn - DTU serial number (unprefixed).
+	 * @param action - Control action code (see DEVICE_COMMAND_* / DTU_COMMAND_* constants).
+	 * @param devType - Target device type (see CLOUD_DEV_TYPE_* constants; defaults to micro-inverter).
+	 */
+	async sendCloudDeviceCommand(devSn: string, dtuSn: string, action: number, devType?: number): Promise<void> {
+		if (!this.cloudManager) {
+			throw new Error("Cloud is not enabled");
+		}
+		await this.cloudManager.sendDeviceCommand(devSn, dtuSn, action, devType);
 	}
 
 	// --- State change routing ---
@@ -531,6 +708,24 @@ class Hoymiles extends utils.Adapter {
 				}
 			} catch (err) {
 				this.log.warn(`CloudManager stop error: ${errorMessage(err)}`);
+			}
+			try {
+				if (this.relayServer) {
+					this.relayServer.stop();
+					this.relayServer = null;
+				}
+			} catch (err) {
+				this.log.warn(`RelayServer stop error: ${errorMessage(err)}`);
+			}
+			// Idempotent safety net: disconnect() is a no-op for contexts already torn down above
+			// (local via localContexts, cloud-only via CloudManager.stop()) and is the only cleanup
+			// relay-created contexts (host:"", no connection/cloudRelay) get.
+			for (const ctx of this.devices.values()) {
+				try {
+					ctx.disconnect();
+				} catch (err) {
+					this.log.warn(`Device disconnect error: ${errorMessage(err)}`);
+				}
 			}
 			this.devices.clear();
 			this.sharedProtobuf = null;

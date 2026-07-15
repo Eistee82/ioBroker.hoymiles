@@ -1,4 +1,4 @@
-import { POWER_LIMIT_MIN, POWER_LIMIT_MAX, SCALE_POWER } from "./constants.js";
+import { POWER_LIMIT_MIN, POWER_LIMIT_MAX, SCALE_POWER, DEVICE_COMMAND_REBOOT, DEVICE_COMMAND_POWER_ON, DEVICE_COMMAND_POWER_OFF, DTU_COMMAND_REBOOT, CLOUD_DEV_TYPE_DTU, CLOUD_DEV_TYPE_MICRO, } from "./constants.js";
 import { unixSeconds } from "./utils.js";
 const COMMANDS = {
     "inverter.powerLimit": {
@@ -85,5 +85,38 @@ async function executeCommand(stateId, state, ctx) {
         ctx.resetButton(stateId);
     }
 }
-export { executeCommand, COMMANDS };
+const CLOUD_COMMANDS = {
+    "inverter.reboot": { action: () => DEVICE_COMMAND_REBOOT, button: true },
+    "inverter.active": { action: v => (v ? DEVICE_COMMAND_POWER_ON : DEVICE_COMMAND_POWER_OFF) },
+    "dtu.reboot": { action: () => DTU_COMMAND_REBOOT, button: true, devType: CLOUD_DEV_TYPE_DTU },
+};
+async function executeCloudCommand(stateId, state, ctx) {
+    const cmd = CLOUD_COMMANDS[stateId];
+    if (!cmd) {
+        return false;
+    }
+    if (cmd.button && !state.val) {
+        return true;
+    }
+    const action = cmd.action(state.val);
+    const devType = cmd.devType ?? CLOUD_DEV_TYPE_MICRO;
+    ctx.log.info(`[${ctx.deviceId}] Sending command "${stateId}" via cloud (action ${action}, dev_type ${devType})`);
+    try {
+        await ctx.send(action, devType);
+        if (!cmd.button) {
+            await ctx.setState(stateId, state.val, true);
+        }
+    }
+    catch (err) {
+        const msg = err instanceof Error ? err.message : String(err);
+        ctx.log.warn(`[${ctx.deviceId}] Cloud command "${stateId}" failed: ${msg}`);
+    }
+    finally {
+        if (cmd.button) {
+            ctx.resetButton(stateId);
+        }
+    }
+    return true;
+}
+export { executeCommand, executeCloudCommand, COMMANDS, CLOUD_COMMANDS };
 //# sourceMappingURL=commandHandler.js.map

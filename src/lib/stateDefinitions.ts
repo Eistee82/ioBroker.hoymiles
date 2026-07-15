@@ -58,17 +58,20 @@ const channels: ChannelDefinition[] = [
 	{ id: "dtu", name: { en: "DTU", de: "DTU" } },
 	{ id: "alarms", name: { en: "Alarms & warnings", de: "Alarme & Warnungen" }, source: "local" },
 	{ id: "config", name: { en: "DTU configuration", de: "DTU-Konfiguration" }, source: "local" },
-	{ id: "gridProfile", name: { en: "Grid profile", de: "Netzprofil" }, source: "local" },
+	// No source restriction: the grid profile is read locally (DevConfigFetch) or, for cloud-only
+	// devices, over the cloud (pvm-ctl action 41) — the states are the same either way.
+	{ id: "gridProfile", name: { en: "Grid profile", de: "Netzprofil" } },
 	// meter channel is created dynamically when meter data is first received
 ];
 
 // Grid-profile states are generated from the shared schema so decode + state list never drift.
+// No source restriction (see the gridProfile channel above).
 const gridProfileStates: StateDefinition[] = [
-	s("gridProfile.standard", "Grid standard", "Netznorm", "text", { source: "local" }),
+	s("gridProfile.standard", "Grid standard", "Netznorm", "text"),
 	...GRID_PROFILE_SCHEMA.map(p =>
 		p.flag
-			? b(`gridProfile.${p.key}`, p.en, p.de, "indicator", { source: "local" })
-			: n(`gridProfile.${p.key}`, p.en, p.de, "value", p.unit, { source: "local" }),
+			? b(`gridProfile.${p.key}`, p.en, p.de, "indicator")
+			: n(`gridProfile.${p.key}`, p.en, p.de, "value", p.unit),
 	),
 ];
 
@@ -98,8 +101,10 @@ const states: StateDefinition[] = [
 	n("inverter.activePowerLimit", "Active power limit (live)", "Aktives Leistungslimit (live)", "value", "%", {
 		source: "local",
 	}),
-	b("inverter.active", "Inverter active", "Wechselrichter aktiv", "switch", { write: true, source: "local" }),
-	b("inverter.reboot", "Reboot inverter", "Wechselrichter neustarten", "button", { write: true, source: "local" }),
+	// No source restriction: available for both local and cloud-only devices. The command handler
+	// routes to the local TCP link when connected, otherwise sends the same command over the cloud.
+	b("inverter.active", "Inverter active", "Wechselrichter aktiv", "switch", { write: true }),
+	b("inverter.reboot", "Reboot inverter", "Wechselrichter neustarten", "button", { write: true }),
 	n("inverter.powerFactorLimit", "Power factor limit", "Leistungsfaktor-Limit", "level", "", {
 		write: true,
 		min: -1,
@@ -152,7 +157,9 @@ const states: StateDefinition[] = [
 	s("dtu.swVersion", "Software version", "Software-Version", "text"),
 	n("dtu.rssi", "Signal strength", "Signalstärke", "value", "dBm", { source: "local" }),
 	s("dtu.wifiVersion", "WiFi version", "WLAN-Version", "text", { source: "local" }),
-	b("dtu.reboot", "Reboot DTU", "DTU neustarten", "button", { write: true, source: "local" }),
+	// No source restriction: the command handler routes to the local TCP link when connected,
+	// otherwise reboots the DTU over the cloud (ECommandAction.DTU_REBOOT) for cloud-only devices.
+	b("dtu.reboot", "Reboot DTU", "DTU neustarten", "button", { write: true }),
 	n("dtu.stepTime", "Step time", "Schrittzeit", "value", "s", { source: "local" }),
 	n("dtu.accessModel", "Network access mode", "Netzwerk-Zugangsart", "value", "", {
 		states: { 0: "GPRS", 1: "WiFi", 2: "Ethernet" },
@@ -234,6 +241,12 @@ const stationChannels: ChannelDefinition[] = [
 const stationStates: StateDefinition[] = [
 	// Grid aggregates
 	n("grid.power", "Total power", "Gesamtleistung", "value.power", "W"),
+	// Realtime power-flow (from the burst channel m:0). Created on demand — only present when the
+	// realtime burst is active for the station. Non-zero grid/battery only on metered/battery systems.
+	n("grid.gridPower", "Grid exchange power", "Netzaustauschleistung", "value.power", "W"),
+	n("grid.loadPower", "Load power", "Lastleistung", "value.power", "W"),
+	n("grid.batteryPower", "Battery power", "Batterieleistung", "value.power", "W"),
+	n("grid.pvUtilization", "PV utilization", "PV-Auslastung", "value", "%"),
 	n("grid.dailyEnergy", "Daily energy", "Tagesenergie", "value.energy", "kWh"),
 	n("grid.monthEnergy", "Month energy", "Monatsenergie", "value.energy", "kWh"),
 	n("grid.yearEnergy", "Year energy", "Jahresenergie", "value.energy", "kWh"),

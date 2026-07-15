@@ -3,6 +3,7 @@ import { CLOUD_POLL_CONCURRENCY, CLOUD_STATION_STALE_MS, DEFAULT_POLL_MS, MIN_PO
 import { formatDtuVersion, formatSwVersion } from "./protobufHandler.js";
 import { anonymize, deriveStationTzOffsetMs, errorMessage, logOnError, mapLimit, stationWallClockToEpoch, } from "./utils.js";
 import { stationStateMap, buildStateCommon } from "./stateDefinitions.js";
+import { mapCloudGridProfile } from "./gridProfile.js";
 const num = (v) => parseFloat(v) || 0;
 const WEATHER_DESCRIPTIONS = {
     "01d": { en: "Clear sky", de: "Klarer Himmel" },
@@ -32,6 +33,7 @@ class CloudPoller {
     stationDevices;
     slowPollFactor;
     hasRelay;
+    burstActiveStations;
     state;
     pollCount;
     pollTimer;
@@ -46,6 +48,7 @@ class CloudPoller {
     boundSetState;
     lastCloudConnected;
     stationStateObjects = new Set();
+    gridProfileRead = new Set();
     constructor(options) {
         this.cloud = options.cloud;
         this.adapter = options.adapter;
@@ -53,6 +56,7 @@ class CloudPoller {
         this.stationDevices = options.stationDevices;
         this.slowPollFactor = options.slowPollFactor;
         this.hasRelay = options.hasRelay;
+        this.burstActiveStations = options.burstActiveStations;
         this.state = "POLLING_ACTIVE";
         this.pollCount = 0;
         this.pollTimer = undefined;
@@ -261,7 +265,7 @@ class CloudPoller {
                 await this.pollFirmwareStatus(stationId);
             }
         }
-        await this.pollDevicesAndInverters(stationId, slowPoll);
+        await this.pollDevicesAndInverters(stationId, slowPoll, online);
         this.adapter.log.debug(`Cloud data (station ${stationId}): ${data.real_power}W, today=${toKwh(data.today_eq).toFixed(2)}kWh, total=${toKwh(data.total_eq).toFixed(2)}kWh, online=${online}`);
     }
     isStationFresh(stationId, dataTime) {
@@ -279,8 +283,7 @@ class CloudPoller {
         const cloudUpdateEpoch = stationWallClockToEpoch(data.data_time, offsetMs);
         this.adapter.log.debug(`[diag] station ${stationId} lastCloudUpdate: data_time="${data.data_time ?? "<none>"}" ` +
             `offset=${offsetMs / 3600000}h → ${cloudUpdateEpoch != null ? new Date(cloudUpdateEpoch).toISOString() : "n/a"}`);
-        await Promise.all([
-            w("grid.power", num(data.real_power)),
+        const writes = [
             w("grid.dailyEnergy", toKwh(data.today_eq)),
             w("grid.monthEnergy", toKwh(data.month_eq)),
             w("grid.yearEnergy", toKwh(data.year_eq)),
@@ -291,7 +294,11 @@ class CloudPoller {
             w("grid.isReflux", !!data.is_reflux),
             w("info.lastCloudUpdate", cloudUpdateEpoch, 0x00),
             w("info.lastDataTime", stationWallClockToEpoch(data.last_data_time, offsetMs), 0x00),
-        ]);
+        ];
+        if (!this.burstActiveStations.has(stationId)) {
+            writes.push(w("grid.power", num(data.real_power)));
+        }
+        await Promise.all(writes);
     }
     async pollStationDetails(stationId, deviceId, realtimeData, online) {
         try {
@@ -363,7 +370,7 @@ class CloudPoller {
             this.adapter.log.debug(`Cloud station details failed for ${stationId}: ${errorMessage(err)}`);
         }
     }
-    async pollDevicesAndInverters(stationId, isSlowPoll) {
+    async pollDevicesAndInverters(stationId, isSlowPoll, online) {
         let hasCloudOnlyDtus = false;
         for (const d of this.devices.values()) {
             if (d.cloudStationId === stationId && d.dtuSerial && !d.connection?.connected) {
@@ -383,8 +390,37 @@ class CloudPoller {
         await this.updateCloudConnectedStates(deviceTree);
         if (isSlowPoll && deviceTree.length > 0) {
             await this.updateDeviceVersions(deviceTree);
+            await this.pollGridProfiles(deviceTree);
         }
-        await this.pollInverterRealtimeData(stationId, deviceTree);
+        await this.pollInverterRealtimeData(stationId, deviceTree, online);
+    }
+    async pollGridProfiles(deviceTree) {
+        for (const dtu of deviceTree) {
+            const dev = this.devices.get(dtu.sn);
+            if (!dev?.dtuSerial || dev.connection?.connected || this.gridProfileRead.has(dev.dtuSerial)) {
+                continue;
+            }
+            const inv = dtu.children?.[0];
+            if (!inv?.sn) {
+                continue;
+            }
+            try {
+                const params = await this.cloud.readGridProfileViaCloud(inv.sn, dtu.sn);
+                const decoded = mapCloudGridProfile(params);
+                const writes = [
+                    this.boundSetState(`${dev.dtuSerial}.gridProfile.standard`, decoded.standard, true),
+                ];
+                for (const [key, val] of Object.entries(decoded.values)) {
+                    writes.push(this.boundSetState(`${dev.dtuSerial}.gridProfile.${key}`, val, true));
+                }
+                await Promise.all(writes);
+                this.gridProfileRead.add(dev.dtuSerial);
+                this.adapter.log.debug(`Grid profile read via cloud for ${anonymize(dev.dtuSerial, "dtu")}: ${decoded.standard}`);
+            }
+            catch (err) {
+                this.adapter.log.debug(`Cloud grid profile read failed for ${anonymize(dev.dtuSerial, "dtu")}: ${errorMessage(err)}`);
+            }
+        }
     }
     async updateCloudConnectedStates(deviceTree) {
         for (const dtu of deviceTree) {
@@ -422,6 +458,9 @@ class CloudPoller {
             writeIfFilled(`${sn}.dtu.hwVersion`, dtu.hard_ver || "");
             if (dtu.children?.[0]) {
                 const inv = dtu.children[0];
+                if (inv.sn) {
+                    dtuDevice.setCloudInverterSn(inv.sn);
+                }
                 writeIfFilled(`${sn}.inverter.model`, inv.model_no || "");
                 writeIfFilled(`${sn}.inverter.serialNumber`, inv.sn || "");
                 writeIfFilled(`${sn}.inverter.swVersion`, inv.soft_ver || "");
@@ -433,7 +472,7 @@ class CloudPoller {
             await Promise.all(writes);
         }
     }
-    async pollInverterRealtimeData(stationId, deviceTree) {
+    async pollInverterRealtimeData(stationId, deviceTree, online) {
         if (deviceTree.length === 0) {
             return;
         }
@@ -469,7 +508,9 @@ class CloudPoller {
             try {
                 this.lastRealtimeFetch.set(sn, now);
                 const s = this.boundSetState;
-                const cs = (id, val) => s(id, { val, ack: true, q: 0x40 }).then(() => { });
+                const devConnected = dtu.children?.some(inv => inv.warn_data?.connect) ?? false;
+                const q = online && devConnected ? 0x00 : 0x42;
+                const cs = (id, val) => s(id, { val, ack: true, q }).then(() => { });
                 const values = await this.cloud.getMicroRealtimeData(stationId, microIds, today, [
                     "MI_POWER",
                     "MI_NET_V",
@@ -480,7 +521,7 @@ class CloudPoller {
                     return;
                 }
                 const writes = [];
-                if (values.MI_POWER !== undefined) {
+                if (values.MI_POWER !== undefined && !dtuDev.burstActive) {
                     writes.push(cs(`${sn}.grid.power`, values.MI_POWER));
                 }
                 if (values.MI_NET_V !== undefined) {
@@ -501,7 +542,7 @@ class CloudPoller {
                 const pvTasks = [];
                 const children = dtu.children || [];
                 if (!dtuDev.pvStatesCreated && children.length > 0) {
-                    let maxPorts = 0;
+                    let maxPorts = dtuDev.pvCount;
                     for (const inv of children) {
                         const m = CloudPoller.PORT_COUNT_RE.exec(inv.model_no || "");
                         maxPorts = Math.max(maxPorts, Math.min(Math.max(m ? parseInt(m[1], 10) : 2, 1), 6));
@@ -527,7 +568,7 @@ class CloudPoller {
                             "MODULE_V",
                             "MODULE_I",
                         ])
-                            .then(modValues => this.setPvStates(cs, sn, p - 1, modValues)));
+                            .then(modValues => this.setPvStates(cs, sn, p - 1, modValues, dtuDev.burstActive)));
                     }
                 }
                 await Promise.all(pvTasks);
@@ -557,13 +598,13 @@ class CloudPoller {
             }
         }
     }
-    async setPvStates(cs, sn, pvIndex, modValues) {
+    async setPvStates(cs, sn, pvIndex, modValues, skipPower = false) {
         if (!modValues) {
             return;
         }
         const prefix = `${sn}.pv${pvIndex}`;
         const writes = [];
-        if (modValues.MODULE_POWER !== undefined) {
+        if (modValues.MODULE_POWER !== undefined && !skipPower) {
             writes.push(cs(`${prefix}.power`, modValues.MODULE_POWER));
         }
         if (modValues.MODULE_V !== undefined) {

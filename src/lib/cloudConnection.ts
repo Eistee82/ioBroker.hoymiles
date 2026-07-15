@@ -11,10 +11,18 @@ import {
 	IAM_REGION_PATH,
 	PROFILE_PROBE_PATH,
 	STATION_AK_FIND_PATH,
+	PVM_CTL_SETTING_READ_PATH,
+	PVM_CTL_SETTING_STATUS_PATH,
+	DEVICE_SETTING_ACTION_GRID_READ,
+	PVM_CTL_COMMAND_PUT_PATH,
+	PVM_CTL_COMMAND_STATUS_PATH,
+	DEVICE_SETTING_POLL_INTERVAL_MS,
+	DEVICE_SETTING_POLL_MAX,
 	APP_USER_AGENT_PREFIX,
 	APP_VERSION,
 	APP_TID,
 } from "./constants.js";
+import type { CloudGridProfileParam } from "./gridProfile.js";
 import {
 	errorMessage,
 	withTimeout,
@@ -24,6 +32,61 @@ import {
 	sanitizeForLog,
 	safeJsonStringify,
 } from "./utils.js";
+
+/** One edge of the realtime energy-flow graph (burst m:0): power `v` W flowing from node `i` to node `o`. */
+export interface BurstFlowEdge {
+	/** Source node id. */
+	i: number;
+	/** Destination node id. */
+	o: number;
+	/** Power flowing along the edge, in watts. */
+	v: number;
+}
+/** Aggregated station power from the realtime burst (m:0), all in watts (`pvr` = PV utilization %). */
+export interface BurstStationPower {
+	/** PV generation power (W). */
+	pv: number;
+	/** PV utilization ratio (%). */
+	pvr: number;
+	/** Battery power (W; +charge/−discharge). */
+	bat: number;
+	/** Grid power (W; +import/−export). */
+	grid: number;
+	/** Load / consumption power (W). */
+	load: number;
+	/** Surplus / spare power (W). */
+	sp: number;
+}
+/** Per-inverter realtime power from the burst (m:3): AC total `pac` + per-PV-string watts `p1..p4`. */
+export interface BurstInverter {
+	/** Inverter serial number. */
+	sn: string;
+	/** AC output power (W). */
+	pac: number;
+	/** PV-string 1 power (W). */
+	p1: number;
+	/** PV-string 2 power (W). */
+	p2: number;
+	/** PV-string 3 power (W). */
+	p3: number;
+	/** PV-string 4 power (W). */
+	p4: number;
+}
+/** Decoded `data` object of a realtime-burst response. */
+export interface BurstData {
+	/** Server-dictated delay until the next poll, in ms (adaptive, ~1500–10000). */
+	dly?: number;
+	/** Connection flag (1 = the DTU is live-streaming). */
+	con?: number;
+	/** Station-local timestamp string of this sample. */
+	t?: string;
+	/** Present for m:0 (station overview). */
+	power?: BurstStationPower;
+	/** Present for m:0 — energy-flow graph edges. */
+	flow?: BurstFlowEdge[];
+	/** Present for m:3 (per-device detail). */
+	mis?: BurstInverter[];
+}
 
 /**
  * Cloud profile, determined by an authoritative probe against `/pvm/.../select_by_page`
@@ -388,6 +451,15 @@ class CloudConnection {
 	/** Last data-center marker from region_c. -1 = account unknown to that region; null = region_c not yet called. */
 	getLastDc(): number | null {
 		return this.lastDc;
+	}
+
+	/**
+	 * Current session auth token (null before login). Exposed for maintainer dev-scripts under
+	 * `.dev-server/` that issue raw authenticated requests the adapter itself never needs — e.g.
+	 * regenerating the localized alarm-code table from the cloud's `monitor/.../mwc` dictionary.
+	 */
+	getToken(): string | null {
+		return this.token;
 	}
 
 	/** Build the S-Miles-Home-app-style User-Agent for the current data-center marker. */
@@ -1007,6 +1079,52 @@ class CloudConnection {
 	}
 
 	/**
+	 * Fetch the realtime "burst" URL for a station — the fast-updating channel the S-Miles app
+	 * uses for its live view. `get_sd_uri` returns a short-lived URL on the realtime host
+	 * (`eurt.…`) that carries a `k` auth token in its query string. Poll it via
+	 * `pollRealtimeBurst`. The token expires (embedded `t` timestamp), so re-fetch the URL when
+	 * polling starts to fail.
+	 *
+	 * @param stationId - Cloud station ID.
+	 */
+	async getRealtimeUri(stationId: number): Promise<string> {
+		this.assertStationId(stationId);
+		await this.ensureToken();
+		const result = await this._post<{ uri?: string }>("/pvm/api/0/station/get_sd_uri", { sid: stationId });
+		if (result.status !== "0") {
+			throw new Error(`get_sd_uri failed: ${result.message}`);
+		}
+		const uri = result.data?.uri;
+		if (!uri) {
+			throw new Error("get_sd_uri returned no uri");
+		}
+		return uri;
+	}
+
+	/**
+	 * Poll a realtime burst URL once. `uri` comes from `getRealtimeUri`; `body` selects the mode:
+	 * - `{ m: 0, t: 1 }` → station overview (`power` + `flow`)
+	 * - `{ m: 3, mis: [inverterSn, …], t: 1 }` → per-inverter detail (`mis[].pac/p1..p4`)
+	 *
+	 * The `k` token embedded in `uri` authenticates the request, so there is deliberately no
+	 * `ensureToken` here — the caller owns URL freshness and re-fetches via `getRealtimeUri`.
+	 * Returns the decoded `data` object (empty object if the server sent none).
+	 *
+	 * @param uri - Full realtime URL from `getRealtimeUri` (host + path + `?k=…&t=…`).
+	 * @param body - Mode selector body.
+	 */
+	async pollRealtimeBurst(uri: string, body: Record<string, unknown>): Promise<BurstData> {
+		const result = await postJson<CloudApiResponse<BurstData>>(uri, body, {
+			token: this.token,
+			userAgent: this.getUserAgent(),
+		});
+		if (result.status !== "0") {
+			throw new Error(`Realtime burst failed: ${result.message}`);
+		}
+		return result.data ?? {};
+	}
+
+	/**
 	 * Get weather data for station coordinates.
 	 * Uses EU API server (euapi.hoymiles.com) which hosts the weather endpoint.
 	 *
@@ -1108,6 +1226,91 @@ class CloudConnection {
 			token: this.token,
 			userAgent: this.getUserAgent(),
 		});
+	}
+
+	/**
+	 * Run an async pvm-ctl device task: fire the start call (which returns a task id), then poll the
+	 * status endpoint until the DTU has finished (status `code` leaves 2 = "processing"). Shared by
+	 * the grid-profile read and the control commands.
+	 *
+	 * @param startPath - Endpoint that fires the task and returns a task id in `data`.
+	 * @param startBody - Body for the start call (must carry `action` and device identifiers).
+	 * @param statusPath - Endpoint polled with `{ id }` until the task is done.
+	 * @returns The terminal status `data` object (contains the result array for reads).
+	 */
+	private async runDeviceTask<T extends { code?: number }>(
+		startPath: string,
+		startBody: Record<string, unknown>,
+		statusPath: string,
+	): Promise<T> {
+		await this.ensureToken();
+		const started = await this._post<string>(startPath, startBody);
+		if (started.status !== "0" || !started.data) {
+			throw new Error(`Device task ${startPath} start failed: ${started.message}`);
+		}
+		const taskId = started.data;
+		for (let attempt = 0; attempt < DEVICE_SETTING_POLL_MAX; attempt++) {
+			await new Promise<void>(resolve => setTimeout(resolve, DEVICE_SETTING_POLL_INTERVAL_MS));
+			const status = await this._post<T>(statusPath, { id: taskId });
+			if (status.status !== "0") {
+				throw new Error(`Device task ${statusPath} failed: ${status.message}`);
+			}
+			// code 2 = the DTU is still processing; any other code is terminal.
+			const code = status.data?.code;
+			if (code !== 2) {
+				if (code === 0) {
+					return status.data ?? ({} as T);
+				}
+				throw new Error(`Device task ${startPath} returned code ${code}`);
+			}
+		}
+		throw new Error(`Device task ${startPath} timed out waiting for the device`);
+	}
+
+	/**
+	 * Read a device's grid-connection profile through the cloud control channel (pvm-ctl action 41).
+	 * This is the only way to obtain the grid profile of a cloud-only device (no local TCP port,
+	 * e.g. HMS-800-2WB): the cloud tells the DTU to report it, then decodes the blob into named
+	 * parameters. Map the result onto `gridProfile.*` states via `mapCloudGridProfile`.
+	 *
+	 * @param devSn - Micro-inverter serial number (unprefixed).
+	 * @param dtuSn - Serial number of the DTU the inverter is connected to (unprefixed).
+	 * @param devType - Device type (3 = micro-inverter; the only type observed).
+	 */
+	async readGridProfileViaCloud(devSn: string, dtuSn: string, devType = 3): Promise<CloudGridProfileParam[]> {
+		if (!devSn || !dtuSn) {
+			throw new Error("readGridProfileViaCloud: devSn and dtuSn are required");
+		}
+		const result = await this.runDeviceTask<{ code?: number; data?: CloudGridProfileParam[] }>(
+			PVM_CTL_SETTING_READ_PATH,
+			{ action: DEVICE_SETTING_ACTION_GRID_READ, dev_sn: devSn, dev_type: devType, dtu_sn: dtuSn },
+			PVM_CTL_SETTING_STATUS_PATH,
+		);
+		return result.data ?? [];
+	}
+
+	/**
+	 * Send a control command (reboot / power on / power off) to a micro-inverter via the cloud
+	 * (pvm-ctl command/put). Works for cloud-only devices with no local link. Fires the command and
+	 * waits for the DTU to acknowledge it. Resolves on success, rejects on failure/timeout.
+	 *
+	 * The command physically actuates the inverter — callers must gate it behind explicit user
+	 * intent (a writable command state), never poll-driven automation.
+	 *
+	 * @param action - Command action code (see DEVICE_COMMAND_* / DTU_COMMAND_* constants).
+	 * @param devSn - Target device serial (unprefixed): the inverter for micro commands, the DTU for DTU commands.
+	 * @param dtuSn - Serial number of the DTU the inverter is connected to (unprefixed).
+	 * @param devType - Device type (see CLOUD_DEV_TYPE_* constants; 3 = micro-inverter, 1 = DTU).
+	 */
+	async sendDeviceCommand(action: number, devSn: string, dtuSn: string, devType = 3): Promise<void> {
+		if (!devSn || !dtuSn) {
+			throw new Error("sendDeviceCommand: devSn and dtuSn are required");
+		}
+		await this.runDeviceTask<{ code?: number }>(
+			PVM_CTL_COMMAND_PUT_PATH,
+			{ action, dev_sn: devSn, dev_type: devType, dtu_sn: dtuSn, data: {} },
+			PVM_CTL_COMMAND_STATUS_PATH,
+		);
 	}
 }
 

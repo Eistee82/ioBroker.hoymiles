@@ -315,6 +315,49 @@ export interface DecodedGridProfile {
 }
 
 /**
+ * One parameter of a cloud-decoded grid profile (`pvm-ctl` `dev/setting` action 41 result). The
+ * cloud already decodes the blob into engineering values, so `content` is the final value and
+ * `position` is the same byte offset the local blob uses — the bridge to {@link GRID_PROFILE_SCHEMA}.
+ */
+export interface CloudGridProfileParam {
+	/** Display/field name (e.g. "Nominal Voltage (NV)"); section headers carry a null position. */
+	name?: string;
+	/** Decoded engineering value (already scaled), or null for section headers. */
+	content?: number | null;
+	/** Byte offset of the parameter — matches {@link GridProfileParam.pos}; null for headers. */
+	position?: number | null;
+}
+
+/**
+ * Map a cloud-decoded grid profile (action-41 `data` array) onto the same {@link GRID_PROFILE_SCHEMA}
+ * keys the local DevConfigFetch path produces, so cloud-only devices (no local TCP, e.g. HMS-800-2WB)
+ * populate the identical `gridProfile.*` states. Cloud `content` is already the engineering value,
+ * so no scaling is applied; flags become booleans. Params without a schema match are ignored.
+ *
+ * @param params - The `data` array from a cloud grid-profile read.
+ */
+export function mapCloudGridProfile(params: CloudGridProfileParam[]): DecodedGridProfile {
+	const byPos = new Map<number, GridProfileParam>();
+	for (const p of GRID_PROFILE_SCHEMA) {
+		byPos.set(p.pos, p);
+	}
+	const values: Record<string, number | boolean> = {};
+	for (const param of params) {
+		if (param.position == null || param.content == null) {
+			continue;
+		}
+		const schema = byPos.get(param.position);
+		if (!schema) {
+			continue;
+		}
+		values[schema.key] = schema.flag ? param.content !== 0 : param.content;
+	}
+	const code = typeof values.countryStdCode === "number" ? values.countryStdCode : null;
+	const standard = code != null ? COUNTRY_STD_NAMES[code] || `code ${code}` : "";
+	return { values, standard };
+}
+
+/**
  * Decode a grid-profile blob (big-endian 16-bit words) into named values using {@link GRID_PROFILE_SCHEMA}.
  * Parameters whose position lies beyond the blob length are skipped.
  *

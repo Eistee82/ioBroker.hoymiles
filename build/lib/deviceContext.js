@@ -1,12 +1,12 @@
 import DtuConnection from "./dtuConnection.js";
 import CloudRelay from "./cloudRelay.js";
-import { formatDtuVersion, formatSwVersion, formatInvVersion } from "./protobufHandler.js";
-import { executeCommand } from "./commandHandler.js";
+import { formatDtuVersion, formatSwVersion, formatInvVersion, } from "./protobufHandler.js";
+import { executeCommand, executeCloudCommand } from "./commandHandler.js";
 import Encryption from "./encryption.js";
 import { channels, states } from "./stateDefinitions.js";
 import { getAlarmDescription } from "./alarmCodes.js";
 import { decodeGridProfile, byteSwap16 } from "./gridProfile.js";
-import { INFO_FALLBACK_TIMEOUT_MS, SCALE_POWER } from "./constants.js";
+import { INFO_FALLBACK_TIMEOUT_MS, SCALE_POWER, CLOUD_DEV_TYPE_DTU } from "./constants.js";
 import { whToKwh } from "./convert.js";
 import { errorMessage, safeJsonStringify, unixSeconds } from "./utils.js";
 const MAX_PV_PORTS = 6;
@@ -55,6 +55,7 @@ class DeviceContext {
     pollTimer;
     pvStatesCreated;
     pvCount;
+    burstActive;
     meterStatesCreated;
     histStatesCreated;
     pollCount;
@@ -100,6 +101,7 @@ class DeviceContext {
         this.pollTimer = undefined;
         this.pvStatesCreated = false;
         this.pvCount = 0;
+        this.burstActive = false;
         this.meterStatesCreated = false;
         this.histStatesCreated = false;
         this.pollCount = 0;
@@ -727,6 +729,14 @@ class DeviceContext {
         try {
             const data = this.protobuf.decodeRealDataNew(payload);
             this.adapter.log.debug(`[${this.deviceId || this.host}] RealData: power=${data.dtuPower}W, dailyEnergy=${data.dtuDailyEnergy}, sgs=${data.sgs.length}, pv=${data.pv.length}, meter=${data.meter.length}`);
+            await this.applyRealData(data);
+        }
+        catch (err) {
+            this.adapter.log.warn(`[${this.deviceId || this.host}] Error decoding RealData: ${errorMessage(err)}`);
+        }
+    }
+    async applyRealData(data) {
+        try {
             const entries = [
                 ["info.lastResponse", unixSeconds()],
                 ["inverter.active", data.sgs.length > 0 && data.dtuPower > 0],
@@ -757,8 +767,20 @@ class DeviceContext {
             await this.setStates(entries, true);
         }
         catch (err) {
-            this.adapter.log.warn(`[${this.deviceId || this.host}] Error decoding RealData: ${errorMessage(err)}`);
+            this.adapter.log.warn(`[${this.deviceId || this.host}] Error applying RealData: ${errorMessage(err)}`);
         }
+    }
+    async markRelaySessionActive() {
+        for (const [, cached] of this.stateCache) {
+            if (cached.q === DeviceContext.Q_DEVICE_DISCONNECTED) {
+                cached.q = 0;
+            }
+        }
+        await this.setState("info.connected", true, true);
+    }
+    async markRelaySessionLost() {
+        await this.setState("info.connected", false, true);
+        await this.markStatesDisconnected();
     }
     async handleInfoData(payload) {
         try {
@@ -768,8 +790,8 @@ class DeviceContext {
             if (!this.deviceId && info.dtuSn) {
                 const existing = this.adapter.devices.get(info.dtuSn);
                 if (existing && existing !== this) {
-                    if (!existing.enableLocal && this.enableLocal) {
-                        this.adapter.log.info(`[${this.host}] Taking over cloud-only device for SN ${info.dtuSn}`);
+                    if (!existing.connection?.connected && this.enableLocal) {
+                        this.adapter.log.info(`[${this.host}] Taking over socket-less device context for SN ${info.dtuSn}`);
                         this.cloudStationId = existing.cloudStationId;
                         this.adapter.devices.delete(info.dtuSn);
                     }
@@ -989,17 +1011,18 @@ class DeviceContext {
             this.adapter.log.debug(`[${this.deviceId || this.host}] Alarms received: ${alarms.length} entries`);
         }
         const activeAlarms = alarms.filter(a => a.active);
+        const lang = this.adapter.language || "en";
         const latestActive = activeAlarms[activeAlarms.length - 1];
         const entries = [
             ["alarms.count", alarms.length],
             ["alarms.activeCount", activeAlarms.length],
             ["alarms.hasActive", activeAlarms.length > 0],
             ["alarms.json", safeJsonStringify(alarms)],
-            ["inverter.warnMessage", latestActive ? latestActive.descriptionEn : ""],
+            ["inverter.warnMessage", latestActive ? getAlarmDescription(latestActive.code, lang) : ""],
         ];
         if (alarms.length > 0) {
             const last = alarms[alarms.length - 1];
-            entries.push(["alarms.lastCode", last.code], ["alarms.lastStartTime", last.startTime], ["alarms.lastEndTime", last.endTime], ["alarms.lastMessage", `${last.descriptionDe} (Code ${last.code})`], ["alarms.lastData1", last.data1], ["alarms.lastData2", last.data2]);
+            entries.push(["alarms.lastCode", last.code], ["alarms.lastStartTime", last.startTime], ["alarms.lastEndTime", last.endTime], ["alarms.lastMessage", `${getAlarmDescription(last.code, lang)} (Code ${last.code})`], ["alarms.lastData1", last.data1], ["alarms.lastData2", last.data2]);
         }
         await this.setStates(entries, true);
     }
@@ -1174,27 +1197,53 @@ class DeviceContext {
         }
     }
     async handleStateChange(stateId, state) {
-        if (!this.connection || !this.connection.connected) {
-            this.adapter.log.warn(`[${this.deviceId}] Cannot send command: not connected to DTU`);
+        if (this.connection?.connected) {
+            await executeCommand(stateId, state, {
+                connection: this.connection,
+                protobuf: this.protobuf,
+                deviceId: this.deviceId,
+                host: this.host,
+                log: this.adapter.log,
+                setState: (id, val, ack) => this.setState(id, val, ack),
+                resetButton: id => this.scheduleButtonReset(id),
+            });
             return;
         }
-        await executeCommand(stateId, state, {
-            connection: this.connection,
-            protobuf: this.protobuf,
-            deviceId: this.deviceId,
-            host: this.host,
-            log: this.adapter.log,
-            setState: (id, val, ack) => this.setState(id, val, ack),
-            resetButton: id => {
-                const handle = this.adapter.setTimeout(() => {
-                    this.resetButtonTimers.delete(handle);
-                    this.setState(id, false, true).catch(err => this.adapter.log.warn(`[${this.deviceId}] resetButton error: ${errorMessage(err)}`));
-                }, 1000);
-                if (handle) {
-                    this.resetButtonTimers.add(handle);
-                }
-            },
-        });
+        if (this.enableCloud && this.dtuSerial) {
+            const handled = await executeCloudCommand(stateId, state, {
+                deviceId: this.deviceId,
+                log: this.adapter.log,
+                send: (action, devType) => {
+                    const devSn = devType === CLOUD_DEV_TYPE_DTU ? this.dtuSerial : this.inverterSn;
+                    if (!devSn) {
+                        return Promise.reject(new Error("inverter serial not known yet (device is still being discovered)"));
+                    }
+                    return this.adapter.sendCloudDeviceCommand(devSn, this.dtuSerial, action, devType);
+                },
+                setState: (id, val, ack) => this.setState(id, val, ack),
+                resetButton: id => this.scheduleButtonReset(id),
+            });
+            if (handled) {
+                return;
+            }
+            this.adapter.log.warn(`[${this.deviceId}] Command "${stateId}" is not available over the cloud`);
+            return;
+        }
+        this.adapter.log.warn(`[${this.deviceId}] Cannot send command: not connected to DTU`);
+    }
+    setCloudInverterSn(sn) {
+        if (sn && !this.inverterSn) {
+            this.inverterSn = sn;
+        }
+    }
+    scheduleButtonReset(id) {
+        const handle = this.adapter.setTimeout(() => {
+            this.resetButtonTimers.delete(handle);
+            this.setState(id, false, true).catch(err => this.adapter.log.warn(`[${this.deviceId}] resetButton error: ${errorMessage(err)}`));
+        }, 1000);
+        if (handle) {
+            this.resetButtonTimers.add(handle);
+        }
     }
     async updateAdapterConnectionState() {
         await this.adapter.updateConnectionState();

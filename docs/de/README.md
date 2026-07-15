@@ -1,14 +1,40 @@
 ![Logo](../../admin/hoymiles.png)
 
-# ioBroker.hoymiles — Hoymiles HMS-xxxW-xT
+# ioBroker.hoymiles — Hoymiles HMS-xxxW-xT / HMS-xxx-xWB
 
 ## Unterstützte Wechselrichter
 
-Dieser Adapter ist für **Hoymiles HMS Mikrowechselrichter mit integriertem WiFi DTU** (DTUBI) konzipiert:
+Dieser Adapter ist für **Hoymiles HMS Mikrowechselrichter mit integrierter WiFi- (oder WiFi+Bluetooth-) DTU** (DTUBI) konzipiert.
 
-- **1T** (1 String): HMS-300W-1T, HMS-350W-1T, HMS-400W-1T, HMS-450W-1T, HMS-500W-1T
-- **2T** (2 Strings): HMS-600W-2T, HMS-700W-2T, HMS-800W-2T (**Getestet**), HMS-900W-2T, HMS-1000W-2T (**Getestet Lokal**)
-- **4T** (4 Strings, **nur DW-Variante**): HMS-1600DW-4T, HMS-1800DW-4T, HMS-2000DW-4T
+**Lokal** = direkte TCP/Protobuf-Verbindung auf Port 10081. **Cloud** = S-Miles Cloud API — automatische Erkennung, Echtzeitdaten (schneller Burst-Kanal ~1,5–3 s), Energie-Aggregate, Netzprofil, Wechselrichter ein/aus + Neustart, DTU-Neustart.
+
+| Modell | Strings | Lokal (TCP) | Cloud | Status |
+|--------|:---:|:---:|:---:|--------|
+| HMS-300W-1T | 1 | ✅ | ✅ | Ungetestet |
+| HMS-350W-1T | 1 | ✅ | ✅ | Ungetestet |
+| HMS-400W-1T | 1 | ✅ | ✅ | Ungetestet |
+| HMS-450W-1T | 1 | ✅ | ✅ | Ungetestet |
+| HMS-500W-1T | 1 | ✅ | ✅ | Ungetestet |
+| HMS-600W-2T | 2 | ✅ | ✅ | Ungetestet |
+| HMS-700W-2T | 2 | ✅ | ✅ | Ungetestet |
+| HMS-800W-2T | 2 | ✅ | ✅ | **Getestet** (Lokal + Cloud) |
+| HMS-900W-2T | 2 | ✅ | ✅ | Ungetestet |
+| HMS-1000W-2T | 2 | ✅ | ✅ | **Getestet** (Lokal) |
+| HMS-1600DW-4T | 4 | ✅ | ✅ | Ungetestet |
+| HMS-1800DW-4T | 4 | ✅ | ✅ | Ungetestet |
+| HMS-2000DW-4T | 4 | ✅ | ✅ | Ungetestet |
+| HMS-600-2WB | 2 | ❌¹ | ✅ | Ungetestet |
+| HMS-700-2WB | 2 | ❌¹ | ✅ | Ungetestet |
+| HMS-800-2WB | 2 | ❌¹ | ✅ | **Getestet** (Cloud: Echtzeit-Burst, Netzprofil, ein/aus + Neustart, DTU-Neustart) |
+| HMS-900-2WB | 2 | ❌¹ | ✅ | Ungetestet |
+| HMS-1000-2WB | 2 | ❌¹ | ✅ | Ungetestet |
+| HMS-1600-4WB | 4 | ❌¹ | ✅ | Ungetestet |
+| HMS-1800-4WB | 4 | ❌¹ | ✅ | Ungetestet |
+| HMS-2000-4WB | 4 | ❌¹ | ✅ | Ungetestet |
+
+¹ Die **WB-Serie** (vermarktet als **„HiFlow Pro"**) hat keinen lokalen TCP-Port — der einzige lokale Kanal ist Bluetooth LE, alle Daten gehen an die Hoymiles-Cloud. Diese Wechselrichter funktionieren ab Werk **cloud-only**; zusätzlich sind lokale Daten möglich, indem der Cloud-Upload auf den eingebauten Relay-Server des Adapters umgeleitet wird — siehe [Wechselrichter über ioBroker umleiten](#wechselrichter-über-iobroker-umleiten). Alle WB-Modelle nutzen dieselbe DTU-Plattform; getestet ist bisher nur die HMS-800-2WB.
+
+**Cloud-only-Betrieb:** Jeder unterstützte Wechselrichter im S-Miles-Konto funktioniert auch ganz ohne lokale Verbindung — der Adapter erkennt ihn automatisch und liefert über die Cloud Echtzeitleistung (Burst-Kanal), Energie-Aggregate, das Netzprofil sowie die Befehle Wechselrichter ein/aus + Neustart (`inverter.active` / `inverter.reboot`) und DTU-Neustart (`dtu.reboot`). Die übrigen Befehle (Leistungslimit, Sperren, Warnungen löschen, …) erfordern die lokale TCP-Verbindung.
 
 > Dieser Adapter funktioniert **NICHT** mit: HMS-1600/1800/2000-4T ohne "DW", HM-Serie, MI-Serie, externen DTU-Sticks oder HMT-Dreiphasenmodellen.
 
@@ -33,6 +59,7 @@ Dieser Adapter ist für **Hoymiles HMS Mikrowechselrichter mit integriertem WiFi
 | **Cloud aktivieren** | aus | Hoymiles S-Miles Cloud-API aktivieren |
 | **S-Miles E-Mail** | — | E-Mail-Adresse des S-Miles Kontos |
 | **S-Miles Passwort** | — | Passwort des S-Miles Kontos (verschlüsselt gespeichert) |
+| **Schnelle Echtzeitdaten (Cloud)** | ein | Für Wechselrichter **ohne** lokale Verbindung schnelle Sekunden-Leistungsdaten aus der Cloud abrufen (derselbe „Burst"-Kanal, den die Live-Ansicht der S-Miles-App nutzt). Aktualisiert `grid.power` und `pvN.power` etwa alle 1,5–3 s (servergesteuert) statt nur alle ~80 s. Betrifft nur reine Cloud-Geräte; lokal verbundene Wechselrichter behalten ihre direkten lokalen Echtzeitdaten. |
 
 Alle Wechselrichter im Cloud-Account werden automatisch erkannt. Keine manuelle Seriennummer-Konfiguration nötig.
 
@@ -58,6 +85,49 @@ Login ist ein einzelner v3-Flow plus anschließender Profil-Probe (`region_c →
 #### Cloud-Login testen
 
 Wenn unsicher: Knopf **Cloud-Login testen** neben dem Passwortfeld klicken. Er läuft die vier Phasen einmal mit den aktuellen Zugangsdaten durch (`region_c`, `pre-insp`, `login`, `probe`) und meldet `v` und Salt-Vorhandensein aus pre-insp, ob der Login einen Token produziert hat und welches Profil die Probe zuweist (`installer` / `home`). Das Ergebnis steht im Adapter-Log — gut für Forum-Bug-Reports. Der Test speichert keinen Token und ändert keinen Adapter-Zustand.
+
+## Wechselrichter über ioBroker umleiten
+
+Neuere Wechselrichter mit integrierter WiFi-DTU (z. B. **HMS-800-2WB**) öffnen keinen lokalen TCP-Port mehr — ihr einziger lokaler Kanal ist Bluetooth LE, und alle Daten gehen direkt in die Hoymiles-Cloud. Damit ioBroker die Echtzeitdaten trotzdem lokal mitlesen (und später steuern) kann, arbeitet der Adapter als **Relay-Server**: Du leitest den Cloud-Upload des Wechselrichters auf ioBroker um, und der Adapter reicht jedes Paket 1:1 an die echte Hoymiles-Cloud weiter, während er eine Kopie mitliest. Cloud-Portal und S-Miles-App funktionieren unverändert weiter.
+
+Es gibt zwei unabhängige lokale Wege — wähle den, den deine Hardware unterstützt:
+
+| Wechselrichter | Lokaler Kanal | Nutzung |
+| --- | --- | --- |
+| Ältere HMS-*-*T (offener TCP-Port 10081) | direktes TCP | **Lokale Verbindung (TCP)** oben |
+| HMS-800-2WB & neuer (nur BLE, kein TCP) | Umleitung auf ioBroker | **dieser Abschnitt** |
+
+### 1. Relay-Server im Adapter aktivieren
+
+In den Adapter-Einstellungen (Tab Cloud) **Relay-Server aktivieren (Wechselrichter auf ioBroker umleiten)** einschalten und setzen:
+
+- **Relay-Server-Port** — der TCP-Port, auf dem der Adapter lauscht (Standard `10081`). Genau diesen Port trägst du später im Wechselrichter ein.
+- **Hoymiles-Zielserver** — der Regionalserver, an den der Relay weiterleitet. Muss die Region deines Accounts sein (z. B. `dataeu.hoymiles.com` für Europa), sonst bekommen Cloud/App keine Daten mehr.
+- **Hoymiles-Zielserver-Port** — Standard `10081`.
+
+Stelle sicher, dass der ioBroker-Host aus dem Netz des Wechselrichters erreichbar ist und der Port nicht durch eine Firewall blockiert wird.
+
+### 2. Wechselrichter mit dem Web-Tool umleiten
+
+Die Umleitung selbst läuft per Bluetooth über ein kleines Browser-Tool — keine App-Installation nötig:
+
+**[Umleitungs-Tool öffnen →](https://eistee82.github.io/ioBroker.hoymiles/app/)** (oder den QR-Code aus den Adapter-Einstellungen mit dem Handy scannen)
+
+> **Wichtig:** Das Tool nutzt **Web Bluetooth**, das nur in **Chrome / Edge unter Android oder am Desktop** funktioniert. **iOS / Safari wird nicht unterstützt** (Apple implementiert Web Bluetooth nicht). Nutze ein Android-Handy oder einen Laptop in Bluetooth-Reichweite des Wechselrichters.
+
+Schritte im Tool:
+
+1. **Verbinden** tippen und deinen Wechselrichter wählen (Name beginnt mit `RMI-…` / `HMS-…`).
+2. Den **Bluetooth-PIN** des Wechselrichters eingeben (den du bei der Einrichtung in der S-Miles-App gesetzt hast; Werksstandard `123456`, falls nie geändert). Das Tool speichert ihn nicht.
+3. Nach dem Pairing erscheinen die Live-Daten (AC-Leistung, Netzspannung/-frequenz, Temperatur, PV-Werte pro Strang).
+4. Im Bereich **Server** die Option **Eigene Adresse** wählen und die **ioBroker-IP** sowie den **Relay-Server-Port** aus Schritt 1 eintragen. Speichern.
+5. Der Wechselrichter lädt jetzt zu ioBroker hoch. Innerhalb weniger Minuten füllt der Adapter die `<dtuSerial>.*`-Datenpunkte.
+
+### 3. Werks-Server wiederherstellen
+
+Das Tool merkt sich beim ersten Verbinden den ursprünglichen Hoymiles-Server jedes Wechselrichters (pro Seriennummer). Zum Rückgängigmachen der Umleitung das Tool öffnen, verbinden und in der Server-Liste den mit **„Geräte-Standard"** markierten Eintrag wählen (oder den passenden Regionalserver), dann speichern.
+
+Das Web-Tool funktioniert außerdem eigenständig als **lokaler Live-Daten-Viewer** für jeden unterstützten Wechselrichter, ganz ohne Umleitung.
 
 ## Verbindungsmodi
 
@@ -168,8 +238,8 @@ PV-Channels werden dynamisch basierend auf dem Wechselrichter-Modell erstellt (1
 | `inverter.temperature` | number | °C | nein | Temperatur |
 | `inverter.powerLimit` | number | % | **ja** | **Laufzeit**-Leistungslimit (RAM-only, **kein Flash-/NVM-Verschleiß — sekündliches Schreiben unbedenklich**). **Mit diesem Datenpunkt lässt sich eine Nulleinspeisung realisieren** / dynamische Drosselung. 2-100%, lokal |
 | `inverter.activePowerLimit` | number | % | nein | Aktives Leistungslimit (live, lokal) |
-| `inverter.active` | boolean | — | **ja** | Wechselrichter ein/aus (lokal) |
-| `inverter.reboot` | boolean | — | **ja** | Wechselrichter neustarten (lokal) |
+| `inverter.active` | boolean | — | **ja** | Wechselrichter ein/aus (lokal; bei reinen Cloud-Geräten über die Cloud) |
+| `inverter.reboot` | boolean | — | **ja** | Wechselrichter neustarten (lokal; bei reinen Cloud-Geräten über die Cloud) |
 | `inverter.powerFactorLimit` | number | — | **ja** | Leistungsfaktor-Limit (-1 bis 1, lokal) |
 | `inverter.reactivePowerLimit` | number | ° | **ja** | Blindleistungs-Limit (-50 bis 50, lokal) |
 | `inverter.cleanWarnings` | boolean | — | **ja** | Warnungen löschen (lokal) |
@@ -180,7 +250,7 @@ PV-Channels werden dynamisch basierend auf dem Wechselrichter-Modell erstellt (1
 | `inverter.linkStatus` | number | — | nein | Verbindungsstatus |
 | `inverter.modulationIndexSignal` | number | — | nein | SGSMO #20, roher gepackter Wert (Modulationsindex + Signal; genaue Dekodierung noch unbestätigt, lokal) |
 
-### `<dtuSerial>.dtu.*` — DTU-Information (pro DTU, nur lokal)
+### `<dtuSerial>.dtu.*` — DTU-Information (pro DTU, nur lokal außer `dtu.reboot`)
 
 | Datenpunkt | Typ | Einheit | Beschreibung |
 |------------|-----|---------|--------------|
@@ -188,7 +258,7 @@ PV-Channels werden dynamisch basierend auf dem Wechselrichter-Modell erstellt (1
 | `dtu.swVersion` | string | — | Software-Version |
 | `dtu.hwVersion` | string | — | Hardware-Version |
 | `dtu.rssi` | number | dBm | Signalstärke |
-| `dtu.reboot` | boolean | — | DTU neustarten (**schreibbar**) |
+| `dtu.reboot` | boolean | — | DTU neustarten (**schreibbar**). Wird über die lokale TCP-Verbindung gesendet, falls verbunden, sonst über die Cloud für cloud-only-Geräte (z. B. HMS-800-2WB) |
 | `dtu.wifiVersion` | string | — | WLAN-Version |
 | `dtu.fwUpdateAvailable` | boolean | — | Firmware-Update verfügbar (1x täglich via Cloud geprüft) |
 | `dtu.stepTime` | number | s | Schrittzeit |
@@ -201,7 +271,11 @@ PV-Channels werden dynamisch basierend auf dem Wechselrichter-Modell erstellt (1
 
 | Datenpunkt | Typ | Einheit | Beschreibung |
 |------------|-----|---------|--------------|
-| `grid.power` | number | W | Gesamtleistung der Station |
+| `grid.power` | number | W | Gesamtleistung der Station (live in ~1,5–3 s über den Burst-Kanal, sonst ~80 s) |
+| `grid.gridPower` | number | W | Netzaustauschleistung (Echtzeit, +Bezug/−Einspeisung) — nur bei Anlagen mit Zähler ≠ 0 |
+| `grid.loadPower` | number | W | Last-/Verbrauchsleistung (Echtzeit) |
+| `grid.batteryPower` | number | W | Batterieleistung (Echtzeit, +Laden/−Entladen) — nur bei Batteriesystemen |
+| `grid.pvUtilization` | number | % | PV-Auslastung (Echtzeit) |
 | `grid.dailyEnergy` | number | kWh | Tagesenergie |
 | `grid.monthEnergy` | number | kWh | Monatsenergie |
 | `grid.yearEnergy` | number | kWh | Jahresenergie |
@@ -268,7 +342,7 @@ Netz- und Zähler-Warnflags aus dem Cloud-Datensatz `station/find`. Alle boolesc
 | `alarms.lastCode` | number | Letzter Alarm-Code |
 | `alarms.lastStartTime` | number | Letzter Alarm Startzeit |
 | `alarms.lastEndTime` | number | Letzter Alarm Endzeit |
-| `alarms.lastMessage` | string | Letzte Alarmmeldung (Deutsch) |
+| `alarms.lastMessage` | string | Letzte Alarmmeldung (in der ioBroker-Systemsprache, sonst Englisch) |
 | `alarms.lastData1` | number | Letzter Alarm Daten 1 (Rohwert Sensor) |
 | `alarms.lastData2` | number | Letzter Alarm Daten 2 (Rohwert Sensor) |
 
@@ -292,7 +366,7 @@ Netz- und Zähler-Warnflags aus dem Cloud-Datensatz `station/find`. Alle boolesc
 | `config.wifiMacAddress` | string | — | nein | WLAN MAC-Adresse |
 | `config.dtuApSsid` | string | — | nein | DTU Access-Point SSID |
 
-### `<dtuSerial>.gridProfile.*` — Netzprofil (pro DTU, lokal)
+### `<dtuSerial>.gridProfile.*` — Netzprofil (pro DTU, lokal — bei reinen Cloud-Geräten über die Cloud gelesen)
 
 Das Netz-Anschlussprofil des Wechselrichters (Netz-/Sicherheitsparameter), lokal über DevConfigFetch gelesen. Alle nur lesbar. Spannungs-/Frequenzwerte richten sich nach der aktiven Netznorm (z. B. `DE_VDE4105_2018`). Funktions-Flags sind boolesch (`true` = Funktion aktiv).
 

@@ -8,6 +8,7 @@ function initAgent(options) {
         keepAlive: true,
         maxSockets: options?.maxSockets ?? 5,
         timeout: HTTP_AGENT_TIMEOUT_MS,
+        ...(options?.ca ? { ca: options.ca } : {}),
     });
 }
 class HttpError extends Error {
@@ -54,7 +55,7 @@ function request(url, body, options, responseType) {
         const reqOptions = {
             hostname: parsed.hostname,
             port: parsed.port || 443,
-            path: parsed.pathname,
+            path: parsed.pathname + parsed.search,
             method: "POST",
             agent,
             headers,

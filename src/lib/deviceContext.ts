@@ -1,12 +1,18 @@
 import DtuConnection from "./dtuConnection.js";
 import CloudRelay from "./cloudRelay.js";
-import { type ProtobufHandler, formatDtuVersion, formatSwVersion, formatInvVersion } from "./protobufHandler.js";
-import { executeCommand } from "./commandHandler.js";
+import {
+	type ProtobufHandler,
+	type RealDataResult,
+	formatDtuVersion,
+	formatSwVersion,
+	formatInvVersion,
+} from "./protobufHandler.js";
+import { executeCommand, executeCloudCommand } from "./commandHandler.js";
 import Encryption from "./encryption.js";
 import { channels, states } from "./stateDefinitions.js";
 import { getAlarmDescription } from "./alarmCodes.js";
 import { decodeGridProfile, byteSwap16 } from "./gridProfile.js";
-import { INFO_FALLBACK_TIMEOUT_MS, SCALE_POWER } from "./constants.js";
+import { INFO_FALLBACK_TIMEOUT_MS, SCALE_POWER, CLOUD_DEV_TYPE_DTU } from "./constants.js";
 import { whToKwh } from "./convert.js";
 import { errorMessage, safeJsonStringify, unixSeconds } from "./utils.js";
 
@@ -29,6 +35,8 @@ export interface HoymilesAdapter extends ioBroker.Adapter {
 	onSendTimeUpdated(ctx: DeviceContext): void;
 	/** Adapter-weiten Verbindungsstatus neu berechnen. */
 	updateConnectionState(): Promise<void>;
+	/** Steuerbefehl über die Cloud senden (für Geräte ohne lokale Verbindung). */
+	sendCloudDeviceCommand(devSn: string, dtuSn: string, action: number, devType?: number): Promise<void>;
 }
 
 interface DeviceContextOptions {
@@ -127,7 +135,15 @@ class DeviceContext {
 
 	private pollTimer: ioBroker.Interval | undefined;
 	pvStatesCreated: boolean;
-	private pvCount: number;
+	/** Number of PV-string states created so far. Read by the burst poller to size its writes. */
+	pvCount: number;
+	/**
+	 * True while the realtime burst poller is actively streaming this DTU's power. The cloud
+	 * poller then skips the overlapping `grid.power`/`pvN.power` writes (the burst owns them,
+	 * faster and fresher) but keeps supplying the metrics the burst does not: voltage, current,
+	 * frequency, temperature, energy counters.
+	 */
+	burstActive: boolean;
 	private meterStatesCreated: boolean;
 	private histStatesCreated: boolean;
 	private pollCount: number;
@@ -204,6 +220,7 @@ class DeviceContext {
 		this.pollTimer = undefined;
 		this.pvStatesCreated = false;
 		this.pvCount = 0;
+		this.burstActive = false;
 		this.meterStatesCreated = false;
 		this.histStatesCreated = false;
 		this.pollCount = 0;
@@ -1110,7 +1127,24 @@ class DeviceContext {
 			this.adapter.log.debug(
 				`[${this.deviceId || this.host}] RealData: power=${data.dtuPower}W, dailyEnergy=${data.dtuDailyEnergy}, sgs=${data.sgs.length}, pv=${data.pv.length}, meter=${data.meter.length}`,
 			);
+			await this.applyRealData(data);
+		} catch (err) {
+			this.adapter.log.warn(`[${this.deviceId || this.host}] Error decoding RealData: ${errorMessage(err)}`);
+		}
+	}
 
+	/**
+	 * Write RealData-derived states from an already-decoded result. Extracted from
+	 * {@link handleRealData} so the same mapping logic can be fed by the local poll-response
+	 * handler AND by relay-server-sniffed cloud RealData frames (`0x22 0x0c`/`0x0d`) for
+	 * inverters redirected to our relay (e.g. HMS-800-2WB, which has no local TCP port) —
+	 * the payload shape is identical (RealDataNewReqDTO) either way, only the wire framing
+	 * differs. Callers are responsible for catching decode errors before calling this.
+	 *
+	 * @param data - Decoded RealData result
+	 */
+	async applyRealData(data: RealDataResult): Promise<void> {
+		try {
 			const entries: Array<[string, ioBroker.StateValue]> = [
 				["info.lastResponse", unixSeconds()],
 				["inverter.active", data.sgs.length > 0 && data.dtuPower > 0],
@@ -1186,8 +1220,36 @@ class DeviceContext {
 
 			await this.setStates(entries, true);
 		} catch (err) {
-			this.adapter.log.warn(`[${this.deviceId || this.host}] Error decoding RealData: ${errorMessage(err)}`);
+			this.adapter.log.warn(`[${this.deviceId || this.host}] Error applying RealData: ${errorMessage(err)}`);
 		}
+	}
+
+	/**
+	 * Mark this device as actively receiving data again via a relay-server session (the
+	 * redirected inverter — e.g. HMS-800-2WB — (re)connected to our relay). Resets any
+	 * q=0x42-marked cache entries so the next relay-fed write isn't suppressed as a no-op
+	 * duplicate (mirrors the local-connection {@link onConnected} cache reset), and flips
+	 * `info.connected`. Quality reflects data freshness, not source — same convention as
+	 * the local TCP path.
+	 */
+	async markRelaySessionActive(): Promise<void> {
+		for (const [, cached] of this.stateCache) {
+			if (cached.q === DeviceContext.Q_DEVICE_DISCONNECTED) {
+				cached.q = 0;
+			}
+		}
+		await this.setState("info.connected", true, true);
+	}
+
+	/**
+	 * Mark this device's data states as disconnected (q=0x42) because its relay-server
+	 * session ended — the redirected inverter dropped its connection to our relay, or the
+	 * relay's upstream connection to the real cloud died. Mirrors the local TCP disconnect
+	 * path ({@link markStatesDisconnected}); quality reflects freshness, not source.
+	 */
+	async markRelaySessionLost(): Promise<void> {
+		await this.setState("info.connected", false, true);
+		await this.markStatesDisconnected();
 	}
 
 	private async handleInfoData(payload: Buffer): Promise<void> {
@@ -1202,9 +1264,13 @@ class DeviceContext {
 			if (!this.deviceId && info.dtuSn) {
 				const existing = this.adapter.devices.get(info.dtuSn);
 				if (existing && existing !== this) {
-					if (!existing.enableLocal && this.enableLocal) {
-						// Cloud-only context exists — local takes over
-						this.adapter.log.info(`[${this.host}] Taking over cloud-only device for SN ${info.dtuSn}`);
+					// A live local TCP connection takes over any context that has no live local socket —
+					// cloud-only (enableLocal:false) OR relay-fed (enableLocal:true but host:"" / no socket).
+					// Only a genuinely-connected local peer for the same serial is a real duplicate.
+					if (!existing.connection?.connected && this.enableLocal) {
+						this.adapter.log.info(
+							`[${this.host}] Taking over socket-less device context for SN ${info.dtuSn}`,
+						);
 						this.cloudStationId = existing.cloudStationId;
 						this.adapter.devices.delete(info.dtuSn);
 					} else {
@@ -1487,6 +1553,9 @@ class DeviceContext {
 
 		const activeAlarms = alarms.filter(a => a.active);
 
+		// Localize warn messages to the ioBroker system language (falls back to English inside
+		// getAlarmDescription when a code has no translation for that language).
+		const lang = this.adapter.language || "en";
 		const latestActive = activeAlarms[activeAlarms.length - 1];
 		const entries: Array<[string, ioBroker.StateValue]> = [
 			["alarms.count", alarms.length],
@@ -1494,7 +1563,7 @@ class DeviceContext {
 			["alarms.hasActive", activeAlarms.length > 0],
 			["alarms.json", safeJsonStringify(alarms)],
 			// Authoritative warn message from the WCode-based alarm list (same source the S-Miles app uses)
-			["inverter.warnMessage", latestActive ? latestActive.descriptionEn : ""],
+			["inverter.warnMessage", latestActive ? getAlarmDescription(latestActive.code, lang) : ""],
 		];
 
 		if (alarms.length > 0) {
@@ -1503,7 +1572,7 @@ class DeviceContext {
 				["alarms.lastCode", last.code],
 				["alarms.lastStartTime", last.startTime],
 				["alarms.lastEndTime", last.endTime],
-				["alarms.lastMessage", `${last.descriptionDe} (Code ${last.code})`],
+				["alarms.lastMessage", `${getAlarmDescription(last.code, lang)} (Code ${last.code})`],
 				["alarms.lastData1", last.data1],
 				["alarms.lastData2", last.data2],
 			);
@@ -1738,29 +1807,76 @@ class DeviceContext {
 	 * @param state - The new state value
 	 */
 	async handleStateChange(stateId: string, state: ioBroker.State): Promise<void> {
-		if (!this.connection || !this.connection.connected) {
-			this.adapter.log.warn(`[${this.deviceId}] Cannot send command: not connected to DTU`);
+		// Local link takes precedence: a locally-connected DTU is actuated directly over TCP.
+		if (this.connection?.connected) {
+			await executeCommand(stateId, state, {
+				connection: this.connection,
+				protobuf: this.protobuf,
+				deviceId: this.deviceId,
+				host: this.host,
+				log: this.adapter.log,
+				setState: (id, val, ack) => this.setState(id, val, ack),
+				resetButton: id => this.scheduleButtonReset(id),
+			});
 			return;
 		}
-		await executeCommand(stateId, state, {
-			connection: this.connection,
-			protobuf: this.protobuf,
-			deviceId: this.deviceId,
-			host: this.host,
-			log: this.adapter.log,
-			setState: (id, val, ack) => this.setState(id, val, ack),
-			resetButton: id => {
-				const handle = this.adapter.setTimeout(() => {
-					this.resetButtonTimers.delete(handle!);
-					this.setState(id, false, true).catch(err =>
-						this.adapter.log.warn(`[${this.deviceId}] resetButton error: ${errorMessage(err)}`),
-					);
-				}, 1000);
-				if (handle) {
-					this.resetButtonTimers.add(handle);
-				}
-			},
-		});
+		// No local link — for a cloud-connected device, send the same command over the cloud.
+		if (this.enableCloud && this.dtuSerial) {
+			const handled = await executeCloudCommand(stateId, state, {
+				deviceId: this.deviceId,
+				log: this.adapter.log,
+				// DTU-level commands address the DTU itself (dev_sn = DTU serial); micro-inverter
+				// commands address the connected inverter (dev_sn = inverter serial), which is only
+				// known once the cloud device tree has been polled — fail with a clear message if a
+				// micro command is fired before then, rather than leaking an internal validation error.
+				send: (action, devType) => {
+					const devSn = devType === CLOUD_DEV_TYPE_DTU ? this.dtuSerial : this.inverterSn;
+					if (!devSn) {
+						return Promise.reject(
+							new Error("inverter serial not known yet (device is still being discovered)"),
+						);
+					}
+					return this.adapter.sendCloudDeviceCommand(devSn, this.dtuSerial, action, devType);
+				},
+				setState: (id, val, ack) => this.setState(id, val, ack),
+				resetButton: id => this.scheduleButtonReset(id),
+			});
+			if (handled) {
+				return;
+			}
+			this.adapter.log.warn(`[${this.deviceId}] Command "${stateId}" is not available over the cloud`);
+			return;
+		}
+		this.adapter.log.warn(`[${this.deviceId}] Cannot send command: not connected to DTU`);
+	}
+
+	/**
+	 * Set the micro-inverter serial for a cloud-only device (learned from the cloud device tree),
+	 * so cloud control commands can address it. Does not overwrite a serial already learned locally.
+	 *
+	 * @param sn - Micro-inverter serial number (unprefixed).
+	 */
+	setCloudInverterSn(sn: string): void {
+		if (sn && !this.inverterSn) {
+			this.inverterSn = sn;
+		}
+	}
+
+	/**
+	 * Reset a button state back to false after 1 s (adapter-managed timer, cleared on stop).
+	 *
+	 * @param id - State ID relative to device prefix.
+	 */
+	private scheduleButtonReset(id: string): void {
+		const handle = this.adapter.setTimeout(() => {
+			this.resetButtonTimers.delete(handle!);
+			this.setState(id, false, true).catch(err =>
+				this.adapter.log.warn(`[${this.deviceId}] resetButton error: ${errorMessage(err)}`),
+			);
+		}, 1000);
+		if (handle) {
+			this.resetButtonTimers.add(handle);
+		}
 	}
 
 	// --- Utility ---

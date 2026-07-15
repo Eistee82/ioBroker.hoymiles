@@ -1,6 +1,6 @@
 import { postJson, postBinary, HttpError } from "./httpClient.js";
 import { parseChartResponse } from "./chartParser.js";
-import { TOKEN_MAX_AGE_MS, ENSURE_TOKEN_TIMEOUT_MS, CLOUD_HOST_DEFAULT, CLOUD_HOST_EU, CLOUD_DC_HOSTS, IAM_PRE_INSPECT_PATH, IAM_LOGIN_V3_PATH, IAM_REGION_PATH, PROFILE_PROBE_PATH, STATION_AK_FIND_PATH, APP_USER_AGENT_PREFIX, APP_VERSION, APP_TID, } from "./constants.js";
+import { TOKEN_MAX_AGE_MS, ENSURE_TOKEN_TIMEOUT_MS, CLOUD_HOST_DEFAULT, CLOUD_HOST_EU, CLOUD_DC_HOSTS, IAM_PRE_INSPECT_PATH, IAM_LOGIN_V3_PATH, IAM_REGION_PATH, PROFILE_PROBE_PATH, STATION_AK_FIND_PATH, PVM_CTL_SETTING_READ_PATH, PVM_CTL_SETTING_STATUS_PATH, DEVICE_SETTING_ACTION_GRID_READ, PVM_CTL_COMMAND_PUT_PATH, PVM_CTL_COMMAND_STATUS_PATH, DEVICE_SETTING_POLL_INTERVAL_MS, DEVICE_SETTING_POLL_MAX, APP_USER_AGENT_PREFIX, APP_VERSION, APP_TID, } from "./constants.js";
 import { errorMessage, withTimeout, buildCredentialChallenges, buildArgon2Challenge, anonymize, sanitizeForLog, safeJsonStringify, } from "./utils.js";
 const EU_WEATHER_URL = `${CLOUD_HOST_EU}/tpa/api/0/weather/get`;
 function assertData(data, label) {
@@ -83,6 +83,9 @@ class CloudConnection {
     }
     getLastDc() {
         return this.lastDc;
+    }
+    getToken() {
+        return this.token;
     }
     getUserAgent() {
         const dc = this.lastDc ?? 0;
@@ -466,6 +469,29 @@ class CloudConnection {
         }
         return assertData(result.data, "Realtime data");
     }
+    async getRealtimeUri(stationId) {
+        this.assertStationId(stationId);
+        await this.ensureToken();
+        const result = await this._post("/pvm/api/0/station/get_sd_uri", { sid: stationId });
+        if (result.status !== "0") {
+            throw new Error(`get_sd_uri failed: ${result.message}`);
+        }
+        const uri = result.data?.uri;
+        if (!uri) {
+            throw new Error("get_sd_uri returned no uri");
+        }
+        return uri;
+    }
+    async pollRealtimeBurst(uri, body) {
+        const result = await postJson(uri, body, {
+            token: this.token,
+            userAgent: this.getUserAgent(),
+        });
+        if (result.status !== "0") {
+            throw new Error(`Realtime burst failed: ${result.message}`);
+        }
+        return result.data ?? {};
+    }
     async getWeather(lat, lon) {
         const result = await postJson(EU_WEATHER_URL, { lat, lon }, {
             token: this.token,
@@ -516,6 +542,42 @@ class CloudConnection {
             token: this.token,
             userAgent: this.getUserAgent(),
         });
+    }
+    async runDeviceTask(startPath, startBody, statusPath) {
+        await this.ensureToken();
+        const started = await this._post(startPath, startBody);
+        if (started.status !== "0" || !started.data) {
+            throw new Error(`Device task ${startPath} start failed: ${started.message}`);
+        }
+        const taskId = started.data;
+        for (let attempt = 0; attempt < DEVICE_SETTING_POLL_MAX; attempt++) {
+            await new Promise(resolve => setTimeout(resolve, DEVICE_SETTING_POLL_INTERVAL_MS));
+            const status = await this._post(statusPath, { id: taskId });
+            if (status.status !== "0") {
+                throw new Error(`Device task ${statusPath} failed: ${status.message}`);
+            }
+            const code = status.data?.code;
+            if (code !== 2) {
+                if (code === 0) {
+                    return status.data ?? {};
+                }
+                throw new Error(`Device task ${startPath} returned code ${code}`);
+            }
+        }
+        throw new Error(`Device task ${startPath} timed out waiting for the device`);
+    }
+    async readGridProfileViaCloud(devSn, dtuSn, devType = 3) {
+        if (!devSn || !dtuSn) {
+            throw new Error("readGridProfileViaCloud: devSn and dtuSn are required");
+        }
+        const result = await this.runDeviceTask(PVM_CTL_SETTING_READ_PATH, { action: DEVICE_SETTING_ACTION_GRID_READ, dev_sn: devSn, dev_type: devType, dtu_sn: dtuSn }, PVM_CTL_SETTING_STATUS_PATH);
+        return result.data ?? [];
+    }
+    async sendDeviceCommand(action, devSn, dtuSn, devType = 3) {
+        if (!devSn || !dtuSn) {
+            throw new Error("sendDeviceCommand: devSn and dtuSn are required");
+        }
+        await this.runDeviceTask(PVM_CTL_COMMAND_PUT_PATH, { action, dev_sn: devSn, dev_type: devType, dtu_sn: dtuSn, data: {} }, PVM_CTL_COMMAND_STATUS_PATH);
     }
 }
 export default CloudConnection;

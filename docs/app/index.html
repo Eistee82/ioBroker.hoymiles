@@ -1,0 +1,131 @@
+<!doctype html>
+<html lang="de">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+<title>HMS-800-2WB · BLE-Werkzeug</title>
+<meta name="description" content="Web-Bluetooth-Werkzeug für den Hoymiles HMS-800-2WB: Live-Messwerte auslesen und den Cloud-Server umstellen — läuft komplett lokal im Browser." />
+<meta name="color-scheme" content="dark light" />
+<meta name="theme-color" content="#0c1712" media="(prefers-color-scheme: dark)" />
+<meta name="theme-color" content="#eef1ea" media="(prefers-color-scheme: light)" />
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='7' fill='%230c1712'/%3E%3Ccircle cx='16' cy='16' r='7' fill='%23ffb703'/%3E%3C/svg%3E" />
+<link rel="stylesheet" href="css/styles.css" />
+</head>
+<body>
+<a class="visually-hidden" href="#main">Zum Inhalt springen</a>
+
+<header class="topbar">
+  <div class="topbar-row">
+    <div class="brand">
+      <span class="led" id="bleLed" data-state="off" aria-hidden="true"></span>
+      <div style="min-width:0">
+        <h1>HMS-800-2WB · BLE-Werkzeug</h1>
+        <div class="sub" id="topSub">Nicht verbunden</div>
+      </div>
+    </div>
+    <button type="button" class="icon-btn" id="themeToggle" title="Hell/Dunkel umschalten" aria-label="Hell/Dunkel umschalten">🌓</button>
+  </div>
+</header>
+
+<main class="shell" id="main">
+
+  <div class="banner" id="diagBanner" role="alert"></div>
+
+  <section class="panel" id="connectPanel">
+    <p class="panel-label">Verbindung</p>
+    <div class="btn-row">
+      <button type="button" class="btn btn-primary" id="connectBtn">Mit Wechselrichter verbinden</button>
+      <button type="button" class="btn" id="disconnectBtn" disabled>Trennen</button>
+    </div>
+    <div class="checkbox-row" style="margin-top:10px">
+      <input type="checkbox" id="showAllDevices" />
+      <label for="showAllDevices">Alle Bluetooth-Geräte anzeigen (falls der WR ohne Namen sendet)</label>
+    </div>
+    <p class="status-line" id="connStatusLine" style="margin-top:10px">Klicke „Verbinden“ und wähle deinen Wechselrichter (Name beginnt meist mit „RMI-“).</p>
+  </section>
+
+  <section class="panel readout rivets" id="livePanel" aria-live="polite">
+    <p class="panel-label">Instrumentenpanel — Live<span class="led" id="pairLed" data-state="off" aria-hidden="true"></span></p>
+    <div class="readout-value-row">
+      <span class="readout-value" id="acPower">—</span>
+      <span class="readout-unit">W</span>
+    </div>
+    <div class="readout-caption">AC-Ausgangsleistung</div>
+    <div class="probe-row">
+      <div class="probe">
+        <div class="probe-value" id="acVoltage">—</div>
+        <div class="probe-label">Netzspannung</div>
+      </div>
+      <div class="probe">
+        <div class="probe-value" id="acFrequency">—</div>
+        <div class="probe-label">Frequenz</div>
+      </div>
+      <div class="probe">
+        <div class="probe-value" id="acTemp">—</div>
+        <div class="probe-label">Temperatur</div>
+      </div>
+    </div>
+    <p class="readout-note" id="liveNote">Noch keine Messwerte — verbinde dich mit dem Wechselrichter.</p>
+  </section>
+
+  <section class="panel" id="pvPanel">
+    <p class="panel-label">PV-Stränge</p>
+    <div class="pv-grid" id="pvGrid">
+      <p class="pv-empty">Noch keine Daten empfangen.</p>
+    </div>
+  </section>
+
+  <section class="panel pin-panel hidden" id="pinPanel">
+    <p class="panel-label">PIN erforderlich</p>
+    <p class="field-hint" style="margin-top:0">
+      Der Wechselrichter verlangt den Bluetooth-PIN, bevor er Konfiguration/Live-Daten freigibt. Werksseitig ist das <code>123456</code> — falls du ihn in der S-Miles-App geändert hast, gib deinen eigenen PIN ein.
+    </p>
+    <div class="pin-row">
+      <input type="password" id="pinInput" placeholder="PIN (8–63 Zeichen bei eigenem PIN)" autocomplete="off" inputmode="numeric" />
+      <button type="button" class="btn btn-primary" id="pinSubmit">PIN bestätigen</button>
+    </div>
+    <p class="field-hint" id="pinStatus"></p>
+  </section>
+
+  <section class="panel" id="serverPanel">
+    <p class="panel-label">Server / Relay</p>
+    <div class="current-server" id="currentServerText">Aktueller Server: unbekannt (Konfiguration wird nach dem Pairing automatisch geladen)</div>
+    <div id="defaultServerBadgeWrap"></div>
+
+    <label class="field-label" for="serverRegionSelect">Ziel-Server</label>
+    <select id="serverRegionSelect"></select>
+
+    <div id="customServerFields" class="hidden">
+      <label class="field-label" for="customHost">Eigene Adresse (z. B. dein ioBroker-Relay)</label>
+      <div class="field-row">
+        <input type="text" id="customHost" placeholder="192.168.178.50 oder relay.example.org" autocomplete="off" />
+        <input type="number" id="customPort" placeholder="Port" value="10081" min="1" max="65535" />
+      </div>
+    </div>
+
+    <div class="btn-row" style="margin-top:14px">
+      <button type="button" class="btn btn-primary" id="saveServerBtn" disabled>Speichern</button>
+      <button type="button" class="btn hidden" id="resetDefaultBtn">Auf Standard zurücksetzen</button>
+      <button type="button" class="btn" id="reloadConfigBtn" disabled>Konfiguration neu laden</button>
+    </div>
+    <p class="save-status" id="serverSaveStatus"></p>
+  </section>
+
+  <details class="log-details" id="logDetails" open>
+    <summary class="log-summary">Protokoll</summary>
+    <div class="log-toolbar">
+      <label><input type="checkbox" id="verboseLog" /> Rohe Frames anzeigen</label>
+      <button type="button" class="btn" id="clearLogBtn">Log leeren</button>
+    </div>
+    <div id="logConsole" role="log" aria-live="polite"></div>
+  </details>
+
+  <footer class="foot">
+    Läuft vollständig lokal im Browser (Web Bluetooth), keine Serveranfragen. Für Hoymiles HMS-800-2WB und baugleiche HMI-/WB-Geräte.
+  </footer>
+
+</main>
+
+<script type="module" src="js/app.js"></script>
+</body>
+</html>
