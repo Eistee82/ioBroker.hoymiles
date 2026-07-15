@@ -5,18 +5,18 @@ import { mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import CloudConnection, { CloudAuthError } from "../build/lib/cloudConnection.js";
-import { HttpError } from "../build/lib/httpClient.js";
-
-// Allow self-signed certificates for mock server tests (same pattern as httpClient.test.js).
-process.env.NODE_TLS_REJECT_UNAUTHORIZED = "0";
+import { HttpError, initAgent } from "../build/lib/httpClient.js";
 
 function generateCert() {
 	const tmp = mkdtempSync(join(tmpdir(), "cloudconn-test-"));
 	const keyFile = join(tmp, "key.pem");
 	const certFile = join(tmp, "cert.pem");
 	try {
+		// SAN covers the 127.0.0.1 the mock server binds to, so the client can validate the cert
+		// properly (as a trusted CA) instead of the test disabling certificate validation globally.
 		execSync(
-			`openssl req -x509 -newkey rsa:2048 -keyout "${keyFile}" -out "${certFile}" -days 1 -nodes -subj "/CN=localhost"`,
+			`openssl req -x509 -newkey rsa:2048 -keyout "${keyFile}" -out "${certFile}" -days 1 -nodes ` +
+				`-subj "/CN=localhost" -addext "subjectAltName=IP:127.0.0.1,DNS:localhost"`,
 			{ stdio: "pipe" },
 		);
 		const key = readFileSync(keyFile, "utf8");
@@ -1006,6 +1006,10 @@ describe("cloudConnection – pollRealtimeBurst", function () {
 			});
 		});
 
+		// Trust the mock server's self-signed cert on the shared HTTPS agent — full cert validation
+		// stays on (no NODE_TLS_REJECT_UNAUTHORIZED / rejectUnauthorized:false).
+		initAgent({ ca: creds.cert });
+
 		server.listen(0, "127.0.0.1", () => {
 			serverAvailable = true;
 			const port = server.address().port;
@@ -1017,6 +1021,7 @@ describe("cloudConnection – pollRealtimeBurst", function () {
 	});
 
 	after(function (done) {
+		initAgent(); // restore the default agent (drop the test CA)
 		if (server && serverAvailable) {
 			server.close(() => done());
 		} else {

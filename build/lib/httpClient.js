@@ -8,6 +8,7 @@ function initAgent(options) {
         keepAlive: true,
         maxSockets: options?.maxSockets ?? 5,
         timeout: HTTP_AGENT_TIMEOUT_MS,
+        ...(options?.ca ? { ca: options.ca } : {}),
     });
 }
 class HttpError extends Error {

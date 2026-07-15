@@ -191,7 +191,8 @@ class BurstPoller {
 			return;
 		}
 
-		let nextDelay = BURST_MIN_INTERVAL_MS;
+		// Assigned in both the try (server-dictated, clamped) and catch (back off to max) paths below.
+		let nextDelay: number;
 		try {
 			// Refresh the short-lived k-token URL before it ages out.
 			if (Date.now() - sb.uriFetchedAt > BURST_URI_REFRESH_MS) {

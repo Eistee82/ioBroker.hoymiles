@@ -96,7 +96,7 @@ class BurstPoller {
         if (sb.stopped || this.stopped) {
             return;
         }
-        let nextDelay = BURST_MIN_INTERVAL_MS;
+        let nextDelay;
         try {
             if (Date.now() - sb.uriFetchedAt > BURST_URI_REFRESH_MS) {
                 sb.uri = await this.cloud.getRealtimeUri(sb.stationId);

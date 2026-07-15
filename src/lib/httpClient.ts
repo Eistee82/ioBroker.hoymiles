@@ -10,13 +10,16 @@ let agent = new https.Agent({ keepAlive: true, maxSockets: 5, timeout: HTTP_AGEN
  *
  * @param options - Agent configuration overrides
  * @param options.maxSockets - Maximum concurrent sockets
+ * @param options.ca - Extra CA certificate(s) to trust in addition to the built-in roots (e.g. a
+ *   self-signed cert in tests); leaves certificate validation fully enabled.
  */
-function initAgent(options?: { maxSockets?: number }): void {
+function initAgent(options?: { maxSockets?: number; ca?: string | string[] }): void {
 	agent.destroy();
 	agent = new https.Agent({
 		keepAlive: true,
 		maxSockets: options?.maxSockets ?? 5,
 		timeout: HTTP_AGENT_TIMEOUT_MS,
+		...(options?.ca ? { ca: options.ca } : {}),
 	});
 }
 
