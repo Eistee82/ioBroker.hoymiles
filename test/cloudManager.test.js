@@ -135,7 +135,7 @@ describe("CloudManager", function () {
 // CloudManager – start/stop lifecycle
 // ============================================================
 describe("CloudManager – start/stop lifecycle", function () {
-	this.timeout(15000);
+	this.timeout(30000);
 
 	it("start() does not throw when cloud login fails", async function () {
 		const manager = new CloudManager({
@@ -396,7 +396,7 @@ function makeManagerWithMockCloud(overrides = {}) {
 // CloudManager – _retryLogin via start()
 // ============================================================
 describe("CloudManager – _retryLogin exponential backoff", function () {
-	this.timeout(10000);
+	this.timeout(30000);
 
 	it("schedules retry when initial login fails", async function () {
 		let loginAttempts = 0;
@@ -447,7 +447,7 @@ describe("CloudManager – _retryLogin exponential backoff", function () {
 // CloudManager – _discoverDevices via start()
 // ============================================================
 describe("CloudManager – _discoverDevices", function () {
-	this.timeout(10000);
+	this.timeout(30000);
 
 	it("handles empty station list gracefully", async function () {
 		let loggedError = "";
@@ -715,7 +715,7 @@ describe("CloudManager – _discoverDevices", function () {
 // CloudManager – _createStationDevice deduplication
 // ============================================================
 describe("CloudManager – _createStationDevice", function () {
-	this.timeout(10000);
+	this.timeout(30000);
 
 	it("does not create duplicate station devices for same stationId", async function () {
 		const adapter = makeMockAdapter();
@@ -788,7 +788,7 @@ describe("CloudManager – hasToken with active cloud", function () {
 // CloudManager – stop() clears deferredMatchTimer
 // ============================================================
 describe("CloudManager – stop() clears deferredMatchTimer", function () {
-	this.timeout(10000);
+	this.timeout(30000);
 
 	it("clears deferredMatchTimer when pending cloud matches exist", async function () {
 		const adapter = makeMockAdapter();
@@ -953,7 +953,7 @@ describe("CloudManager – matchLocalDeviceToCloud advanced", function () {
 // CloudManager – multiple stations in discovery
 // ============================================================
 describe("CloudManager – multiple stations", function () {
-	this.timeout(10000);
+	this.timeout(30000);
 
 	it("discovers devices from multiple stations", async function () {
 		const adapter = makeMockAdapter();

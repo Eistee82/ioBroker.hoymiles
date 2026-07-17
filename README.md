@@ -136,6 +136,9 @@ Each DTU creates a device node using its serial number as ID (e.g. `hoymiles.0.4
 Cloud stations create aggregated device nodes (e.g. `hoymiles.0.station-12345.*`).
 
 ## Changelog
+### **WORK IN PROGRESS**
+- (@Eistee82) CI/test reliability: added a global Mocha timeout and switched the test TLS certificates to fast EC keys, so the adapter-tests no longer time out on loaded CI runners
+
 ### 0.4.0 (2026-07-17)
 - (@Eistee82) Cloud-only support for WB inverters ("HiFlow Pro", e.g. HMS-800-2WB): read power and energy over the S-Miles cloud and switch the inverter on/off, reboot it or reboot the DTU — no local connection needed
 - (@Eistee82) Faster live values: new realtime channel updates power every few seconds instead of every ~80 s, like the app's live view

@@ -15,7 +15,7 @@ function generateCert() {
 		// SAN covers the 127.0.0.1 the mock server binds to, so the client can validate the cert
 		// properly (as a trusted CA) instead of the test disabling certificate validation globally.
 		execSync(
-			`openssl req -x509 -newkey rsa:2048 -keyout "${keyFile}" -out "${certFile}" -days 1 -nodes ` +
+			`openssl req -x509 -newkey ec -pkeyopt ec_paramgen_curve:prime256v1 -keyout "${keyFile}" -out "${certFile}" -days 1 -nodes ` +
 				`-subj "/CN=localhost" -addext "subjectAltName=IP:127.0.0.1,DNS:localhost"`,
 			{ stdio: "pipe" },
 		);
@@ -937,7 +937,7 @@ describe("cloudConnection – pollRealtimeBurst", function () {
 	let baseUrl;
 
 	before(function (done) {
-		this.timeout(10000);
+		this.timeout(30000);
 
 		let creds;
 		try {
@@ -1036,7 +1036,7 @@ describe("cloudConnection – pollRealtimeBurst", function () {
 	});
 
 	it("parses m:0 station overview (power + flow)", async function () {
-		this.timeout(10000);
+		this.timeout(30000);
 		const cloud = new CloudConnection("u", "p");
 		const data = await cloud.pollRealtimeBurst(`${baseUrl}/burst-m0?k=abc&t=1`, { m: 0, t: 1 });
 		assert.deepStrictEqual(data.power, { pv: 500, pvr: 50, bat: 0, grid: -100, load: 400, sp: 0 });
@@ -1045,7 +1045,7 @@ describe("cloudConnection – pollRealtimeBurst", function () {
 	});
 
 	it("parses m:3 per-inverter detail (mis[])", async function () {
-		this.timeout(10000);
+		this.timeout(30000);
 		const cloud = new CloudConnection("u", "p");
 		const data = await cloud.pollRealtimeBurst(`${baseUrl}/burst-m3?k=abc&t=1`, { m: 3, mis: ["INV1"], t: 1 });
 		assert.strictEqual(data.mis.length, 1);
@@ -1058,7 +1058,7 @@ describe("cloudConnection – pollRealtimeBurst", function () {
 	});
 
 	it("throws when the server reports a non-zero status", async function () {
-		this.timeout(10000);
+		this.timeout(30000);
 		const cloud = new CloudConnection("u", "p");
 		await assert.rejects(() => cloud.pollRealtimeBurst(`${baseUrl}/burst-error`, { m: 3, mis: [] }), {
 			message: "Realtime burst failed: token expired",
@@ -1066,7 +1066,7 @@ describe("cloudConnection – pollRealtimeBurst", function () {
 	});
 
 	it("returns an empty object when status=0 but the server sent no data", async function () {
-		this.timeout(10000);
+		this.timeout(30000);
 		const cloud = new CloudConnection("u", "p");
 		const data = await cloud.pollRealtimeBurst(`${baseUrl}/burst-empty`, { m: 3, mis: [] });
 		assert.deepStrictEqual(data, {});
