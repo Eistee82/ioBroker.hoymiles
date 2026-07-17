@@ -32,7 +32,7 @@ Dieser Adapter ist für **Hoymiles HMS Mikrowechselrichter mit integrierter WiFi
 | HMS-1800-4WB | 4 | ❌¹ | ✅ | Ungetestet |
 | HMS-2000-4WB | 4 | ❌¹ | ✅ | Ungetestet |
 
-¹ Die **WB-Serie** (vermarktet als **„HiFlow Pro"**) hat keinen lokalen TCP-Port — der einzige lokale Kanal ist Bluetooth LE, alle Daten gehen an die Hoymiles-Cloud. Diese Wechselrichter funktionieren ab Werk **cloud-only**; zusätzlich sind lokale Daten möglich, indem der Cloud-Upload auf den eingebauten Relay-Server des Adapters umgeleitet wird — siehe [Wechselrichter über ioBroker umleiten](#wechselrichter-über-iobroker-umleiten). Alle WB-Modelle nutzen dieselbe DTU-Plattform; getestet ist bisher nur die HMS-800-2WB.
+¹ Die **WB-Serie** (vermarktet als **„HiFlow Pro"**) hat keinen lokalen TCP-Port — der einzige lokale Kanal ist Bluetooth LE, und alle Daten gehen an die Hoymiles-Cloud. Diese Wechselrichter funktionieren daher **cloud-only**: Cloud-Verbindung aktivieren, dann liest der Adapter sie über die S-Miles-API aus (Echtzeit-Burst, Energie, Netzprofil) und kann die Befehle Wechselrichter ein/aus + Neustart sowie DTU-Neustart senden. Alle WB-Modelle nutzen dieselbe Plattform; getestet ist bisher nur die HMS-800-2WB.
 
 **Cloud-only-Betrieb:** Jeder unterstützte Wechselrichter im S-Miles-Konto funktioniert auch ganz ohne lokale Verbindung — der Adapter erkennt ihn automatisch und liefert über die Cloud Echtzeitleistung (Burst-Kanal), Energie-Aggregate, das Netzprofil sowie die Befehle Wechselrichter ein/aus + Neustart (`inverter.active` / `inverter.reboot`) und DTU-Neustart (`dtu.reboot`). Die übrigen Befehle (Leistungslimit, Sperren, Warnungen löschen, …) erfordern die lokale TCP-Verbindung.
 
@@ -85,49 +85,6 @@ Login ist ein einzelner v3-Flow plus anschließender Profil-Probe (`region_c →
 #### Cloud-Login testen
 
 Wenn unsicher: Knopf **Cloud-Login testen** neben dem Passwortfeld klicken. Er läuft die vier Phasen einmal mit den aktuellen Zugangsdaten durch (`region_c`, `pre-insp`, `login`, `probe`) und meldet `v` und Salt-Vorhandensein aus pre-insp, ob der Login einen Token produziert hat und welches Profil die Probe zuweist (`installer` / `home`). Das Ergebnis steht im Adapter-Log — gut für Forum-Bug-Reports. Der Test speichert keinen Token und ändert keinen Adapter-Zustand.
-
-## Wechselrichter über ioBroker umleiten
-
-Neuere Wechselrichter mit integrierter WiFi-DTU (z. B. **HMS-800-2WB**) öffnen keinen lokalen TCP-Port mehr — ihr einziger lokaler Kanal ist Bluetooth LE, und alle Daten gehen direkt in die Hoymiles-Cloud. Damit ioBroker die Echtzeitdaten trotzdem lokal mitlesen (und später steuern) kann, arbeitet der Adapter als **Relay-Server**: Du leitest den Cloud-Upload des Wechselrichters auf ioBroker um, und der Adapter reicht jedes Paket 1:1 an die echte Hoymiles-Cloud weiter, während er eine Kopie mitliest. Cloud-Portal und S-Miles-App funktionieren unverändert weiter.
-
-Es gibt zwei unabhängige lokale Wege — wähle den, den deine Hardware unterstützt:
-
-| Wechselrichter | Lokaler Kanal | Nutzung |
-| --- | --- | --- |
-| Ältere HMS-*-*T (offener TCP-Port 10081) | direktes TCP | **Lokale Verbindung (TCP)** oben |
-| HMS-800-2WB & neuer (nur BLE, kein TCP) | Umleitung auf ioBroker | **dieser Abschnitt** |
-
-### 1. Relay-Server im Adapter aktivieren
-
-In den Adapter-Einstellungen (Tab Cloud) **Relay-Server aktivieren (Wechselrichter auf ioBroker umleiten)** einschalten und setzen:
-
-- **Relay-Server-Port** — der TCP-Port, auf dem der Adapter lauscht (Standard `10081`). Genau diesen Port trägst du später im Wechselrichter ein.
-- **Hoymiles-Zielserver** — der Regionalserver, an den der Relay weiterleitet. Muss die Region deines Accounts sein (z. B. `dataeu.hoymiles.com` für Europa), sonst bekommen Cloud/App keine Daten mehr.
-- **Hoymiles-Zielserver-Port** — Standard `10081`.
-
-Stelle sicher, dass der ioBroker-Host aus dem Netz des Wechselrichters erreichbar ist und der Port nicht durch eine Firewall blockiert wird.
-
-### 2. Wechselrichter mit dem Web-Tool umleiten
-
-Die Umleitung selbst läuft per Bluetooth über ein kleines Browser-Tool — keine App-Installation nötig:
-
-**[Umleitungs-Tool öffnen →](https://eistee82.github.io/ioBroker.hoymiles/app/)** (oder den QR-Code aus den Adapter-Einstellungen mit dem Handy scannen)
-
-> **Wichtig:** Das Tool nutzt **Web Bluetooth**, das nur in **Chrome / Edge unter Android oder am Desktop** funktioniert. **iOS / Safari wird nicht unterstützt** (Apple implementiert Web Bluetooth nicht). Nutze ein Android-Handy oder einen Laptop in Bluetooth-Reichweite des Wechselrichters.
-
-Schritte im Tool:
-
-1. **Verbinden** tippen und deinen Wechselrichter wählen (Name beginnt mit `RMI-…` / `HMS-…`).
-2. Den **Bluetooth-PIN** des Wechselrichters eingeben (den du bei der Einrichtung in der S-Miles-App gesetzt hast; Werksstandard `123456`, falls nie geändert). Das Tool speichert ihn nicht.
-3. Nach dem Pairing erscheinen die Live-Daten (AC-Leistung, Netzspannung/-frequenz, Temperatur, PV-Werte pro Strang).
-4. Im Bereich **Server** die Option **Eigene Adresse** wählen und die **ioBroker-IP** sowie den **Relay-Server-Port** aus Schritt 1 eintragen. Speichern.
-5. Der Wechselrichter lädt jetzt zu ioBroker hoch. Innerhalb weniger Minuten füllt der Adapter die `<dtuSerial>.*`-Datenpunkte.
-
-### 3. Werks-Server wiederherstellen
-
-Das Tool merkt sich beim ersten Verbinden den ursprünglichen Hoymiles-Server jedes Wechselrichters (pro Seriennummer). Zum Rückgängigmachen der Umleitung das Tool öffnen, verbinden und in der Server-Liste den mit **„Geräte-Standard"** markierten Eintrag wählen (oder den passenden Regionalserver), dann speichern.
-
-Das Web-Tool funktioniert außerdem eigenständig als **lokaler Live-Daten-Viewer** für jeden unterstützten Wechselrichter, ganz ohne Umleitung.
 
 ## Verbindungsmodi
 

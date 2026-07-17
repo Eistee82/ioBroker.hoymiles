@@ -1135,11 +1135,9 @@ class DeviceContext {
 
 	/**
 	 * Write RealData-derived states from an already-decoded result. Extracted from
-	 * {@link handleRealData} so the same mapping logic can be fed by the local poll-response
-	 * handler AND by relay-server-sniffed cloud RealData frames (`0x22 0x0c`/`0x0d`) for
-	 * inverters redirected to our relay (e.g. HMS-800-2WB, which has no local TCP port) —
-	 * the payload shape is identical (RealDataNewReqDTO) either way, only the wire framing
-	 * differs. Callers are responsible for catching decode errors before calling this.
+	 * {@link handleRealData} so the same mapping logic can be reused by any caller that already
+	 * has a decoded RealDataNewReqDTO. Callers are responsible for catching decode errors before
+	 * calling this.
 	 *
 	 * @param data - Decoded RealData result
 	 */
@@ -1224,34 +1222,6 @@ class DeviceContext {
 		}
 	}
 
-	/**
-	 * Mark this device as actively receiving data again via a relay-server session (the
-	 * redirected inverter — e.g. HMS-800-2WB — (re)connected to our relay). Resets any
-	 * q=0x42-marked cache entries so the next relay-fed write isn't suppressed as a no-op
-	 * duplicate (mirrors the local-connection {@link onConnected} cache reset), and flips
-	 * `info.connected`. Quality reflects data freshness, not source — same convention as
-	 * the local TCP path.
-	 */
-	async markRelaySessionActive(): Promise<void> {
-		for (const [, cached] of this.stateCache) {
-			if (cached.q === DeviceContext.Q_DEVICE_DISCONNECTED) {
-				cached.q = 0;
-			}
-		}
-		await this.setState("info.connected", true, true);
-	}
-
-	/**
-	 * Mark this device's data states as disconnected (q=0x42) because its relay-server
-	 * session ended — the redirected inverter dropped its connection to our relay, or the
-	 * relay's upstream connection to the real cloud died. Mirrors the local TCP disconnect
-	 * path ({@link markStatesDisconnected}); quality reflects freshness, not source.
-	 */
-	async markRelaySessionLost(): Promise<void> {
-		await this.setState("info.connected", false, true);
-		await this.markStatesDisconnected();
-	}
-
 	private async handleInfoData(payload: Buffer): Promise<void> {
 		try {
 			const info = this.protobuf.decodeInfoData(payload);
@@ -1264,9 +1234,9 @@ class DeviceContext {
 			if (!this.deviceId && info.dtuSn) {
 				const existing = this.adapter.devices.get(info.dtuSn);
 				if (existing && existing !== this) {
-					// A live local TCP connection takes over any context that has no live local socket —
-					// cloud-only (enableLocal:false) OR relay-fed (enableLocal:true but host:"" / no socket).
-					// Only a genuinely-connected local peer for the same serial is a real duplicate.
+					// A live local TCP connection takes over any context that has no live local socket
+					// (e.g. a cloud-only context, enableLocal:false). Only a genuinely-connected local
+					// peer for the same serial is a real duplicate.
 					if (!existing.connection?.connected && this.enableLocal) {
 						this.adapter.log.info(
 							`[${this.host}] Taking over socket-less device context for SN ${info.dtuSn}`,

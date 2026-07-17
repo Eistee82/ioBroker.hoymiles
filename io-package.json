@@ -229,11 +229,7 @@
     "enableRealtimeBurst": true,
     "enableCloud": false,
     "cloudUser": "",
-    "cloudPassword": "",
-    "enableRelayServer": false,
-    "relayServerPort": 10081,
-    "relayCloudServer": "dataeu.hoymiles.com",
-    "relayCloudPort": 10081
+    "cloudPassword": ""
   },
   "encryptedNative": [
     "cloudPassword"
