@@ -1,5 +1,4 @@
 // Timeouts
-export const UNLOAD_TIMEOUT_MS = 5000;
 export const INFO_FALLBACK_TIMEOUT_MS = 10000;
 export const TOKEN_MAX_AGE_MS = 3600000; // 1h
 export const CLOUD_RETRY_INITIAL_MS = 60000; // 1min

@@ -62,10 +62,6 @@ describe("constants – specific values", function () {
 		assert.strictEqual(constants.TOKEN_MAX_AGE_MS, 3600000);
 	});
 
-	it("UNLOAD_TIMEOUT_MS is 5000", function () {
-		assert.strictEqual(constants.UNLOAD_TIMEOUT_MS, 5000);
-	});
-
 	it("HTTP_REQUEST_TIMEOUT_MS is 15000", function () {
 		assert.strictEqual(constants.HTTP_REQUEST_TIMEOUT_MS, 15000);
 	});
@@ -101,13 +97,6 @@ describe("constants – relationships", function () {
 		assert.ok(
 			constants.HTTP_REQUEST_TIMEOUT_MS < constants.HTTP_AGENT_TIMEOUT_MS,
 			`HTTP_REQUEST_TIMEOUT_MS (${constants.HTTP_REQUEST_TIMEOUT_MS}) should be less than HTTP_AGENT_TIMEOUT_MS (${constants.HTTP_AGENT_TIMEOUT_MS})`,
-		);
-	});
-
-	it("UNLOAD_TIMEOUT_MS < INFO_FALLBACK_TIMEOUT_MS", function () {
-		assert.ok(
-			constants.UNLOAD_TIMEOUT_MS < constants.INFO_FALLBACK_TIMEOUT_MS,
-			`UNLOAD_TIMEOUT_MS (${constants.UNLOAD_TIMEOUT_MS}) should be less than INFO_FALLBACK_TIMEOUT_MS (${constants.INFO_FALLBACK_TIMEOUT_MS})`,
 		);
 	});
 

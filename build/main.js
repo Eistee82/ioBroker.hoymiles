@@ -6,7 +6,7 @@ import DeviceContext from "./lib/deviceContext.js";
 import { ProtobufHandler } from "./lib/protobufHandler.js";
 import { discoverDtus, probeHost } from "./lib/networkDiscovery.js";
 import { destroyAgent } from "./lib/httpClient.js";
-import { DISCOVERY_CONCURRENCY, DISCOVERY_TIMEOUT_MS, PROBE_TIMEOUT_MS, UNLOAD_TIMEOUT_MS } from "./lib/constants.js";
+import { DISCOVERY_CONCURRENCY, DISCOVERY_TIMEOUT_MS, PROBE_TIMEOUT_MS } from "./lib/constants.js";
 import { anonymize, errorMessage, mapLimit } from "./lib/utils.js";
 class Hoymiles extends utils.Adapter {
     devices;
@@ -361,17 +361,6 @@ class Hoymiles extends utils.Adapter {
         }
     }
     onUnload(callback) {
-        let done = false;
-        const finish = () => {
-            if (!done) {
-                done = true;
-                callback();
-            }
-        };
-        const timer = globalThis.setTimeout(() => {
-            this.log.warn("Unload timeout after 5s — forcing shutdown");
-            finish();
-        }, UNLOAD_TIMEOUT_MS);
         const cleanup = async () => {
             const contexts = this.localContexts;
             this.localContexts = [];
@@ -424,10 +413,7 @@ class Hoymiles extends utils.Adapter {
         };
         cleanup()
             .catch(err => this.log.error(`Unload error: ${errorMessage(err)}`))
-            .finally(() => {
-            globalThis.clearTimeout(timer);
-            finish();
-        });
+            .finally(() => callback());
     }
 }
 export default function createAdapter(options = {}) {
