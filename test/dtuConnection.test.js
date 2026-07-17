@@ -99,18 +99,22 @@ describe("dtuConnection", function () {
 			// Manually set timers to simulate active session
 			conn.heartbeatTimer = setTimeout(() => {}, 100000);
 			conn.idleTimer = setTimeout(() => {}, 100000);
-			assert.ok(conn.heartbeatTimer !== null, "heartbeatTimer should be set");
-			assert.ok(conn.idleTimer !== null, "idleTimer should be set");
+			assert.ok(conn.heartbeatTimer !== undefined, "heartbeatTimer should be set");
+			assert.ok(conn.idleTimer !== undefined, "idleTimer should be set");
 			conn._stopSessionTimers();
-			assert.strictEqual(conn.heartbeatTimer, null, "heartbeatTimer should be null after _stopSessionTimers");
-			assert.strictEqual(conn.idleTimer, null, "idleTimer should be null after _stopSessionTimers");
+			assert.strictEqual(
+				conn.heartbeatTimer,
+				undefined,
+				"heartbeatTimer should be null after _stopSessionTimers",
+			);
+			assert.strictEqual(conn.idleTimer, undefined, "idleTimer should be null after _stopSessionTimers");
 			conn.disconnect();
 		});
 
 		it("is safe to call when timers are already null", function () {
 			const conn = new DtuConnection("192.168.1.100", 10081);
-			assert.strictEqual(conn.heartbeatTimer, null);
-			assert.strictEqual(conn.idleTimer, null);
+			assert.strictEqual(conn.heartbeatTimer, undefined);
+			assert.strictEqual(conn.idleTimer, undefined);
 			assert.doesNotThrow(() => conn._stopSessionTimers());
 			conn.disconnect();
 		});
@@ -390,7 +394,7 @@ describe("dtuConnection", function () {
 		it("creates a heartbeat timer that can be observed", function () {
 			const conn = new DtuConnection("192.168.1.100", 10081);
 			conn._resetHeartbeatTimer();
-			assert.ok(conn.heartbeatTimer !== null, "heartbeatTimer should be set");
+			assert.ok(conn.heartbeatTimer !== undefined, "heartbeatTimer should be set");
 			conn.disconnect();
 		});
 
@@ -398,7 +402,7 @@ describe("dtuConnection", function () {
 			const conn = new DtuConnection("192.168.1.100", 10081);
 			conn.disconnect(); // sets destroyed = true
 			conn._resetHeartbeatTimer();
-			assert.strictEqual(conn.heartbeatTimer, null, "heartbeatTimer should remain null when destroyed");
+			assert.strictEqual(conn.heartbeatTimer, undefined, "heartbeatTimer should remain null when destroyed");
 		});
 
 		it("replaces existing timer on repeated calls", function () {
@@ -407,8 +411,8 @@ describe("dtuConnection", function () {
 			const firstTimer = conn.heartbeatTimer;
 			conn._resetHeartbeatTimer();
 			const secondTimer = conn.heartbeatTimer;
-			assert.ok(firstTimer !== null);
-			assert.ok(secondTimer !== null);
+			assert.ok(firstTimer !== undefined);
+			assert.ok(secondTimer !== undefined);
 			// They should be different timer handles
 			assert.notStrictEqual(firstTimer, secondTimer);
 			conn.disconnect();
@@ -419,7 +423,7 @@ describe("dtuConnection", function () {
 		it("creates an idle timer that can be observed", function () {
 			const conn = new DtuConnection("192.168.1.100", 10081);
 			conn._resetIdleTimer();
-			assert.ok(conn.idleTimer !== null, "idleTimer should be set");
+			assert.ok(conn.idleTimer !== undefined, "idleTimer should be set");
 			conn.disconnect();
 		});
 
@@ -427,7 +431,7 @@ describe("dtuConnection", function () {
 			const conn = new DtuConnection("192.168.1.100", 10081);
 			conn.disconnect(); // sets destroyed = true
 			conn._resetIdleTimer();
-			assert.strictEqual(conn.idleTimer, null, "idleTimer should remain null when destroyed");
+			assert.strictEqual(conn.idleTimer, undefined, "idleTimer should remain null when destroyed");
 		});
 
 		it("replaces existing timer on repeated calls", function () {
@@ -436,8 +440,8 @@ describe("dtuConnection", function () {
 			const firstTimer = conn.idleTimer;
 			conn._resetIdleTimer();
 			const secondTimer = conn.idleTimer;
-			assert.ok(firstTimer !== null);
-			assert.ok(secondTimer !== null);
+			assert.ok(firstTimer !== undefined);
+			assert.ok(secondTimer !== undefined);
 			assert.notStrictEqual(firstTimer, secondTimer);
 			conn.disconnect();
 		});
@@ -460,8 +464,8 @@ describe("dtuConnection", function () {
 			conn._onConnected();
 
 			assert.strictEqual(conn.consecutiveFailedSends, 0, "should reset failed send counter");
-			assert.ok(conn.heartbeatTimer !== null, "should start heartbeat timer");
-			assert.ok(conn.idleTimer !== null, "should start idle timer");
+			assert.ok(conn.heartbeatTimer !== undefined, "should start heartbeat timer");
+			assert.ok(conn.idleTimer !== undefined, "should start idle timer");
 			assert.strictEqual(connectedEmitted, true, "should emit connected event");
 			conn.disconnect();
 		});

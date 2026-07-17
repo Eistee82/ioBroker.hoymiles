@@ -1,6 +1,5 @@
 import TcpConnection from "./tcpConnection.js";
 import { HM_MAGIC_0, HM_MAGIC_1 } from "./constants.js";
-import { clearTimer } from "./utils.js";
 const MAGIC_HEADER = Buffer.from([HM_MAGIC_0, HM_MAGIC_1]);
 const HEADER_SIZE = 10;
 const HEARTBEAT_TIMEOUT = 20000;
@@ -19,13 +18,13 @@ class DtuConnection extends TcpConnection {
     idleTimer;
     lastRequestTime;
     consecutiveFailedSends;
-    constructor(host, port, heartbeatGenerator) {
-        super(host, port, RECONNECT_DELAY_MIN, RECONNECT_DELAY_MAX);
+    constructor(host, port, heartbeatGenerator, timers) {
+        super(host, port, RECONNECT_DELAY_MIN, RECONNECT_DELAY_MAX, timers);
         this.heartbeatGenerator = heartbeatGenerator || null;
         this.receiveBuffer = Buffer.alloc(INITIAL_BUFFER_SIZE);
         this.receiveBufferLen = 0;
-        this.heartbeatTimer = null;
-        this.idleTimer = null;
+        this.heartbeatTimer = undefined;
+        this.idleTimer = undefined;
         this.lastRequestTime = 0;
         this.consecutiveFailedSends = 0;
     }
@@ -40,7 +39,7 @@ class DtuConnection extends TcpConnection {
         const now = Date.now();
         const elapsed = now - this.lastRequestTime;
         if (elapsed < MIN_REQUEST_INTERVAL) {
-            await new Promise(resolve => setTimeout(resolve, MIN_REQUEST_INTERVAL - elapsed));
+            await new Promise(resolve => this.timers.setTimeout(resolve, MIN_REQUEST_INTERVAL - elapsed));
         }
         this.lastRequestTime = Date.now();
         this._resetHeartbeatTimer();
@@ -74,8 +73,8 @@ class DtuConnection extends TcpConnection {
         this.emit("connected");
     }
     _stopSessionTimers() {
-        this.heartbeatTimer = clearTimer(this.heartbeatTimer);
-        this.idleTimer = clearTimer(this.idleTimer);
+        this.heartbeatTimer = this.clearManagedTimeout(this.heartbeatTimer);
+        this.idleTimer = this.clearManagedTimeout(this.idleTimer);
     }
     _onData(chunk) {
         this._resetIdleTimer();
@@ -120,11 +119,11 @@ class DtuConnection extends TcpConnection {
         }
     }
     _resetHeartbeatTimer() {
-        this.heartbeatTimer = clearTimer(this.heartbeatTimer);
+        this.heartbeatTimer = this.clearManagedTimeout(this.heartbeatTimer);
         if (this.destroyed) {
             return;
         }
-        this.heartbeatTimer = setTimeout(() => {
+        this.heartbeatTimer = this.timers.setTimeout(() => {
             if (this.destroyed) {
                 return;
             }
@@ -145,11 +144,11 @@ class DtuConnection extends TcpConnection {
         }, HEARTBEAT_TIMEOUT);
     }
     _resetIdleTimer() {
-        this.idleTimer = clearTimer(this.idleTimer);
+        this.idleTimer = this.clearManagedTimeout(this.idleTimer);
         if (this.destroyed) {
             return;
         }
-        this.idleTimer = setTimeout(() => {
+        this.idleTimer = this.timers.setTimeout(() => {
             if (this.destroyed) {
                 return;
             }

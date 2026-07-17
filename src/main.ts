@@ -6,7 +6,7 @@ import DeviceContext from "./lib/deviceContext.js";
 import { ProtobufHandler } from "./lib/protobufHandler.js";
 import { discoverDtus, probeHost } from "./lib/networkDiscovery.js";
 import { destroyAgent } from "./lib/httpClient.js";
-import { DISCOVERY_CONCURRENCY, DISCOVERY_TIMEOUT_MS, PROBE_TIMEOUT_MS, UNLOAD_TIMEOUT_MS } from "./lib/constants.js";
+import { DISCOVERY_CONCURRENCY, DISCOVERY_TIMEOUT_MS, PROBE_TIMEOUT_MS } from "./lib/constants.js";
 import { anonymize, errorMessage, mapLimit } from "./lib/utils.js";
 
 interface DeviceConfig {
@@ -524,19 +524,10 @@ class Hoymiles extends utils.Adapter {
 	// --- Unload ---
 
 	private onUnload(callback: () => void): void {
-		let done = false;
-		const finish = (): void => {
-			if (!done) {
-				done = true;
-				callback();
-			}
-		};
-
-		const timer = this.setTimeout(() => {
-			this.log.warn("Unload timeout after 5s — forcing shutdown");
-			finish();
-		}, UNLOAD_TIMEOUT_MS);
-
+		// No self-scheduled unload watchdog: scheduling any timer here is exactly what triggers
+		// js-controller's "setTimeout called, but adapter is shutting down" warning, and it is
+		// unnecessary — js-controller force-stops the adapter after onUnload on its own. Just tear
+		// everything down and call the callback once cleanup settles (per the adapter template).
 		const cleanup = async (): Promise<void> => {
 			const contexts = this.localContexts;
 			this.localContexts = [];
@@ -586,10 +577,7 @@ class Hoymiles extends utils.Adapter {
 
 		cleanup()
 			.catch(err => this.log.error(`Unload error: ${errorMessage(err)}`))
-			.finally(() => {
-				this.clearTimeout(timer);
-				finish();
-			});
+			.finally(() => callback());
 	}
 }
 

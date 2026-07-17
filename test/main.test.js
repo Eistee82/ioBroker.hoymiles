@@ -1,20 +1,5 @@
 import assert from "node:assert";
-import { UNLOAD_TIMEOUT_MS } from "../build/lib/constants.js";
 import { errorMessage, mapLimit } from "../build/lib/utils.js";
-
-// ============================================================
-// main – constants used by the adapter
-// ============================================================
-describe("main – constants", function () {
-	it("UNLOAD_TIMEOUT_MS is a positive number", function () {
-		assert.strictEqual(typeof UNLOAD_TIMEOUT_MS, "number");
-		assert.ok(UNLOAD_TIMEOUT_MS > 0, "timeout should be positive");
-	});
-
-	it("UNLOAD_TIMEOUT_MS is at least 3000ms", function () {
-		assert.ok(UNLOAD_TIMEOUT_MS >= 3000, "timeout should allow cleanup to complete");
-	});
-});
 
 // ============================================================
 // main – errorMessage helper used throughout the adapter

@@ -220,13 +220,13 @@ describe("cloudRelay", function () {
 			// Manually set timers to simulate an active session
 			relay.heartbeatTimer = setInterval(() => {}, 100000);
 			relay.realDataTimer = setInterval(() => {}, 100000);
-			assert.ok(relay.heartbeatTimer !== null);
-			assert.ok(relay.realDataTimer !== null);
+			assert.ok(relay.heartbeatTimer !== undefined);
+			assert.ok(relay.realDataTimer !== undefined);
 
 			relay.sendFinalAndPause();
 
-			assert.strictEqual(relay.heartbeatTimer, null, "heartbeatTimer should be cleared");
-			assert.strictEqual(relay.realDataTimer, null, "realDataTimer should be cleared");
+			assert.strictEqual(relay.heartbeatTimer, undefined, "heartbeatTimer should be cleared");
+			assert.strictEqual(relay.realDataTimer, undefined, "realDataTimer should be cleared");
 			assert.strictEqual(relay.paused, true);
 			relay.disconnect();
 		});
@@ -234,7 +234,7 @@ describe("cloudRelay", function () {
 		it("creates a pauseTimer for delayed socket cleanup", function () {
 			const relay = new CloudRelay("server.example.com", 10081);
 			relay.sendFinalAndPause();
-			assert.ok(relay.pauseTimer !== null, "pauseTimer should be set for delayed cleanup");
+			assert.ok(relay.pauseTimer !== undefined, "pauseTimer should be set for delayed cleanup");
 			relay.disconnect();
 		});
 
@@ -245,7 +245,7 @@ describe("cloudRelay", function () {
 			relay.sendFinalAndPause();
 			assert.strictEqual(relay.paused, true, "paused should still be set");
 			// pauseTimer should be null because destroyed guard returns early
-			assert.strictEqual(relay.pauseTimer, null, "pauseTimer should not be set when destroyed");
+			assert.strictEqual(relay.pauseTimer, undefined, "pauseTimer should not be set when destroyed");
 		});
 	});
 
@@ -256,10 +256,10 @@ describe("cloudRelay", function () {
 		it("clears pauseTimer when called during pause delay", function () {
 			const relay = new CloudRelay("server.example.com", 10081);
 			relay.sendFinalAndPause();
-			assert.ok(relay.pauseTimer !== null, "pauseTimer should exist after sendFinalAndPause");
+			assert.ok(relay.pauseTimer !== undefined, "pauseTimer should exist after sendFinalAndPause");
 
 			relay.resume();
-			assert.strictEqual(relay.pauseTimer, null, "pauseTimer should be cleared by resume");
+			assert.strictEqual(relay.pauseTimer, undefined, "pauseTimer should be cleared by resume");
 			assert.strictEqual(relay.paused, false);
 			relay.disconnect();
 		});
@@ -286,8 +286,8 @@ describe("cloudRelay", function () {
 
 			relay._startTimers();
 
-			assert.strictEqual(relay.heartbeatTimer, null, "heartbeatTimer should not be created when paused");
-			assert.strictEqual(relay.realDataTimer, null, "realDataTimer should not be created when paused");
+			assert.strictEqual(relay.heartbeatTimer, undefined, "heartbeatTimer should not be created when paused");
+			assert.strictEqual(relay.realDataTimer, undefined, "realDataTimer should not be created when paused");
 			relay.disconnect();
 		});
 
@@ -297,8 +297,8 @@ describe("cloudRelay", function () {
 
 			relay._startTimers();
 
-			assert.strictEqual(relay.heartbeatTimer, null, "heartbeatTimer should not be created when destroyed");
-			assert.strictEqual(relay.realDataTimer, null, "realDataTimer should not be created when destroyed");
+			assert.strictEqual(relay.heartbeatTimer, undefined, "heartbeatTimer should not be created when destroyed");
+			assert.strictEqual(relay.realDataTimer, undefined, "realDataTimer should not be created when destroyed");
 		});
 
 		it("creates timers when neither paused nor destroyed", function () {
@@ -308,8 +308,8 @@ describe("cloudRelay", function () {
 
 			relay._startTimers();
 
-			assert.ok(relay.heartbeatTimer !== null, "heartbeatTimer should be created");
-			assert.ok(relay.realDataTimer !== null, "realDataTimer should be created");
+			assert.ok(relay.heartbeatTimer !== undefined, "heartbeatTimer should be created");
+			assert.ok(relay.realDataTimer !== undefined, "realDataTimer should be created");
 			relay.disconnect();
 		});
 	});
@@ -325,8 +325,8 @@ describe("cloudRelay", function () {
 
 			relay._stopSessionTimers();
 
-			assert.strictEqual(relay.heartbeatTimer, null);
-			assert.strictEqual(relay.realDataTimer, null);
+			assert.strictEqual(relay.heartbeatTimer, undefined);
+			assert.strictEqual(relay.realDataTimer, undefined);
 			relay.disconnect();
 		});
 
@@ -349,9 +349,9 @@ describe("cloudRelay", function () {
 
 			relay._stopAllTimers();
 
-			assert.strictEqual(relay.heartbeatTimer, null);
-			assert.strictEqual(relay.realDataTimer, null);
-			assert.strictEqual(relay.pauseTimer, null);
+			assert.strictEqual(relay.heartbeatTimer, undefined);
+			assert.strictEqual(relay.realDataTimer, undefined);
+			assert.strictEqual(relay.pauseTimer, undefined);
 			relay.disconnect();
 		});
 	});

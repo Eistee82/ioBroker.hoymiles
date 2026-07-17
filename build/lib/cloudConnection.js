@@ -551,7 +551,7 @@ class CloudConnection {
         }
         const taskId = started.data;
         for (let attempt = 0; attempt < DEVICE_SETTING_POLL_MAX; attempt++) {
-            await new Promise(resolve => setTimeout(resolve, DEVICE_SETTING_POLL_INTERVAL_MS));
+            await new Promise(resolve => globalThis.setTimeout(resolve, DEVICE_SETTING_POLL_INTERVAL_MS));
             const status = await this._post(statusPath, { id: taskId });
             if (status.status !== "0") {
                 throw new Error(`Device task ${statusPath} failed: ${status.message}`);

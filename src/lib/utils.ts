@@ -193,19 +193,6 @@ export async function mapLimit<T, R>(items: T[], limit: number, fn: (item: T) =>
 }
 
 /**
- * Safely clear a native timer (setTimeout or setInterval) and return null.
- * Usage: `this.timer = clearTimer(this.timer);`
- *
- * @param handle - Timer handle to clear
- */
-export function clearTimer(handle: ReturnType<typeof setTimeout> | null | undefined): null {
-	if (handle != null) {
-		clearTimeout(handle);
-	}
-	return null;
-}
-
-/**
  * Race a promise against a timeout. Rejects with an Error if the timeout fires first.
  *
  * @param promise - Promise to race against timeout

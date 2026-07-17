@@ -110,12 +110,6 @@ export async function mapLimit(items, limit, fn) {
     await Promise.all(Array.from({ length: Math.min(limit, items.length) }, () => next()));
     return results;
 }
-export function clearTimer(handle) {
-    if (handle != null) {
-        clearTimeout(handle);
-    }
-    return null;
-}
 export async function withTimeout(promise, ms, label) {
     let timer;
     const timeout = new Promise((_, reject) => {
