@@ -136,7 +136,7 @@ Each DTU creates a device node using its serial number as ID (e.g. `hoymiles.0.4
 Cloud stations create aggregated device nodes (e.g. `hoymiles.0.station-12345.*`).
 
 ## Changelog
-### **WORK IN PROGRESS**
+### 0.4.0 (2026-07-17)
 - (@Eistee82) Cloud-only support for WB inverters ("HiFlow Pro", e.g. HMS-800-2WB): read power and energy over the S-Miles cloud and switch the inverter on/off, reboot it or reboot the DTU — no local connection needed
 - (@Eistee82) Faster live values: new realtime channel updates power every few seconds instead of every ~80 s, like the app's live view
 - (@Eistee82) More local data: inverter grid profile, a persistent power limit, per-string error codes and complete alarm lists
@@ -165,10 +165,6 @@ Cloud stations create aggregated device nodes (e.g. `hoymiles.0.station-12345.*`
 
 ### 0.3.2 (2026-04-03)
 - (@Eistee82) Fix remaining responsive layout issues for repochecker (staticText, header, divider)
-
-### 0.3.1 (2026-04-03)
-- (@Eistee82) Fix admin UI responsive layout (add missing size attributes for repochecker)
-- (@Eistee82) Fix news translations in io-package.json for repochecker E2004
 
 Older entries: see [CHANGELOG_OLD.md](CHANGELOG_OLD.md).
 
