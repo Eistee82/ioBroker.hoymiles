@@ -14,6 +14,7 @@
     "devices": "Inverter",
     "devicesHelp": "Aggiungi i tuoi inverter tramite indirizzo IP. Ogni inverter Hoymiles HMS con WiFi integrato (DTUBI) ha il proprio IP. Puoi trovarlo nella lista dei client DHCP del tuo router (nome dispositivo: DTUBI-*).",
     "discoverButton": "Cerca inverter",
+    "email@example.com": "email@example.com",
     "enableCloud": "Connessione cloud (S-Miles)",
     "enableCloudHelp": "Connettiti al cloud Hoymiles S-Miles per ottenere statistiche energetiche (giornaliere, mensili, annuali), risparmio di CO2, calcolo dei ricavi e dati di potenza per inverter. Tutti gli inverter nel tuo account vengono scoperti automaticamente.",
     "enableCloudRelay": "Relay cloud (inoltra dati a Hoymiles Cloud)",
@@ -28,6 +29,5 @@
     "tabLocal": "Connessione locale",
     "testCloudLoginButton": "Testa login cloud",
     "testCloudLoginHelp": "Esegue le quattro fasi del login (region_c, pre-insp, login, probe) e segnala v e presenza del salt dal pre-insp, se il login ha prodotto un token e quale profilo assegna la sonda (installer / home). Il risultato viene mostrato in un popup e scritto anche nel log dell'adattatore — utile per le segnalazioni di bug nel forum.",
-    "testConnectionButton": "Testa connessione",
-    "email@example.com": "email@example.com"
+    "testConnectionButton": "Testa connessione"
 }

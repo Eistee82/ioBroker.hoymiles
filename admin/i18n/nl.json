@@ -14,6 +14,7 @@
     "devices": "Omvormers",
     "devicesHelp": "Voeg uw omvormers toe op IP-adres. Elke Hoymiles HMS omvormer met ingebouwde WiFi (DTUBI) heeft een eigen IP. U kunt dit vinden in de DHCP-clientlijst van uw router (apparaatnaam: DTUBI-*).",
     "discoverButton": "Omvormers zoeken",
+    "email@example.com": "email@example.com",
     "enableCloud": "Cloudverbinding (S-Miles)",
     "enableCloudHelp": "Verbind met de Hoymiles S-Miles cloud voor energiestatistieken (dagelijks, maandelijks, jaarlijks), CO2-besparing, inkomstenberekening en vermogensgegevens per omvormer. Alle omvormers in uw account worden automatisch ontdekt.",
     "enableCloudRelay": "Cloud-relay (gegevens doorsturen naar Hoymiles Cloud)",
@@ -28,6 +29,5 @@
     "tabLocal": "Lokale verbinding",
     "testCloudLoginButton": "Cloud-login testen",
     "testCloudLoginHelp": "Voert alle vier login-fasen uit (region_c, pre-insp, login, probe) en meldt v en de aanwezigheid van een salt uit pre-insp, of de login een token heeft opgeleverd en welk profiel de probe toewijst (installer / home). Het resultaat verschijnt in een popup en wordt ook naar het adapterlog geschreven — handig voor forum-bugrapporten.",
-    "testConnectionButton": "Verbinding testen",
-    "email@example.com": "email@example.com"
+    "testConnectionButton": "Verbinding testen"
 }

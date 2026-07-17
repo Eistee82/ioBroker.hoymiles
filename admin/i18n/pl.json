@@ -14,6 +14,7 @@
     "devices": "Falowniki",
     "devicesHelp": "Dodaj swoje falowniki po adresie IP. Każdy falownik Hoymiles HMS z wbudowanym WiFi (DTUBI) ma własny adres IP. Znajdziesz go na liście klientów DHCP routera (nazwa urządzenia: DTUBI-*).",
     "discoverButton": "Szukaj falowników",
+    "email@example.com": "email@example.com",
     "enableCloud": "Połączenie z chmurą (S-Miles)",
     "enableCloudHelp": "Połącz się z chmurą Hoymiles S-Miles, aby uzyskać statystyki energii (dzienne, miesięczne, roczne), oszczędności CO2, kalkulację przychodów i dane mocy dla każdego falownika. Wszystkie falowniki na Twoim koncie są wykrywane automatycznie.",
     "enableCloudRelay": "Przekaźnik chmury (przesyłanie danych do Hoymiles Cloud)",
@@ -28,6 +29,5 @@
     "tabLocal": "Połączenie lokalne",
     "testCloudLoginButton": "Testuj logowanie do chmury",
     "testCloudLoginHelp": "Uruchamia wszystkie cztery fazy logowania (region_c, pre-insp, login, probe) i podaje v oraz obecność salt z pre-insp, czy logowanie wygenerowało token oraz jaki profil przypisała sonda (installer / home). Wynik wyświetla się w okienku i zapisywany jest w logu adaptera — przydatne do zgłaszania błędów na forum.",
-    "testConnectionButton": "Testuj połączenie",
-    "email@example.com": "email@example.com"
+    "testConnectionButton": "Testuj połączenie"
 }
