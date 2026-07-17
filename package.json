@@ -47,16 +47,22 @@
   "author": "Eistee",
   "license": "MIT",
   "dependencies": {
-    "@iobroker/adapter-core": "^3.3.2",
+    "@iobroker/adapter-core": "^3.4.1",
     "argon2": "^0.44.0",
-    "protobufjs": "^8.4.2"
+    "protobufjs": "^8.7.0"
   },
   "overrides": {
     "@iobroker/adapter-dev": {
-      "protobufjs": "^7.5.6"
+      "protobufjs": "^7.6.3"
     },
     "mocha": {
       "serialize-javascript": "^7.0.5"
+    },
+    "axios": {
+      "form-data": "^4.0.6"
+    },
+    "deepl-node": {
+      "form-data": "^3.0.5"
     }
   },
   "devDependencies": {

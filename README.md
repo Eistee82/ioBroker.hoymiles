@@ -137,11 +137,11 @@ Cloud stations create aggregated device nodes (e.g. `hoymiles.0.station-12345.*`
 
 ## Changelog
 ### **WORK IN PROGRESS**
-- (@Eistee82) Support cloud-only WB inverters ("HiFlow Pro", e.g. HMS-800-2WB, no local TCP port): read them over the S-Miles cloud and send inverter on/off, inverter reboot, DTU reboot (`dtu.reboot`, now also works over the cloud) and grid-profile read over the cloud. New supported-device table (local/cloud) in the docs
-- (@Eistee82) Fast cloud realtime "burst" channel for cloud-only devices (option `enableRealtimeBurst`, default on): `grid.power` / `pvN.power` and station realtime states update every ~1.5-3 s like the app's live view instead of every ~80 s, with automatic handover to the slow poller on outages
-- (@Eistee82) Local link additions: read the inverter grid profile via DevConfigFetch (`gridProfile.*`), new persistent power limit `config.limitPowerMyPower` (kept separate from the RAM-only `inverter.powerLimit`), per-string `pvX.errorCode`, complete multi-package alarm/warn lists, and the cloud relay now answers server downlink commands (grid-profile read, version query) so app/portal keep working alongside the adapter
-- (@Eistee82) Reliability & data quality: alarm texts localized in the ioBroker system language (223 codes, all 11 languages), state quality by freshness instead of source (fresh cloud values `0x00`, stale `0x42`), S-Miles Home account support, station offline/online detection fixed (no more false "offline" flags or online-shown offline inverters), UTC timestamps, obsolete states cleaned up on startup, anonymized `[diag]` debug logging
-- (@Eistee82) Fixes & maintenance: SetConfig write field numbering was off by one against the device (server/WiFi config writes landed on the wrong fields), httpClient dropped URL query strings, removed states for hardware the DTU chip doesn't have, CI/deps maintenance (Node 22/24, dev-dep bumps, npm overrides)
+- (@Eistee82) Cloud-only support for WB inverters ("HiFlow Pro", e.g. HMS-800-2WB): read power and energy over the S-Miles cloud and switch the inverter on/off, reboot it or reboot the DTU — no local connection needed
+- (@Eistee82) Faster live values: new realtime channel updates power every few seconds instead of every ~80 s, like the app's live view
+- (@Eistee82) More local data: inverter grid profile, a persistent power limit, per-string error codes and complete alarm lists
+- (@Eistee82) More reliable and readable: alarm texts in your ioBroker language, fixed offline/online detection, S-Miles Home account support, and better data quality handling
+- (@Eistee82) Maintenance and security: dependency and GitHub Actions updates that close known security advisories
 
 ### 0.3.5 (2026-05-13)
 - (copilot) Adapter requires node.js >= 22 now
