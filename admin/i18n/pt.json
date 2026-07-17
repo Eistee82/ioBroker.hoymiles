@@ -14,6 +14,7 @@
     "devices": "Inversores",
     "devicesHelp": "Adicione os seus inversores por endereço IP. Cada inversor Hoymiles HMS com WiFi integrado (DTUBI) tem o seu próprio IP. Pode encontrá-lo na lista de clientes DHCP do seu router (nome do dispositivo: DTUBI-*).",
     "discoverButton": "Procurar inversores",
+    "email@example.com": "email@example.com",
     "enableCloud": "Conexão com a nuvem (S-Miles)",
     "enableCloudHelp": "Conecte-se à nuvem Hoymiles S-Miles para obter estatísticas de energia (diárias, mensais, anuais), poupança de CO2, cálculo de rendimento e dados de potência por inversor. Todos os inversores na sua conta são descobertos automaticamente.",
     "enableCloudRelay": "Relay da nuvem (encaminhar dados para Hoymiles Cloud)",
@@ -28,6 +29,5 @@
     "tabLocal": "Conexão local",
     "testCloudLoginButton": "Testar login na nuvem",
     "testCloudLoginHelp": "Executa as quatro fases do login (region_c, pre-insp, login, probe) e informa v e a presença do salt do pre-insp, se o login produziu um token e qual perfil a sonda atribuiu (installer / home). O resultado aparece numa janela e também é escrito no log do adaptador — útil para relatórios de erros no fórum.",
-    "testConnectionButton": "Testar conexão",
-    "email@example.com": "email@example.com"
+    "testConnectionButton": "Testar conexão"
 }

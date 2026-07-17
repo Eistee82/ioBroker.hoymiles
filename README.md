@@ -141,7 +141,7 @@ Cloud stations create aggregated device nodes (e.g. `hoymiles.0.station-12345.*`
 - (@Eistee82) Faster live values: new realtime channel updates power every few seconds instead of every ~80 s, like the app's live view
 - (@Eistee82) More local data: inverter grid profile, a persistent power limit, per-string error codes and complete alarm lists
 - (@Eistee82) More reliable and readable: alarm texts in your ioBroker language, fixed offline/online detection, S-Miles Home account support, and better data quality handling
-- (@Eistee82) Maintenance and security: dependency and GitHub Actions updates that close known security advisories
+- (@Eistee82) Maintenance and security: dependency and GitHub Actions updates that close known security advisories, and admin translations migrated to the current i18n file format
 
 ### 0.3.5 (2026-05-13)
 - (copilot) Adapter requires node.js >= 22 now

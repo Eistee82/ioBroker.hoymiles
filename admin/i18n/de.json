@@ -14,6 +14,7 @@
     "devices": "Wechselrichter",
     "devicesHelp": "Wechselrichter per IP-Adresse hinzufügen. Jeder Hoymiles HMS Wechselrichter mit integriertem WiFi (DTUBI) hat eine eigene IP. Diese findest du in deiner Router-DHCP-Liste (Gerätename: DTUBI-*).",
     "discoverButton": "Wechselrichter suchen",
+    "email@example.com": "email@example.com",
     "enableCloud": "Cloud-Verbindung (S-Miles)",
     "enableCloudHelp": "Mit der Hoymiles S-Miles Cloud verbinden für Energie-Statistiken (täglich, monatlich, jährlich), CO2-Einsparung, Ertragsberechnung und Wechselrichter-Leistungsdaten. Alle Wechselrichter im Account werden automatisch erkannt.",
     "enableCloudRelay": "Cloud-Relay (Daten an Hoymiles Cloud weiterleiten)",
@@ -28,6 +29,5 @@
     "tabLocal": "Lokale Verbindung",
     "testCloudLoginButton": "Cloud-Login testen",
     "testCloudLoginHelp": "Läuft alle vier Login-Phasen durch (region_c, pre-insp, login, probe) und meldet v und Salt-Vorhandensein aus pre-insp, ob der Login einen Token produziert hat und welches Profil die Probe zuweist (installer / home). Das Ergebnis erscheint als Popup und wird zusätzlich ins Adapter-Log geschrieben — gut für Forum-Bug-Reports.",
-    "testConnectionButton": "Verbindung testen",
-    "email@example.com": "email@example.com"
+    "testConnectionButton": "Verbindung testen"
 }

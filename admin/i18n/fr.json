@@ -14,6 +14,7 @@
     "devices": "Onduleurs",
     "devicesHelp": "Ajoutez vos onduleurs par adresse IP. Chaque onduleur Hoymiles HMS avec WiFi intégré (DTUBI) a sa propre IP. Vous pouvez la trouver dans la liste des clients DHCP de votre routeur (nom de l'appareil : DTUBI-*).",
     "discoverButton": "Rechercher des onduleurs",
+    "email@example.com": "email@example.com",
     "enableCloud": "Connexion cloud (S-Miles)",
     "enableCloudHelp": "Connectez-vous au cloud Hoymiles S-Miles pour obtenir les statistiques d'énergie (quotidiennes, mensuelles, annuelles), les économies de CO2, le calcul des revenus et les données de puissance par onduleur. Tous les onduleurs de votre compte sont automatiquement découverts.",
     "enableCloudRelay": "Relais cloud (transférer les données vers Hoymiles Cloud)",
@@ -28,6 +29,5 @@
     "tabLocal": "Connexion locale",
     "testCloudLoginButton": "Tester la connexion cloud",
     "testCloudLoginHelp": "Exécute les quatre phases du login (region_c, pre-insp, login, probe) et indique v et la présence de salt depuis pre-insp, si le login a produit un token et quel profil la sonde attribue (installer / home). Le résultat s'affiche dans une fenêtre et est également écrit dans le journal de l'adaptateur — utile pour les rapports de bug sur le forum.",
-    "testConnectionButton": "Tester la connexion",
-    "email@example.com": "email@example.com"
+    "testConnectionButton": "Tester la connexion"
 }
