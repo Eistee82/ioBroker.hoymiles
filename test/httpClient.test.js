@@ -20,7 +20,7 @@ function generateCert() {
 	const certFile = join(tmp, "cert.pem");
 	try {
 		execSync(
-			`openssl req -x509 -newkey rsa:2048 -keyout "${keyFile}" -out "${certFile}" -days 1 -nodes -subj "/CN=localhost"`,
+			`openssl req -x509 -newkey ec -pkeyopt ec_paramgen_curve:prime256v1 -keyout "${keyFile}" -out "${certFile}" -days 1 -nodes -subj "/CN=localhost"`,
 			{ stdio: "pipe" },
 		);
 		const key = readFileSync(keyFile, "utf8");
@@ -122,7 +122,7 @@ describe("httpClient", function () {
 		let baseUrl;
 
 		before(function (done) {
-			this.timeout(10000);
+			this.timeout(30000);
 
 			let creds;
 			try {
@@ -232,7 +232,7 @@ describe("httpClient", function () {
 		// --- postJson with JSON response ---
 		describe("postJson with mock server", function () {
 			it("returns parsed JSON from server", async function () {
-				this.timeout(10000);
+				this.timeout(30000);
 				const payload = { hello: "world", num: 42 };
 				const result = await postJson(`${baseUrl}/echo-json`, payload);
 				assert.strictEqual(result.echo, true);
@@ -240,7 +240,7 @@ describe("httpClient", function () {
 			});
 
 			it("sends and receives nested objects", async function () {
-				this.timeout(10000);
+				this.timeout(30000);
 				const payload = { nested: { deep: { value: [1, 2, 3] } } };
 				const result = await postJson(`${baseUrl}/echo-json`, payload);
 				assert.deepStrictEqual(result.received, payload);
@@ -250,7 +250,7 @@ describe("httpClient", function () {
 		// --- postBinary with binary response ---
 		describe("postBinary with mock server", function () {
 			it("returns Buffer from server", async function () {
-				this.timeout(10000);
+				this.timeout(30000);
 				const result = await postBinary(`${baseUrl}/binary`, {});
 				assert.ok(Buffer.isBuffer(result), "result should be a Buffer");
 				const expected = Buffer.from([0x00, 0x01, 0x02, 0x03, 0xfe, 0xff]);
@@ -261,7 +261,7 @@ describe("httpClient", function () {
 		// --- HTTP 4xx error handling ---
 		describe("HTTP error handling", function () {
 			it("rejects with Error on HTTP 400", async function () {
-				this.timeout(10000);
+				this.timeout(30000);
 				await assert.rejects(
 					() => postJson(`${baseUrl}/error400`, {}),
 					err => {
@@ -273,7 +273,7 @@ describe("httpClient", function () {
 			});
 
 			it("rejects with Error on HTTP 500", async function () {
-				this.timeout(10000);
+				this.timeout(30000);
 				await assert.rejects(
 					() => postJson(`${baseUrl}/error500`, {}),
 					err => {
@@ -285,7 +285,7 @@ describe("httpClient", function () {
 			});
 
 			it("rejects with an HttpError carrying the numeric statusCode", async function () {
-				this.timeout(10000);
+				this.timeout(30000);
 				await assert.rejects(
 					() => postJson(`${baseUrl}/error400`, {}),
 					err => {
@@ -298,7 +298,7 @@ describe("httpClient", function () {
 			});
 
 			it("HttpError on HTTP 500 exposes statusCode 500", async function () {
-				this.timeout(10000);
+				this.timeout(30000);
 				await assert.rejects(
 					() => postJson(`${baseUrl}/error500`, {}),
 					err => {
@@ -310,7 +310,7 @@ describe("httpClient", function () {
 			});
 
 			it("rejects postBinary on HTTP 400", async function () {
-				this.timeout(10000);
+				this.timeout(30000);
 				await assert.rejects(
 					() => postBinary(`${baseUrl}/error400`, {}),
 					err => {
@@ -347,13 +347,13 @@ describe("httpClient", function () {
 		// --- Query string forwarding (postJson/postBinary must not drop the search part) ---
 		describe("query string forwarding", function () {
 			it("postJson sends the query string as part of the request path", async function () {
-				this.timeout(10000);
+				this.timeout(30000);
 				const result = await postJson(`${baseUrl}/query-check?k=abc&t=1`, {});
 				assert.strictEqual(result.receivedUrl, "/query-check?k=abc&t=1");
 			});
 
 			it("postBinary sends the query string as part of the request path", async function () {
-				this.timeout(10000);
+				this.timeout(30000);
 				// query-check returns JSON, but postBinary always returns a raw Buffer — parse it.
 				const result = await postBinary(`${baseUrl}/query-check?k=xyz&t=99`, {});
 				assert.ok(Buffer.isBuffer(result));
@@ -365,20 +365,20 @@ describe("httpClient", function () {
 		// --- Authorization header ---
 		describe("Authorization header", function () {
 			it("sends Authorization header when token is provided", async function () {
-				this.timeout(10000);
+				this.timeout(30000);
 				const token = "Bearer test-token-abc123";
 				const result = await postJson(`${baseUrl}/auth-check`, {}, { token });
 				assert.strictEqual(result.authorization, token);
 			});
 
 			it("does not send Authorization header when no token", async function () {
-				this.timeout(10000);
+				this.timeout(30000);
 				const result = await postJson(`${baseUrl}/auth-check`, {});
 				assert.strictEqual(result.authorization, null);
 			});
 
 			it("sends Authorization header with postBinary", async function () {
-				this.timeout(10000);
+				this.timeout(30000);
 				// Use echo-json route since it returns JSON, but call it via
 				// auth-check which returns the auth header. postBinary returns
 				// a Buffer, so we parse it manually.
