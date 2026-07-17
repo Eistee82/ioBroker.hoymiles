@@ -368,7 +368,7 @@ class Hoymiles extends utils.Adapter {
                 callback();
             }
         };
-        const timer = this.setTimeout(() => {
+        const timer = globalThis.setTimeout(() => {
             this.log.warn("Unload timeout after 5s — forcing shutdown");
             finish();
         }, UNLOAD_TIMEOUT_MS);
@@ -425,7 +425,7 @@ class Hoymiles extends utils.Adapter {
         cleanup()
             .catch(err => this.log.error(`Unload error: ${errorMessage(err)}`))
             .finally(() => {
-            this.clearTimeout(timer);
+            globalThis.clearTimeout(timer);
             finish();
         });
     }

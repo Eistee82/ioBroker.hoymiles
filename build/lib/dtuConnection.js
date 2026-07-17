@@ -39,7 +39,7 @@ class DtuConnection extends TcpConnection {
         const now = Date.now();
         const elapsed = now - this.lastRequestTime;
         if (elapsed < MIN_REQUEST_INTERVAL) {
-            await new Promise(resolve => this.timers.setTimeout(resolve, MIN_REQUEST_INTERVAL - elapsed));
+            await new Promise(resolve => globalThis.setTimeout(resolve, MIN_REQUEST_INTERVAL - elapsed));
         }
         this.lastRequestTime = Date.now();
         this._resetHeartbeatTimer();

@@ -532,7 +532,10 @@ class Hoymiles extends utils.Adapter {
 			}
 		};
 
-		const timer = this.setTimeout(() => {
+		// Native timer on purpose: this is the shutdown watchdog. The adapter's own setTimeout is
+		// off-limits here — js-controller has already flagged the adapter as shutting down (it warns
+		// "setTimeout called, but adapter is shutting down") and would refuse to schedule it.
+		const timer = globalThis.setTimeout(() => {
 			this.log.warn("Unload timeout after 5s — forcing shutdown");
 			finish();
 		}, UNLOAD_TIMEOUT_MS);
@@ -587,7 +590,7 @@ class Hoymiles extends utils.Adapter {
 		cleanup()
 			.catch(err => this.log.error(`Unload error: ${errorMessage(err)}`))
 			.finally(() => {
-				this.clearTimeout(timer);
+				globalThis.clearTimeout(timer);
 				finish();
 			});
 	}
