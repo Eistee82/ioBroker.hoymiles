@@ -1,5 +1,5 @@
 import TcpConnection from "./tcpConnection.js";
-import { clearTimer, unixSeconds } from "./utils.js";
+import { unixSeconds } from "./utils.js";
 import { CLOUD_RECONNECT_DELAY_MIN_MS, CLOUD_RECONNECT_DELAY_MAX_MS, CLOUD_HEARTBEAT_INTERVAL_MS, CLOUD_SOCKET_TIMEOUT_MS, CLOUD_DEFAULT_REALDATA_INTERVAL_MS, CLOUD_MIN_REALDATA_INTERVAL_MS, } from "./constants.js";
 const CLOUD_CMD_HEARTBEAT = [0x22, 0x02];
 const CLOUD_CMD_REALDATA = [0x22, 0x0c];
@@ -17,12 +17,12 @@ class CloudRelay extends TcpConnection {
     seq;
     realDataIntervalMs;
     rxBuffer;
-    constructor(host, port) {
-        super(host, port, CLOUD_RECONNECT_DELAY_MIN_MS, CLOUD_RECONNECT_DELAY_MAX_MS);
+    constructor(host, port, timers) {
+        super(host, port, CLOUD_RECONNECT_DELAY_MIN_MS, CLOUD_RECONNECT_DELAY_MAX_MS, timers);
         this.paused = false;
-        this.heartbeatTimer = null;
-        this.realDataTimer = null;
-        this.pauseTimer = null;
+        this.heartbeatTimer = undefined;
+        this.realDataTimer = undefined;
+        this.pauseTimer = undefined;
         this.protobuf = null;
         this.dtuSn = "";
         this.timezoneOffset = -new Date().getTimezoneOffset() * 60;
@@ -74,9 +74,9 @@ class CloudRelay extends TcpConnection {
         catch (err) {
             this.emit("error", new Error(`CloudRelay final send failed: ${err.message}`));
         }
-        this.pauseTimer = clearTimer(this.pauseTimer);
-        this.pauseTimer = setTimeout(() => {
-            this.pauseTimer = null;
+        this.pauseTimer = this.clearManagedTimeout(this.pauseTimer);
+        this.pauseTimer = this.timers.setTimeout(() => {
+            this.pauseTimer = undefined;
             if (this.destroyed) {
                 return;
             }
@@ -91,7 +91,7 @@ class CloudRelay extends TcpConnection {
     }
     resume() {
         this.paused = false;
-        this.pauseTimer = clearTimer(this.pauseTimer);
+        this.pauseTimer = this.clearManagedTimeout(this.pauseTimer);
         if (!this.connected && !this.destroyed) {
             this.connect();
         }
@@ -123,12 +123,12 @@ class CloudRelay extends TcpConnection {
         }
     }
     _stopSessionTimers() {
-        this.heartbeatTimer = clearTimer(this.heartbeatTimer);
-        this.realDataTimer = clearTimer(this.realDataTimer);
+        this.heartbeatTimer = this.clearManagedInterval(this.heartbeatTimer);
+        this.realDataTimer = this.clearManagedInterval(this.realDataTimer);
     }
     _stopAllTimers() {
         super._stopAllTimers();
-        this.pauseTimer = clearTimer(this.pauseTimer);
+        this.pauseTimer = this.clearManagedTimeout(this.pauseTimer);
     }
     _shouldReconnect() {
         return !this.paused;
@@ -234,14 +234,14 @@ class CloudRelay extends TcpConnection {
         if (this.paused || this.destroyed) {
             return;
         }
-        this.heartbeatTimer = setInterval(() => {
+        this.heartbeatTimer = this.timers.setInterval(() => {
             if (this.destroyed || this.paused) {
                 return;
             }
             this._sendRealDataStatus();
             this._sendHeartbeat();
         }, CLOUD_HEARTBEAT_INTERVAL_MS);
-        this.realDataTimer = setInterval(() => {
+        this.realDataTimer = this.timers.setInterval(() => {
             if (this.destroyed || this.paused) {
                 return;
             }

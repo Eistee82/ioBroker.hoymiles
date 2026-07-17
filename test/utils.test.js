@@ -1,7 +1,6 @@
 import assert from "node:assert";
 import {
 	anonymize,
-	clearTimer,
 	deriveStationTzOffsetMs,
 	errorMessage,
 	logOnError,
@@ -226,35 +225,6 @@ describe("mapLimit", function () {
 
 		assert.strictEqual(maxActive, 1, "should never exceed 1 concurrent task");
 		assert.deepStrictEqual(order, [1, 2, 3], "items should be processed in order");
-	});
-});
-
-// ============================================================
-// clearTimer
-// ============================================================
-describe("clearTimer", function () {
-	it("returns null for null input", function () {
-		assert.strictEqual(clearTimer(null), null);
-	});
-
-	it("returns null for undefined input", function () {
-		assert.strictEqual(clearTimer(undefined), null);
-	});
-
-	it("returns null for a real timer handle and clears it", function () {
-		let fired = false;
-		const handle = setTimeout(() => {
-			fired = true;
-		}, 10);
-		const result = clearTimer(handle);
-		assert.strictEqual(result, null);
-		// Give the timer a chance to fire (it should not)
-		return new Promise(resolve => {
-			setTimeout(() => {
-				assert.strictEqual(fired, false, "timer callback should not have fired");
-				resolve();
-			}, 50);
-		});
 	});
 });
 

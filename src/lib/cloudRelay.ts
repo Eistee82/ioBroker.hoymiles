@@ -1,7 +1,7 @@
 import type * as net from "node:net";
-import TcpConnection from "./tcpConnection.js";
+import TcpConnection, { type TimerScheduler } from "./tcpConnection.js";
 import type { ProtobufHandler } from "./protobufHandler.js";
-import { clearTimer, unixSeconds } from "./utils.js";
+import { unixSeconds } from "./utils.js";
 import {
 	CLOUD_RECONNECT_DELAY_MIN_MS,
 	CLOUD_RECONNECT_DELAY_MAX_MS,
@@ -26,9 +26,9 @@ const CLOUD_CMD_REALDATA_STATUS: [number, number] = [0x22, 0x0d]; // RealDataReq
 class CloudRelay extends TcpConnection {
 	public paused: boolean;
 
-	private heartbeatTimer: ReturnType<typeof setInterval> | null;
-	private realDataTimer: ReturnType<typeof setInterval> | null;
-	private pauseTimer: ReturnType<typeof setTimeout> | null;
+	private heartbeatTimer: ioBroker.Interval | undefined;
+	private realDataTimer: ioBroker.Interval | undefined;
+	private pauseTimer: ioBroker.Timeout | undefined;
 
 	private protobuf: ProtobufHandler | null;
 	private dtuSn: string;
@@ -43,13 +43,14 @@ class CloudRelay extends TcpConnection {
 	/**
 	 * @param host - Cloud relay server hostname
 	 * @param port - Cloud relay server port
+	 * @param timers - Adapter-managed timer scheduler; falls back to native timers when omitted
 	 */
-	constructor(host: string, port: number) {
-		super(host, port, CLOUD_RECONNECT_DELAY_MIN_MS, CLOUD_RECONNECT_DELAY_MAX_MS);
+	constructor(host: string, port: number, timers?: TimerScheduler) {
+		super(host, port, CLOUD_RECONNECT_DELAY_MIN_MS, CLOUD_RECONNECT_DELAY_MAX_MS, timers);
 		this.paused = false;
-		this.heartbeatTimer = null;
-		this.realDataTimer = null;
-		this.pauseTimer = null;
+		this.heartbeatTimer = undefined;
+		this.realDataTimer = undefined;
+		this.pauseTimer = undefined;
 		this.protobuf = null;
 		this.dtuSn = "";
 		this.timezoneOffset = -new Date().getTimezoneOffset() * 60; // Local UTC offset in seconds
@@ -130,9 +131,9 @@ class CloudRelay extends TcpConnection {
 			this.emit("error", new Error(`CloudRelay final send failed: ${(err as Error).message}`));
 		}
 		// Disconnect from cloud server after a short delay (allow final send to flush)
-		this.pauseTimer = clearTimer(this.pauseTimer);
-		this.pauseTimer = setTimeout(() => {
-			this.pauseTimer = null;
+		this.pauseTimer = this.clearManagedTimeout(this.pauseTimer);
+		this.pauseTimer = this.timers.setTimeout(() => {
+			this.pauseTimer = undefined;
 			if (this.destroyed) {
 				return;
 			}
@@ -153,7 +154,7 @@ class CloudRelay extends TcpConnection {
 	resume(): void {
 		this.paused = false;
 		// Clear pause timer if resume is called during the 2s delay
-		this.pauseTimer = clearTimer(this.pauseTimer);
+		this.pauseTimer = this.clearManagedTimeout(this.pauseTimer);
 		if (!this.connected && !this.destroyed) {
 			this.connect();
 		} else if (this.connected) {
@@ -194,14 +195,14 @@ class CloudRelay extends TcpConnection {
 
 	/** @inheritdoc */
 	protected _stopSessionTimers(): void {
-		this.heartbeatTimer = clearTimer(this.heartbeatTimer);
-		this.realDataTimer = clearTimer(this.realDataTimer);
+		this.heartbeatTimer = this.clearManagedInterval(this.heartbeatTimer);
+		this.realDataTimer = this.clearManagedInterval(this.realDataTimer);
 	}
 
 	/** @inheritdoc */
 	protected override _stopAllTimers(): void {
 		super._stopAllTimers();
-		this.pauseTimer = clearTimer(this.pauseTimer);
+		this.pauseTimer = this.clearManagedTimeout(this.pauseTimer);
 	}
 
 	/** @inheritdoc */
@@ -359,7 +360,7 @@ class CloudRelay extends TcpConnection {
 			return;
 		}
 		// PCAP pattern: every 60s send RealDataStatus (0x0d) then Heartbeat (0x02)
-		this.heartbeatTimer = setInterval(() => {
+		this.heartbeatTimer = this.timers.setInterval(() => {
 			if (this.destroyed || this.paused) {
 				return;
 			}
@@ -367,7 +368,7 @@ class CloudRelay extends TcpConnection {
 			this._sendHeartbeat();
 		}, CLOUD_HEARTBEAT_INTERVAL_MS);
 		// Forward latest RealData (0x0c) at configured interval (from DTU serverSendTime)
-		this.realDataTimer = setInterval(() => {
+		this.realDataTimer = this.timers.setInterval(() => {
 			if (this.destroyed || this.paused) {
 				return;
 			}

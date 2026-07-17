@@ -1,14 +1,38 @@
 import * as net from "node:net";
 import { EventEmitter } from "node:events";
-import { clearTimer } from "./utils.js";
+
+/**
+ * Minimal timer interface satisfied by the ioBroker adapter instance
+ * (`adapter.setTimeout`/`clearTimeout`/`setInterval`/`clearInterval`). Injecting it lets the
+ * connection classes use adapter-managed timers — which the js-controller cleans up automatically
+ * on unload — while still working with native timers when no adapter is supplied (e.g. in tests).
+ */
+export interface TimerScheduler {
+	/** Schedule a one-shot timer. */
+	setTimeout: (cb: () => void, ms: number) => ioBroker.Timeout | undefined;
+	/** Cancel a one-shot timer previously returned by setTimeout. */
+	clearTimeout: (handle: ioBroker.Timeout | undefined) => void;
+	/** Schedule a repeating timer. */
+	setInterval: (cb: () => void, ms: number) => ioBroker.Interval | undefined;
+	/** Cancel a repeating timer previously returned by setInterval. */
+	clearInterval: (handle: ioBroker.Interval | undefined) => void;
+}
+
+/** Fallback scheduler using native timers — used when no adapter is injected (tests, standalone). */
+const NATIVE_TIMERS: TimerScheduler = {
+	setTimeout: (cb, ms) => globalThis.setTimeout(cb, ms) as unknown as ioBroker.Timeout,
+	clearTimeout: handle => globalThis.clearTimeout(handle as unknown as NodeJS.Timeout),
+	setInterval: (cb, ms) => globalThis.setInterval(cb, ms) as unknown as ioBroker.Interval,
+	clearInterval: handle => globalThis.clearInterval(handle as unknown as NodeJS.Timeout),
+};
 
 /**
  * Abstract base class for persistent TCP connections with reconnect logic.
  * Shared by DtuConnection (local DTU) and CloudRelay (cloud server).
  *
- * Uses native timers (not adapter-managed) because this class has no adapter
- * dependency. Callers must ensure disconnect() is called on adapter unload
- * to clean up all timers.
+ * Timers run through an injected {@link TimerScheduler} (the ioBroker adapter) so the js-controller
+ * cleans them up on unload; when none is supplied they fall back to native timers. Callers must
+ * still call disconnect() on unload to close sockets and stop all timers deterministically.
  */
 abstract class TcpConnection extends EventEmitter {
 	public connected: boolean;
@@ -19,8 +43,9 @@ abstract class TcpConnection extends EventEmitter {
 
 	protected readonly host: string;
 	protected readonly port: number;
+	protected readonly timers: TimerScheduler;
 
-	private reconnectTimer: ReturnType<typeof setTimeout> | null;
+	private reconnectTimer: ioBroker.Timeout | undefined;
 	private readonly reconnectDelayMin: number;
 	private readonly reconnectDelayMax: number;
 
@@ -29,15 +54,23 @@ abstract class TcpConnection extends EventEmitter {
 	 * @param port - Remote port
 	 * @param reconnectDelayMin - Initial reconnect delay in ms
 	 * @param reconnectDelayMax - Maximum reconnect delay in ms
+	 * @param timers - Adapter-managed timer scheduler; falls back to native timers when omitted
 	 */
-	constructor(host: string, port: number, reconnectDelayMin: number, reconnectDelayMax: number) {
+	constructor(
+		host: string,
+		port: number,
+		reconnectDelayMin: number,
+		reconnectDelayMax: number,
+		timers?: TimerScheduler,
+	) {
 		super();
 		this.host = host;
 		this.port = port;
+		this.timers = timers ?? NATIVE_TIMERS;
 		this.socket = null;
 		this.connected = false;
 		this.destroyed = false;
-		this.reconnectTimer = null;
+		this.reconnectTimer = undefined;
 		this.reconnectDelay = reconnectDelayMin;
 		this.reconnectDelayMin = reconnectDelayMin;
 		this.reconnectDelayMax = reconnectDelayMax;
@@ -50,7 +83,7 @@ abstract class TcpConnection extends EventEmitter {
 		}
 
 		// Cancel pending reconnect — we are connecting now
-		this.reconnectTimer = clearTimer(this.reconnectTimer);
+		this.reconnectTimer = this.clearManagedTimeout(this.reconnectTimer);
 
 		// Clean up old socket: remove listeners to prevent stale events after destroy
 		this._cleanupSocket();
@@ -106,8 +139,8 @@ abstract class TcpConnection extends EventEmitter {
 		if (this._shouldReconnect() && !this.reconnectTimer) {
 			const delay = this.reconnectDelay;
 			this.reconnectDelay = Math.min(this.reconnectDelay * 2, this.reconnectDelayMax);
-			this.reconnectTimer = setTimeout(() => {
-				this.reconnectTimer = null;
+			this.reconnectTimer = this.timers.setTimeout(() => {
+				this.reconnectTimer = undefined;
 				if (!this.destroyed && this._shouldReconnect()) {
 					this.connect();
 				}
@@ -118,7 +151,33 @@ abstract class TcpConnection extends EventEmitter {
 	/** Stop all timers including reconnect. */
 	protected _stopAllTimers(): void {
 		this._stopSessionTimers();
-		this.reconnectTimer = clearTimer(this.reconnectTimer);
+		this.reconnectTimer = this.clearManagedTimeout(this.reconnectTimer);
+	}
+
+	/**
+	 * Clear a managed one-shot timer through the injected scheduler and return undefined so callers
+	 * can null the field in one assignment (`this.x = this.clearManagedTimeout(this.x)`).
+	 *
+	 * @param handle - Timeout handle to clear (no-op if undefined)
+	 */
+	protected clearManagedTimeout(handle: ioBroker.Timeout | undefined): undefined {
+		if (handle) {
+			this.timers.clearTimeout(handle);
+		}
+		return undefined;
+	}
+
+	/**
+	 * Clear a managed repeating timer through the injected scheduler and return undefined so callers
+	 * can null the field in one assignment (`this.x = this.clearManagedInterval(this.x)`).
+	 *
+	 * @param handle - Interval handle to clear (no-op if undefined)
+	 */
+	protected clearManagedInterval(handle: ioBroker.Interval | undefined): undefined {
+		if (handle) {
+			this.timers.clearInterval(handle);
+		}
+		return undefined;
 	}
 
 	/** Remove all listeners from socket and destroy it. */

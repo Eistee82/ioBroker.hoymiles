@@ -1,6 +1,11 @@
 import * as net from "node:net";
 import { EventEmitter } from "node:events";
-import { clearTimer } from "./utils.js";
+const NATIVE_TIMERS = {
+    setTimeout: (cb, ms) => globalThis.setTimeout(cb, ms),
+    clearTimeout: handle => globalThis.clearTimeout(handle),
+    setInterval: (cb, ms) => globalThis.setInterval(cb, ms),
+    clearInterval: handle => globalThis.clearInterval(handle),
+};
 class TcpConnection extends EventEmitter {
     connected;
     socket;
@@ -8,17 +13,19 @@ class TcpConnection extends EventEmitter {
     reconnectDelay;
     host;
     port;
+    timers;
     reconnectTimer;
     reconnectDelayMin;
     reconnectDelayMax;
-    constructor(host, port, reconnectDelayMin, reconnectDelayMax) {
+    constructor(host, port, reconnectDelayMin, reconnectDelayMax, timers) {
         super();
         this.host = host;
         this.port = port;
+        this.timers = timers ?? NATIVE_TIMERS;
         this.socket = null;
         this.connected = false;
         this.destroyed = false;
-        this.reconnectTimer = null;
+        this.reconnectTimer = undefined;
         this.reconnectDelay = reconnectDelayMin;
         this.reconnectDelayMin = reconnectDelayMin;
         this.reconnectDelayMax = reconnectDelayMax;
@@ -27,7 +34,7 @@ class TcpConnection extends EventEmitter {
         if (this.destroyed) {
             return;
         }
-        this.reconnectTimer = clearTimer(this.reconnectTimer);
+        this.reconnectTimer = this.clearManagedTimeout(this.reconnectTimer);
         this._cleanupSocket();
         this.connected = false;
         this.socket = new net.Socket();
@@ -65,8 +72,8 @@ class TcpConnection extends EventEmitter {
         if (this._shouldReconnect() && !this.reconnectTimer) {
             const delay = this.reconnectDelay;
             this.reconnectDelay = Math.min(this.reconnectDelay * 2, this.reconnectDelayMax);
-            this.reconnectTimer = setTimeout(() => {
-                this.reconnectTimer = null;
+            this.reconnectTimer = this.timers.setTimeout(() => {
+                this.reconnectTimer = undefined;
                 if (!this.destroyed && this._shouldReconnect()) {
                     this.connect();
                 }
@@ -75,7 +82,19 @@ class TcpConnection extends EventEmitter {
     }
     _stopAllTimers() {
         this._stopSessionTimers();
-        this.reconnectTimer = clearTimer(this.reconnectTimer);
+        this.reconnectTimer = this.clearManagedTimeout(this.reconnectTimer);
+    }
+    clearManagedTimeout(handle) {
+        if (handle) {
+            this.timers.clearTimeout(handle);
+        }
+        return undefined;
+    }
+    clearManagedInterval(handle) {
+        if (handle) {
+            this.timers.clearInterval(handle);
+        }
+        return undefined;
     }
     _cleanupSocket() {
         if (this.socket) {

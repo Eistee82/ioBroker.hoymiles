@@ -263,10 +263,15 @@ class DeviceContext {
 			return;
 		}
 
-		this.connection = new DtuConnection(this.host, 10081, () => {
-			const ts = unixSeconds();
-			return this.protobuf.encodeHeartbeat(ts);
-		});
+		this.connection = new DtuConnection(
+			this.host,
+			10081,
+			() => {
+				const ts = unixSeconds();
+				return this.protobuf.encodeHeartbeat(ts);
+			},
+			this.adapter,
+		);
 
 		let lastErrorMsg = "";
 		let errorRepeatCount = 0;
@@ -1335,7 +1340,7 @@ class DeviceContext {
 			const serverPort = (portState?.val as number) || 10081;
 			if (serverDomain) {
 				this.cloudRelayInitializing = true;
-				const relay = new CloudRelay(serverDomain, serverPort);
+				const relay = new CloudRelay(serverDomain, serverPort, this.adapter);
 				relay.configure(this.protobuf, dtuSn);
 				this.cloudRelay = relay;
 				this.cloudRelay.on("connected", () => {

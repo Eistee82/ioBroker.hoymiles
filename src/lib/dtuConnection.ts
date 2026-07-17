@@ -1,7 +1,6 @@
 import type * as net from "node:net";
-import TcpConnection from "./tcpConnection.js";
+import TcpConnection, { type TimerScheduler } from "./tcpConnection.js";
 import { HM_MAGIC_0, HM_MAGIC_1 } from "./constants.js";
-import { clearTimer } from "./utils.js";
 
 const MAGIC_HEADER = Buffer.from([HM_MAGIC_0, HM_MAGIC_1]);
 const HEADER_SIZE = 10;
@@ -20,8 +19,8 @@ class DtuConnection extends TcpConnection {
 
 	private receiveBuffer: Buffer;
 	private receiveBufferLen: number;
-	private heartbeatTimer: ReturnType<typeof setTimeout> | null;
-	private idleTimer: ReturnType<typeof setTimeout> | null;
+	private heartbeatTimer: ioBroker.Timeout | undefined;
+	private idleTimer: ioBroker.Timeout | undefined;
 	private lastRequestTime: number;
 	private consecutiveFailedSends: number;
 
@@ -29,15 +28,16 @@ class DtuConnection extends TcpConnection {
 	 * @param host - DTU IP address
 	 * @param port - DTU TCP port (default 10081)
 	 * @param heartbeatGenerator - Optional callback to generate heartbeat messages
+	 * @param timers - Adapter-managed timer scheduler; falls back to native timers when omitted
 	 */
-	constructor(host: string, port: number, heartbeatGenerator?: () => Buffer) {
-		super(host, port, RECONNECT_DELAY_MIN, RECONNECT_DELAY_MAX);
+	constructor(host: string, port: number, heartbeatGenerator?: () => Buffer, timers?: TimerScheduler) {
+		super(host, port, RECONNECT_DELAY_MIN, RECONNECT_DELAY_MAX, timers);
 		this.heartbeatGenerator = heartbeatGenerator || null;
 
 		this.receiveBuffer = Buffer.alloc(INITIAL_BUFFER_SIZE);
 		this.receiveBufferLen = 0;
-		this.heartbeatTimer = null;
-		this.idleTimer = null;
+		this.heartbeatTimer = undefined;
+		this.idleTimer = undefined;
 		this.lastRequestTime = 0;
 		this.consecutiveFailedSends = 0;
 	}
@@ -61,7 +61,7 @@ class DtuConnection extends TcpConnection {
 		const now = Date.now();
 		const elapsed = now - this.lastRequestTime;
 		if (elapsed < MIN_REQUEST_INTERVAL) {
-			await new Promise<void>(resolve => setTimeout(resolve, MIN_REQUEST_INTERVAL - elapsed));
+			await new Promise<void>(resolve => this.timers.setTimeout(resolve, MIN_REQUEST_INTERVAL - elapsed));
 		}
 		this.lastRequestTime = Date.now();
 		this._resetHeartbeatTimer();
@@ -102,8 +102,8 @@ class DtuConnection extends TcpConnection {
 
 	/** @inheritdoc */
 	protected _stopSessionTimers(): void {
-		this.heartbeatTimer = clearTimer(this.heartbeatTimer);
-		this.idleTimer = clearTimer(this.idleTimer);
+		this.heartbeatTimer = this.clearManagedTimeout(this.heartbeatTimer);
+		this.idleTimer = this.clearManagedTimeout(this.idleTimer);
 	}
 
 	private _onData(chunk: Buffer): void {
@@ -160,11 +160,11 @@ class DtuConnection extends TcpConnection {
 
 	/** Heartbeat only fires after 20s of idle (no send() calls). */
 	private _resetHeartbeatTimer(): void {
-		this.heartbeatTimer = clearTimer(this.heartbeatTimer);
+		this.heartbeatTimer = this.clearManagedTimeout(this.heartbeatTimer);
 		if (this.destroyed) {
 			return;
 		}
-		this.heartbeatTimer = setTimeout(() => {
+		this.heartbeatTimer = this.timers.setTimeout(() => {
 			if (this.destroyed) {
 				return;
 			}
@@ -185,11 +185,11 @@ class DtuConnection extends TcpConnection {
 	}
 
 	private _resetIdleTimer(): void {
-		this.idleTimer = clearTimer(this.idleTimer);
+		this.idleTimer = this.clearManagedTimeout(this.idleTimer);
 		if (this.destroyed) {
 			return;
 		}
-		this.idleTimer = setTimeout(() => {
+		this.idleTimer = this.timers.setTimeout(() => {
 			if (this.destroyed) {
 				return;
 			}
