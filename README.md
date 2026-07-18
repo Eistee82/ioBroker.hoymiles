@@ -136,7 +136,7 @@ Each DTU creates a device node using its serial number as ID (e.g. `hoymiles.0.4
 Cloud stations create aggregated device nodes (e.g. `hoymiles.0.station-12345.*`).
 
 ## Changelog
-### **WORK IN PROGRESS**
+### 0.4.1 (2026-07-18)
 - (@Eistee82) Packaging: removed the npm `prepare` install script — installs from GitHub now use the committed `build/` output directly, so no dev dependencies are downloaded onto the target system; npm releases are still built freshly via `prepublishOnly`
 - (@Eistee82) CI/test reliability: added a global Mocha timeout and switched the test TLS certificates to fast EC keys, so the adapter-tests no longer time out on loaded CI runners
 
@@ -166,9 +166,6 @@ Cloud stations create aggregated device nodes (e.g. `hoymiles.0.station-12345.*`
 
 ### 0.3.3 (2026-04-08)
 - (@Eistee82) Fix jsonConfig schema warnings: button color, remove unsupported table properties
-
-### 0.3.2 (2026-04-03)
-- (@Eistee82) Fix remaining responsive layout issues for repochecker (staticText, header, divider)
 
 Older entries: see [CHANGELOG_OLD.md](CHANGELOG_OLD.md).
 

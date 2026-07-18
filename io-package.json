@@ -1,7 +1,7 @@
 {
   "common": {
     "name": "hoymiles",
-    "version": "0.4.0",
+    "version": "0.4.1",
     "titleLang": {
       "en": "Hoymiles HMS-xxxW-xT",
       "de": "Hoymiles HMS-xxxW-xT",
@@ -67,6 +67,19 @@
     ],
     "enabled": true,
     "news": {
+      "0.4.1": {
+        "en": "Packaging: removed the npm `prepare` install script — installs from GitHub now use the committed `build/` output directly, so no dev dependencies are downloaded onto the target system; npm releases are still built freshly via `prepublishOnly`\nCI/test reliability: added a global Mocha timeout and switched the test TLS certificates to fast EC keys, so the adapter-tests no longer time out on loaded CI runners",
+        "de": "Paketierung: Das npm-Installationsskript `prepare` wurde entfernt – Installationen von GitHub verwenden nun direkt die Ausgabe des `build/`-Repositorys, sodass keine Entwicklungsabhängigkeiten auf das Zielsystem heruntergeladen werden; npm-Releases werden weiterhin über `prepublishOnly` neu erstellt.\nCI/Testzuverlässigkeit: Ein globales Mocha-Timeout wurde hinzugefügt und die Test-TLS-Zertifikate wurden auf schnelle EC-Schlüssel umgestellt, sodass die Adaptertests auf ausgelasteten CI-Runnern nicht mehr zeitüberschreiten.",
+        "ru": "Упаковка: удален скрипт `prepare` установки npm — теперь при установке из GitHub используется непосредственно результат `build/`, поэтому зависимости для разработки не загружаются в целевую систему; релизы npm по-прежнему собираются заново с помощью `prepublishOnly`.\nНадежность CI/тестирования: добавлен глобальный таймаут Mocha и заменены тестовые TLS-сертификаты на быстрые ключи EC, поэтому адаптерные тесты больше не выдают ошибку таймаута на загруженных CI-раннерах.",
+        "pt": "Empacotamento: removemos o script `prepare` do npm para instalação — as instalações do GitHub agora usam diretamente a saída do `build/` do commit, portanto, nenhuma dependência de desenvolvimento é baixada para o sistema de destino; as versões do npm ainda são compiladas do zero via `prepublishOnly`.\nConfiabilidade de CI/teste: adicionamos um tempo limite global do Mocha e trocamos os certificados TLS de teste por chaves EC rápidas, para que os testes de adaptador não apresentem mais timeout em executores de CI sobrecarregados.",
+        "nl": "Verpakking: het `prepare` installatiescript van npm is verwijderd — installaties vanuit GitHub gebruiken nu direct de gecommitteerde `build/`-output, waardoor er geen ontwikkelafhankelijkheden naar het doelsysteem worden gedownload; npm-releases worden nog steeds vers gebouwd via `prepublishOnly`.\nCI/testbetrouwbaarheid: een algemene Mocha-time-out toegevoegd en de TLS-testcertificaten vervangen door snelle EC-sleutels, waardoor de adaptertests geen time-outs meer geven bij zware CI-runners.",
+        "fr": "Gestion des paquets : suppression du script d’installation `prepare` de npm — les installations depuis GitHub utilisent désormais directement la sortie `build/` validée, ce qui évite le téléchargement de dépendances de développement sur le système cible ; les versions npm sont toujours générées à la demande via `prepublishOnly`.\nFiabilité CI/test : ajout d’un délai d’expiration global pour Mocha et passage aux clés EC rapides pour les certificats TLS de test, afin que les tests d’adaptateur n’expirent plus sur les exécuteurs CI chargés.",
+        "it": "Packaging: rimosso lo script di installazione `prepare` di npm: le installazioni da GitHub ora utilizzano direttamente l'output `build/` del commit, quindi non vengono scaricate dipendenze di sviluppo sul sistema di destinazione; le release di npm vengono ancora compilate da zero tramite `prepublishOnly`.\nAffidabilità CI/test: aggiunto un timeout globale di Mocha e convertiti i certificati TLS di test in chiavi EC veloci, in modo che i test dell'adattatore non vadano più in timeout sui runner CI caricati.",
+        "es": "Empaquetado: se eliminó el script de instalación `prepare` de npm; las instalaciones desde GitHub ahora usan directamente la salida de `build/` confirmada, por lo que no se descargan dependencias de desarrollo en el sistema de destino; las versiones de npm todavía se compilan desde cero a través de `prepublishOnly`.\nConfiabilidad de CI/pruebas: se agregó un tiempo de espera global de Mocha y se cambiaron los certificados TLS de prueba a claves EC rápidas, por lo que las pruebas del adaptador ya no agotan el tiempo de espera en los ejecutores de CI cargados.",
+        "pl": "Pakowanie: usunięto skrypt instalacyjny npm `prepare` — instalacje z GitHub teraz bezpośrednio korzystają z zatwierdzonego wyjścia `build/`, więc żadne zależności deweloperskie nie są pobierane na system docelowy; wydania npm są nadal kompilowane na świeżo za pomocą `prepublishOnly`\nNiezawodność CI/testu: dodano globalny limit czasu Mocha i zmieniono certyfikaty testowe TLS na szybkie klucze EC, dzięki czemu testy adaptera nie będą już przekraczać limitu czasu na załadowanych serwerach CI",
+        "uk": "Пакування: видалено скрипт встановлення npm `prepare` — встановлення з GitHub тепер використовують вивід `build/` безпосередньо, тому жодні залежності від розробників не завантажуються на цільову систему; релізи npm все ще збираються свіжими через `prepublishOnly`.\nНадійність CI/тестування: додано глобальний тайм-аут Mocha та переключено тестові сертифікати TLS на швидкі ключі EC, тому тести адаптерів більше не зависають на завантажених запускачах CI.",
+        "zh-cn": "打包：移除了 npm `prepare` 安装脚本——现在从 GitHub 安装直接使用已提交的 `build/` 输出，因此不会将开发依赖项下载到目标系统；npm 发布版本仍然通过 `prepublishOnly` 全新构建。\nCI/测试可靠性：添加了全局Mocha超时设置，并将测试TLS证书切换到快速EC密钥，因此在负载较高的CI运行器上，适配器测试不再超时。"
+      },
       "0.4.0": {
         "en": "Cloud-only support for WB inverters (\"HiFlow Pro\", e.g. HMS-800-2WB): read power and energy over the S-Miles cloud and switch the inverter on/off, reboot it or reboot the DTU — no local connection needed\nFaster live values: new realtime channel updates power every few seconds instead of every ~80 s, like the app's live view\nMore local data: inverter grid profile, a persistent power limit, per-string error codes and complete alarm lists\nMore reliable and readable: alarm texts in your ioBroker language, fixed offline/online detection, S-Miles Home account support, and better data quality handling\nMaintenance and security: dependency and GitHub Actions updates that close known security advisories, admin translations migrated to the current i18n file format, and connection timers are now managed by ioBroker so they are reliably cleaned up on stop/restart",
         "de": "Cloud-Unterstützung für WB-Wechselrichter („HiFlow Pro“, z. B. HMS-800-2WB): Leistungs- und Energiedaten werden über die S-Miles-Cloud ausgelesen, der Wechselrichter kann ein-/ausgeschaltet, neu gestartet oder die DTU neu gestartet werden – eine lokale Verbindung ist nicht erforderlich.\nSchnellere Live-Werte: Der neue Echtzeitkanal aktualisiert die Leistung alle paar Sekunden anstatt alle ca. 80 Sekunden, wie die Live-Ansicht der App.\nWeitere lokale Daten: Wechselrichter-Netzprofil, eine permanente Leistungsbegrenzung, Fehlercodes pro String und vollständige Alarmlisten\nZuverlässiger und besser lesbar: Alarmmeldungen in Ihrer ioBroker-Sprache, verbesserte Offline-/Online-Erkennung, Unterstützung für S-Miles Home-Konten und optimierte Datenqualitätsverarbeitung\nWartung und Sicherheit: Aktualisierungen von Abhängigkeiten und GitHub Actions beheben bekannte Sicherheitslücken, administrative Übersetzungen wurden in das aktuelle i18n-Dateiformat migriert und Verbindungstimer werden nun von ioBroker verwaltet und somit beim Stoppen/Neustart zuverlässig bereinigt.",
@@ -144,19 +157,6 @@
         "pl": "Naprawiono responsywny układ interfejsu administracyjnego, poprawiono tłumaczenia wiadomości",
         "uk": "Виправлено адаптивний макет інтерфейсу адміністратора, виправлено переклади новин",
         "zh-cn": "修复管理界面响应式布局，修复新闻翻译"
-      },
-      "0.3.0": {
-        "en": "Multi-inverter support, cloud auto-discovery, station-level aggregated data, per-inverter cloud data",
-        "de": "Multi-Wechselrichter-Unterstützung, Cloud-Auto-Erkennung, Stationsebene aggregierte Daten, Cloud-Daten pro Wechselrichter",
-        "ru": "Поддержка нескольких инверторов, автоматическое обнаружение облака, агрегированные данные на уровне станции",
-        "pt": "Suporte a múltiplos inversores, auto-descoberta na nuvem, dados agregados ao nível da estação",
-        "nl": "Multi-omvormer ondersteuning, cloud auto-detectie, geaggregeerde stationsgegevens",
-        "fr": "Support multi-onduleur, auto-découverte cloud, données agrégées au niveau station",
-        "it": "Supporto multi-inverter, auto-discovery cloud, dati aggregati a livello stazione",
-        "es": "Soporte multi-inversor, auto-descubrimiento en la nube, datos agregados a nivel de estación",
-        "pl": "Obsługa wielu falowników, automatyczne wykrywanie w chmurze, zagregowane dane na poziomie stacji",
-        "uk": "Підтримка кількох інверторів, автоматичне виявлення хмари, агреговані дані на рівні станції",
-        "zh-cn": "多逆变器支持，云端自动发现，站级聚合数据，每台逆变器云端数据"
       }
     },
     "extIcon": "https://raw.githubusercontent.com/Eistee82/ioBroker.hoymiles/main/admin/hoymiles.png",
