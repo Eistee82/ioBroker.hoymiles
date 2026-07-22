@@ -47,6 +47,8 @@ class CloudConnection {
     stationDcMap;
     stationAkMap;
     loggedSamples;
+    microPortRules;
+    microPortRulesPromise;
     assertStationId(stationId) {
         if (!stationId || stationId <= 0) {
             throw new Error("Invalid stationId");
@@ -67,6 +69,8 @@ class CloudConnection {
         this.stationDcMap = new Map();
         this.stationAkMap = new Map();
         this.loggedSamples = new Set();
+        this.microPortRules = null;
+        this.microPortRulesPromise = null;
     }
     logResponseSample(label, payload) {
         if (this.loggedSamples.has(label)) {
@@ -409,6 +413,42 @@ class CloudConnection {
         }
         const raw = assertData(result.data ?? [], "Device tree");
         return isHome ? raw.map(node => normalizeHomeTreeNode(node)) : raw;
+    }
+    async getMicroPortRules() {
+        if (this.microPortRules) {
+            return this.microPortRules;
+        }
+        if (!this.microPortRulesPromise) {
+            this.microPortRulesPromise = this.fetchMicroPortRules().finally(() => {
+                this.microPortRulesPromise = null;
+            });
+        }
+        return this.microPortRulesPromise;
+    }
+    async fetchMicroPortRules() {
+        const rules = new Map();
+        try {
+            const result = await this._post("/dict/pub/0/dictionary/select_micro_rule", {}, CLOUD_HOST_DEFAULT);
+            if (result.status !== "0") {
+                this.log(`[diag] Micro-rule dictionary rejected: ${result.message}`);
+                return rules;
+            }
+            for (const entry of Array.isArray(result.data) ? result.data : []) {
+                const e = entry;
+                const prefix = typeof e?.val === "string" ? e.val : "";
+                const port = typeof e?.rule?.port === "number" ? e.rule.port : 0;
+                if (prefix && port > 0) {
+                    rules.set(prefix, port);
+                }
+            }
+            this.log(`[diag] Micro-rule dictionary: ${rules.size} serial prefixes`);
+        }
+        catch (err) {
+            this.log(`[diag] Micro-rule dictionary failed: ${errorMessage(err)}`);
+            return rules;
+        }
+        this.microPortRules = rules;
+        return rules;
     }
     async getMicroRealtimeData(stationId, microIds, date, quotas) {
         this.assertStationId(stationId);

@@ -881,7 +881,7 @@ describe("deviceContext – createPvStates", function () {
 		assert.strictEqual(extendCalls.length, callsBefore, "No calls when deviceId is empty");
 	});
 
-	it("clamps pvCount to MAX_PV_PORTS (6)", async function () {
+	it("clamps pvCount to MAX_PV_PORTS (12)", async function () {
 		const { extendCalls, adapter } = createTrackingAdapter();
 		const ctx = new DeviceContext({
 			adapter,
@@ -895,13 +895,14 @@ describe("deviceContext – createPvStates", function () {
 		});
 		await ctx.initFromSerial("TEST1234");
 		const callsBefore = extendCalls.length;
-		await ctx.createPvStates(10);
+		await ctx.createPvStates(20);
 		const newCalls = extendCalls.slice(callsBefore);
 
-		// Loop uses this.pvCount (clamped to MAX_PV_PORTS = 6)
-		// 6 PVs × (1 channel + 6 states) = 42 calls
-		assert.strictEqual(newCalls.length, 42, "Should create exactly 42 objects for 6 clamped PV ports");
-		assert.strictEqual(ctx["pvCount"], 6, "pvCount should be clamped to 6");
+		// Loop uses this.pvCount (clamped to MAX_PV_PORTS = 12, the upper bound of the
+		// cloud's own micro-rule dictionary)
+		// 12 PVs × (1 channel + 6 states) = 84 calls
+		assert.strictEqual(newCalls.length, 84, "Should create exactly 84 objects for 12 clamped PV ports");
+		assert.strictEqual(ctx["pvCount"], 12, "pvCount should be clamped to 12");
 	});
 });
 

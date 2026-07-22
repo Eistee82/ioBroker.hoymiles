@@ -136,6 +136,11 @@ Each DTU creates a device node using its serial number as ID (e.g. `hoymiles.0.4
 Cloud stations create aggregated device nodes (e.g. `hoymiles.0.station-12345.*`).
 
 ## Changelog
+
+### **WORK IN PROGRESS**
+- (@Eistee82) Cloud: inverters whose model name does not end in "T" (e.g. HMS-2000-4WB) no longer lose their extra PV strings — voltage and current were only polled for the first two strings, so strings 3 and 4 showed power but nothing else. The number of PV inputs is now taken from Hoymiles' own rule dictionary, looked up by inverter serial number prefix, which is the same source the S-Miles app uses; the model name and the number of strings seen in the live data remain as fallbacks
+- (@Eistee82) Cloud: support inverters with more than six PV strings (up to 12), matching the port counts the cloud actually publishes
+
 ### 0.4.1 (2026-07-18)
 - (@Eistee82) Packaging: removed the npm `prepare` install script — installs from GitHub now use the committed `build/` output directly, so no dev dependencies are downloaded onto the target system; npm releases are still built freshly via `prepublishOnly`
 - (@Eistee82) CI/test reliability: added a global Mocha timeout and switched the test TLS certificates to fast EC keys, so the adapter-tests no longer time out on loaded CI runners

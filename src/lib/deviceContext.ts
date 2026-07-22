@@ -16,8 +16,12 @@ import { INFO_FALLBACK_TIMEOUT_MS, SCALE_POWER, CLOUD_DEV_TYPE_DTU } from "./con
 import { whToKwh } from "./convert.js";
 import { errorMessage, safeJsonStringify, unixSeconds } from "./utils.js";
 
-/** Maximum number of PV ports supported by any Hoymiles inverter model. */
-const MAX_PV_PORTS = 6;
+/**
+ * Maximum number of PV ports supported by any Hoymiles inverter model. Upper bound of the
+ * cloud's own micro-rule dictionary, which lists port counts of 1, 2, 4, 6, 8 and 12
+ * (verified live 2026-07-22, 91 rules).
+ */
+export const MAX_PV_PORTS = 12;
 
 /** Extended adapter interface exposing Hoymiles-specific methods to DeviceContext. */
 export interface HoymilesAdapter extends ioBroker.Adapter {

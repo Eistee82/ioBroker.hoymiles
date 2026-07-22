@@ -171,9 +171,15 @@ hoymiles.0.station-12345.info.stationName
 | `info.connected` | boolean | Gerät verbunden (lokal oder Cloud) |
 | `info.lastResponse` | number | Letzte Antwortzeit (Unix-Timestamp, nur lokal) |
 
-### `<dtuSerial>.pv0.*` / `pv1.*` / `pv2.*` / `pv3.*` — PV-Eingänge (pro DTU)
+### `<dtuSerial>.pv0.*` / `pv1.*` / … — PV-Eingänge (pro DTU)
 
-PV-Channels werden dynamisch basierend auf dem Wechselrichter-Modell erstellt (1T = 1 Channel, 2T = 2 Channels, 4T = 4 Channels).
+PV-Channels werden dynamisch je nach Anzahl der Eingänge des Wechselrichters erstellt (`pv0` … `pv11`, maximal 12).
+
+Die Anzahl ermittelt der Adapter in dieser Reihenfolge:
+
+1. **Lokal:** aus der Geräteinformation des Wechselrichters selbst.
+2. **Cloud:** aus dem Regelwörterbuch von Hoymiles, nachgeschlagen über das Präfix der Wechselrichter-Seriennummer — dieselbe Quelle, die auch die S-Miles-App verwendet. Damit werden alle Baureihen korrekt erkannt, auch `…-2WB` / `…-4WB`.
+3. **Ersatzweise:** aus dem Modellnamen (`…-2T`, `…-4WB`, …) bzw. aus der Anzahl der Strings, die in den Live-Daten tatsächlich auftauchen.
 
 | Datenpunkt | Typ | Einheit | Beschreibung |
 |------------|-----|---------|--------------|
