@@ -1,6 +1,7 @@
 import type CloudConnection from "./cloudConnection.js";
 import { toKwh } from "./convert.js";
 import type DeviceContext from "./deviceContext.js";
+import { MAX_PV_PORTS } from "./deviceContext.js";
 import {
 	CLOUD_POLL_CONCURRENCY,
 	CLOUD_STATION_STALE_MS,
@@ -63,6 +64,14 @@ interface CloudPollerOptions {
 	burstActiveStations: Set<number>;
 }
 
+/** The inverter fields {@link CloudPoller.resolvePortCount} reads from a device-tree node. */
+interface InverterPortSource {
+	/** Inverter serial number; its 4- or 3-character prefix keys the micro-rule dictionary. */
+	sn?: string;
+	/** Model name, e.g. `HMS-2000-4WB`. Heuristic fallback only. */
+	model_no?: string;
+}
+
 /**
  * Handles periodic cloud data polling for station and inverter data.
  *
@@ -72,7 +81,17 @@ interface CloudPollerOptions {
  * - NIGHT_MODE: Only weather + firmware checks (local offline / night)
  */
 class CloudPoller {
-	private static readonly PORT_COUNT_RE = /(\d+)T$/;
+	/**
+	 * PV-port count as encoded in a model number: the digit group directly in front of the
+	 * trailing series token. Covers the classic line (`HMS-800W-2T`, `HMT-1800-6T`) and the
+	 * WB series (`HMS-800-2WB`, `HMS-2000-4WB`), whose names end in `WB` rather than `T` —
+	 * the latter used to miss entirely and silently fall back to 2 ports.
+	 *
+	 * This is a heuristic on a vendor naming convention, not an authoritative source: the
+	 * S-Miles app never parses the model name, it resolves `rule.port` from the cloud. Treat
+	 * it as the last line of defence behind {@link fetchInverterPortCount}.
+	 */
+	private static readonly PORT_COUNT_RE = /(\d+)\s*(?:T|WB)$/i;
 
 	private readonly cloud: CloudConnection;
 	private readonly adapter: ioBroker.Adapter;
@@ -868,15 +887,21 @@ class CloudPoller {
 				const pvTasks: Array<Promise<void>> = [];
 				const children = dtu.children || [];
 
+				// Authoritative port counts, keyed by inverter serial prefix. Fetched once per
+				// session and cached inside CloudConnection; an empty map (endpoint unavailable)
+				// simply leaves resolvePortCount() on its heuristic.
+				const portRules = await this.cloud.getMicroPortRules();
+
 				// Ensure PV states exist for the max port count across all inverter children.
 				// Seed with the already-known pvCount so this can only grow it — the burst poller
 				// may have discovered more live strings than the model-number regex predicts, and
 				// createPvStates() would otherwise shrink pvCount back down.
 				if (!dtuDev.pvStatesCreated && children.length > 0) {
-					let maxPorts = dtuDev.pvCount;
+					// resolvePortCount() already folds in dtuDev.pvCount, so seeding with 0 keeps
+					// this monotonic without risking a NaN seed from an unset pvCount.
+					let maxPorts = 0;
 					for (const inv of children) {
-						const m = CloudPoller.PORT_COUNT_RE.exec(inv.model_no || "");
-						maxPorts = Math.max(maxPorts, Math.min(Math.max(m ? parseInt(m[1], 10) : 2, 1), 6));
+						maxPorts = Math.max(maxPorts, this.resolvePortCount(inv, portRules, dtuDev.pvCount));
 					}
 					if (maxPorts > 0) {
 						await dtuDev.createPvStates(maxPorts, true);
@@ -888,13 +913,7 @@ class CloudPoller {
 					if (!inv.id) {
 						continue;
 					}
-					const portMatch = CloudPoller.PORT_COUNT_RE.exec(inv.model_no || "");
-					if (!portMatch) {
-						this.adapter.log.debug(
-							`Could not extract port count from model "${inv.model_no}", using default: 2`,
-						);
-					}
-					const portCount = Math.min(Math.max(portMatch ? parseInt(portMatch[1], 10) : 2, 1), 6);
+					const portCount = this.resolvePortCount(inv, portRules, dtuDev.pvCount);
 
 					for (let p = 1; p <= portCount; p++) {
 						pvTasks.push(
@@ -937,6 +956,44 @@ class CloudPoller {
 				this.lastFirmwareCheckDay.delete(sid);
 			}
 		}
+	}
+
+	/**
+	 * Best available PV-port count for one inverter, in descending order of trust:
+	 *
+	 * 1. The cloud micro-rule dictionary, keyed by serial prefix — the same source the
+	 *    S-Miles app uses. Authoritative, so it is returned as-is.
+	 * 2. Otherwise the model-name heuristic ({@link PORT_COUNT_RE}), widened by the string
+	 *    count the burst poller has already discovered from live data.
+	 *
+	 * Undercounting is what costs data — strings beyond the assumed count are never queried
+	 * and never get voltage/current — whereas an over-count merely wastes one chart request
+	 * that comes back empty.
+	 *
+	 * @param inv - Inverter node from the cloud device tree (serial + `model_no`).
+	 * @param portRules - Serial-prefix → port count, from {@link CloudConnection.getMicroPortRules}.
+	 * @param knownPvCount - PV strings already known for this DTU (0 if none yet).
+	 */
+	private resolvePortCount(inv: InverterPortSource, portRules: Map<string, number>, knownPvCount: number): number {
+		// Same lookup order as the app: 4-character serial prefix, then 3-character.
+		const sn = inv.sn || "";
+		const fromRules = portRules.get(sn.slice(0, 4)) ?? portRules.get(sn.slice(0, 3));
+		if (fromRules) {
+			return Math.min(fromRules, MAX_PV_PORTS);
+		}
+
+		// Guard against a non-numeric pvCount: a NaN here would propagate through Math.max
+		// and silently reduce the port loop to zero iterations — no PV data at all.
+		const known = Number.isFinite(knownPvCount) ? knownPvCount : 0;
+		const match = CloudPoller.PORT_COUNT_RE.exec(inv.model_no || "");
+		if (!match) {
+			this.adapter.log.debug(
+				`No port rule for serial prefix and no port count in model "${inv.model_no}", ` +
+					`falling back to ${Math.max(known, 2)}`,
+			);
+		}
+		const fromModel = match ? parseInt(match[1], 10) : 2;
+		return Math.min(Math.max(fromModel, known, 1), MAX_PV_PORTS);
 	}
 
 	private async setPvStates(

@@ -131,6 +131,81 @@ describe("cloudConnection – stationDcMap / stationAkMap", function () {
 	});
 });
 
+describe("cloudConnection – getMicroPortRules", function () {
+	let originalPost;
+
+	beforeEach(function () {
+		originalPost = CloudConnection.prototype._post;
+	});
+
+	afterEach(function () {
+		CloudConnection.prototype._post = originalPost;
+	});
+
+	// The dictionary is what the S-Miles app itself uses to size an inverter's PV strings:
+	// serial-number prefix → rule.port. Verified live 2026-07-22 against the real endpoint,
+	// which answers on /dict/pub/ without a token (91 rules, ports 1/2/4/6/8/12).
+	const DICT = [
+		{ id: 1, val: "1412", dis_name: "1412", rule: { port: 2, series: 3, version: 3 } },
+		{ id: 2, val: "1610", dis_name: "1610", rule: { port: 2, series: 10, version: 3 } },
+		{ id: 3, val: "1620", dis_name: "1620", rule: { port: 4, series: 10, version: 3 } },
+		{ id: 4, val: "A01", dis_name: "A01", rule: { port: 4, series: 7, version: 3 } },
+	];
+
+	it("maps serial prefixes to their port count", async function () {
+		CloudConnection.prototype._post = async function (apiPath, _body, hostOverride) {
+			assert.strictEqual(apiPath, "/dict/pub/0/dictionary/select_micro_rule");
+			// Global vendor data — must not follow the account's regional host.
+			assert.strictEqual(hostOverride, "https://neapi.hoymiles.com");
+			return { status: "0", data: DICT };
+		};
+		const cloud = new CloudConnection("u", "p");
+		const rules = await cloud.getMicroPortRules();
+		assert.strictEqual(rules.get("1620"), 4);
+		assert.strictEqual(rules.get("1610"), 2);
+		assert.strictEqual(rules.get("A01"), 4);
+	});
+
+	it("fetches the dictionary only once and serves later calls from cache", async function () {
+		let calls = 0;
+		CloudConnection.prototype._post = async function () {
+			calls++;
+			return { status: "0", data: DICT };
+		};
+		const cloud = new CloudConnection("u", "p");
+		await cloud.getMicroPortRules();
+		await cloud.getMicroPortRules();
+		assert.strictEqual(calls, 1, "the dictionary must be fetched once per session");
+	});
+
+	it("returns an empty map instead of throwing when the endpoint fails", async function () {
+		CloudConnection.prototype._post = async function () {
+			throw new Error("network down");
+		};
+		const cloud = new CloudConnection("u", "p");
+		const rules = await cloud.getMicroPortRules();
+		assert.strictEqual(rules.size, 0);
+	});
+
+	it("skips malformed entries rather than poisoning the map", async function () {
+		CloudConnection.prototype._post = async function () {
+			return {
+				status: "0",
+				data: [
+					{ val: "1620", rule: { port: 4 } },
+					{ val: "", rule: { port: 2 } },
+					{ val: "1234" }, // no rule
+					{ val: "5678", rule: { port: 0 } }, // non-positive
+					"garbage",
+				],
+			};
+		};
+		const cloud = new CloudConnection("u", "p");
+		const rules = await cloud.getMicroPortRules();
+		assert.deepStrictEqual([...rules.entries()], [["1620", 4]]);
+	});
+});
+
 describe("cloudConnection – checkFirmwareUpdate validation", function () {
 	it("throws 'Invalid stationId' for 0", async function () {
 		const cloud = new CloudConnection("u", "p");

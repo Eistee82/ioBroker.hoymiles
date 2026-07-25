@@ -171,9 +171,15 @@ hoymiles.0.station-12345.info.stationName
 | `info.connected` | boolean | Device connected (local or cloud) |
 | `info.lastResponse` | number | Last response time (Unix timestamp, local only) |
 
-### `<dtuSerial>.pv0.*` / `pv1.*` / `pv2.*` / `pv3.*` — PV Panel Inputs (per DTU)
+### `<dtuSerial>.pv0.*` / `pv1.*` / … — PV Panel Inputs (per DTU)
 
-PV channels are created dynamically based on the inverter model (1T = 1 channel, 2T = 2 channels, 4T = 4 channels).
+PV channels are created dynamically, one per inverter input (`pv0` … `pv11`, 12 at most).
+
+The adapter determines how many there are, in this order:
+
+1. **Local:** from the inverter's own device information.
+2. **Cloud:** from the Hoymiles rule dictionary, looked up by the inverter's serial-number prefix — the same source the S-Miles app uses. This covers every product line, including `…-2WB` / `…-4WB`.
+3. **Fallback:** from the model name (`…-2T`, `…-4WB`, …), or from the number of strings that actually show up in the live data.
 
 | State | Type | Unit | Description |
 |-------|------|------|-------------|

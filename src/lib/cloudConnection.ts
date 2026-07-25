@@ -385,6 +385,10 @@ class CloudConnection {
 	private stationAkMap: Map<number, string>;
 	/** Endpoint labels already dumped by `logResponseSample` — keeps the diag dump to once each. */
 	private loggedSamples: Set<string>;
+	/** Serial-prefix → PV-port count, fetched once per session. See {@link getMicroPortRules}. */
+	private microPortRules: Map<string, number> | null;
+	/** In-flight dictionary fetch, so concurrent callers share one request. */
+	private microPortRulesPromise: Promise<Map<string, number>> | null;
 
 	private assertStationId(stationId: number): void {
 		if (!stationId || stationId <= 0) {
@@ -412,6 +416,8 @@ class CloudConnection {
 		this.stationDcMap = new Map();
 		this.stationAkMap = new Map();
 		this.loggedSamples = new Set();
+		this.microPortRules = null;
+		this.microPortRulesPromise = null;
 	}
 
 	/**
@@ -966,6 +972,61 @@ class CloudConnection {
 		}
 		const raw = assertData<unknown[]>(result.data ?? [], "Device tree");
 		return isHome ? raw.map(node => normalizeHomeTreeNode(node)) : (raw as CloudDeviceNode[]);
+	}
+
+	/**
+	 * PV-port count per micro-inverter serial prefix, from the cloud's micro-rule dictionary.
+	 *
+	 * This is how the S-Miles app itself sizes an inverter's strings — it never parses the
+	 * model name (`MicroRulesCache.f()` looks the serial's 4-char, then 3-char prefix up in
+	 * the dictionary it loads once at startup). Endpoint verified live 2026-07-22: it lives
+	 * under `/dict/pub/`, answers **without** a token, and returned 91 rules with port counts
+	 * of 1, 2, 4, 6, 8 and 12 — e.g. `1610` (HMS-800-2WB) → 2, `1620` (HMS-2000-4WB) → 4.
+	 *
+	 * Fetched once per session; the dictionary is static vendor data. Failures are swallowed
+	 * into an empty map — callers fall back to their own heuristic rather than losing data.
+	 *
+	 * @returns Map of serial prefix (3 or 4 chars) to port count. Empty if unavailable.
+	 */
+	async getMicroPortRules(): Promise<Map<string, number>> {
+		if (this.microPortRules) {
+			return this.microPortRules;
+		}
+		if (!this.microPortRulesPromise) {
+			this.microPortRulesPromise = this.fetchMicroPortRules().finally(() => {
+				this.microPortRulesPromise = null;
+			});
+		}
+		return this.microPortRulesPromise;
+	}
+
+	private async fetchMicroPortRules(): Promise<Map<string, number>> {
+		const rules = new Map<string, number>();
+		try {
+			// Pinned to the default host: the dictionary is global vendor data with no station
+			// or region context. Verified 2026-07-22 that neapi and euapi return byte-identical
+			// content, so there is nothing to gain from the regional host — and the default one
+			// is the host every account can reach (login starts there).
+			const result = await this._post("/dict/pub/0/dictionary/select_micro_rule", {}, CLOUD_HOST_DEFAULT);
+			if (result.status !== "0") {
+				this.log(`[diag] Micro-rule dictionary rejected: ${result.message}`);
+				return rules;
+			}
+			for (const entry of Array.isArray(result.data) ? result.data : []) {
+				const e = entry as { val?: unknown; rule?: { port?: unknown } };
+				const prefix = typeof e?.val === "string" ? e.val : "";
+				const port = typeof e?.rule?.port === "number" ? e.rule.port : 0;
+				if (prefix && port > 0) {
+					rules.set(prefix, port);
+				}
+			}
+			this.log(`[diag] Micro-rule dictionary: ${rules.size} serial prefixes`);
+		} catch (err) {
+			this.log(`[diag] Micro-rule dictionary failed: ${errorMessage(err)}`);
+			return rules;
+		}
+		this.microPortRules = rules;
+		return rules;
 	}
 
 	/**

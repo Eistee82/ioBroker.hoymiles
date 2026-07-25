@@ -34,6 +34,7 @@ function makeMockCloud() {
 		checkFirmwareUpdate: async () => ({ upgrade: 0 }),
 		getMicroRealtimeData: async () => ({}),
 		getModuleRealtimeData: async () => ({}),
+		getMicroPortRules: async () => new Map(),
 	};
 }
 
@@ -736,6 +737,265 @@ describe("CloudPoller – pollDevicesAndInverters", function () {
 
 		// Verify state writes
 		assert.strictEqual(stateWrites["DTU_SN_1.info.connected"], true);
+		poller.stop();
+	});
+
+	it("polls all four PV ports of a WB-series inverter (HMS-2000-4WB)", async function () {
+		// Regression: the port count used to be parsed with /(\d+)T$/, which does not match
+		// the WB series ("HMS-2000-4WB") and silently fell back to 2 ports — strings 3 and 4
+		// then never received voltage/current. Reported at
+		// https://forum.iobroker.net/topic/84475/.../43
+		const moduleCalls = [];
+		const createdPvCounts = [];
+
+		const cloud = makeMockCloud();
+		cloud.ensureToken = async () => {};
+		cloud.getStationRealtime = async () => ({
+			real_power: "200",
+			today_eq: "1000",
+			month_eq: "5000",
+			year_eq: "20000",
+			total_eq: "100000",
+			co2_emission_reduction: "500",
+			plant_tree: "2",
+		});
+		cloud.getStationDetails = async () => ({});
+		cloud.getDeviceTree = async () => [
+			{
+				sn: "DTU_SN_1",
+				id: 10,
+				children: [
+					{
+						sn: "INV_SN_1",
+						id: 100,
+						model_no: "HMS-2000-4WB",
+						warn_data: { connect: true },
+					},
+				],
+			},
+		];
+		cloud.getMicroRealtimeData = async () => ({ MI_POWER: 900 });
+		cloud.getModuleRealtimeData = async (sid, invId, port) => {
+			moduleCalls.push(port);
+			return { MODULE_POWER: 225, MODULE_V: 33.2, MODULE_I: 6.8 };
+		};
+
+		const adapter = makeMockAdapter();
+		const devices = new Map();
+		devices.set("DTU_SN_1", {
+			dtuSerial: "DTU_SN_1",
+			cloudStationId: 42,
+			connection: null,
+			pvStatesCreated: false,
+			pvCount: 0,
+			setCloudInverterSn: () => {},
+			createPvStates: async count => {
+				createdPvCounts.push(count);
+			},
+		});
+
+		const poller = makePoller({
+			cloud,
+			adapter,
+			devices,
+			stationDevices: new Set([42]),
+			slowPollFactor: 1,
+		});
+
+		await poller.poll();
+
+		assert.deepStrictEqual(
+			moduleCalls.sort((a, b) => a - b),
+			[1, 2, 3, 4],
+			"all four PV ports of a 4WB inverter must be polled",
+		);
+		assert.deepStrictEqual(createdPvCounts, [4], "four PV state channels must be created");
+		poller.stop();
+	});
+
+	it("prefers the cloud micro-rule dictionary over the model-name heuristic", async function () {
+		// The dictionary (serial prefix → rule.port) is what the S-Miles app itself uses.
+		// Where it disagrees with the model name, it wins: here the name says 2T while the
+		// serial's prefix is registered with four ports.
+		const moduleCalls = [];
+
+		const cloud = makeMockCloud();
+		cloud.ensureToken = async () => {};
+		cloud.getStationRealtime = async () => ({
+			real_power: "200",
+			today_eq: "0",
+			month_eq: "0",
+			year_eq: "0",
+			total_eq: "0",
+			co2_emission_reduction: "0",
+			plant_tree: "0",
+		});
+		cloud.getStationDetails = async () => ({});
+		cloud.getDeviceTree = async () => [
+			{
+				sn: "DTU_SN_1",
+				id: 10,
+				children: [{ sn: "1620ABCDEF01", id: 100, model_no: "HMS-800W-2T", warn_data: { connect: true } }],
+			},
+		];
+		cloud.getMicroPortRules = async () => new Map([["1620", 4]]);
+		cloud.getMicroRealtimeData = async () => ({ MI_POWER: 900 });
+		cloud.getModuleRealtimeData = async (sid, invId, port) => {
+			moduleCalls.push(port);
+			return { MODULE_V: 33.2, MODULE_I: 6.8 };
+		};
+
+		const adapter = makeMockAdapter();
+		const devices = new Map();
+		devices.set("DTU_SN_1", {
+			dtuSerial: "DTU_SN_1",
+			cloudStationId: 42,
+			connection: null,
+			pvStatesCreated: false,
+			pvCount: 0,
+			setCloudInverterSn: () => {},
+			createPvStates: async () => {},
+		});
+
+		const poller = makePoller({
+			cloud,
+			adapter,
+			devices,
+			stationDevices: new Set([42]),
+			slowPollFactor: 1,
+		});
+
+		await poller.poll();
+
+		assert.deepStrictEqual(
+			moduleCalls.sort((a, b) => a - b),
+			[1, 2, 3, 4],
+			"the dictionary port count must override the model-name guess",
+		);
+		poller.stop();
+	});
+
+	it("does not cap an inverter with more than six strings", async function () {
+		// The live micro-rule dictionary (2026-07-22) contains rules with 8 and 12 ports.
+		// Capping at 6 would silently drop the remaining strings.
+		const moduleCalls = [];
+
+		const cloud = makeMockCloud();
+		cloud.ensureToken = async () => {};
+		cloud.getStationRealtime = async () => ({
+			real_power: "200",
+			today_eq: "0",
+			month_eq: "0",
+			year_eq: "0",
+			total_eq: "0",
+			co2_emission_reduction: "0",
+			plant_tree: "0",
+		});
+		cloud.getStationDetails = async () => ({});
+		cloud.getDeviceTree = async () => [
+			{
+				sn: "DTU_SN_1",
+				id: 10,
+				children: [{ sn: "1520ABCDEF01", id: 100, model_no: "HMT-XXXX", warn_data: { connect: true } }],
+			},
+		];
+		cloud.getMicroPortRules = async () => new Map([["1520", 8]]);
+		cloud.getMicroRealtimeData = async () => ({ MI_POWER: 900 });
+		cloud.getModuleRealtimeData = async (sid, invId, port) => {
+			moduleCalls.push(port);
+			return { MODULE_V: 33.2, MODULE_I: 6.8 };
+		};
+
+		const adapter = makeMockAdapter();
+		const devices = new Map();
+		devices.set("DTU_SN_1", {
+			dtuSerial: "DTU_SN_1",
+			cloudStationId: 42,
+			connection: null,
+			pvStatesCreated: false,
+			pvCount: 0,
+			setCloudInverterSn: () => {},
+			createPvStates: async () => {},
+		});
+
+		const poller = makePoller({
+			cloud,
+			adapter,
+			devices,
+			stationDevices: new Set([42]),
+			slowPollFactor: 1,
+		});
+
+		await poller.poll();
+
+		assert.deepStrictEqual(
+			moduleCalls.sort((a, b) => a - b),
+			[1, 2, 3, 4, 5, 6, 7, 8],
+			"an 8-string inverter must have all eight strings polled",
+		);
+		poller.stop();
+	});
+
+	it("polls as many PV ports as the burst poller has already discovered when the model name is unknown", async function () {
+		// The burst poller derives the live string count from the data itself and grows
+		// dtuDev.pvCount. If the model name yields no (or a smaller) count, that discovery
+		// must still widen the voltage/current polling — otherwise the extra strings keep
+		// power but never get V/I.
+		const moduleCalls = [];
+
+		const cloud = makeMockCloud();
+		cloud.ensureToken = async () => {};
+		cloud.getStationRealtime = async () => ({
+			real_power: "200",
+			today_eq: "0",
+			month_eq: "0",
+			year_eq: "0",
+			total_eq: "0",
+			co2_emission_reduction: "0",
+			plant_tree: "0",
+		});
+		cloud.getStationDetails = async () => ({});
+		cloud.getDeviceTree = async () => [
+			{
+				sn: "DTU_SN_1",
+				id: 10,
+				children: [{ sn: "INV_SN_1", id: 100, model_no: "HMS-2000-SOMETHING", warn_data: { connect: true } }],
+			},
+		];
+		cloud.getMicroRealtimeData = async () => ({ MI_POWER: 900 });
+		cloud.getModuleRealtimeData = async (sid, invId, port) => {
+			moduleCalls.push(port);
+			return { MODULE_V: 33.2, MODULE_I: 6.8 };
+		};
+
+		const adapter = makeMockAdapter();
+		const devices = new Map();
+		devices.set("DTU_SN_1", {
+			dtuSerial: "DTU_SN_1",
+			cloudStationId: 42,
+			connection: null,
+			pvStatesCreated: true, // burst poller already created the states
+			pvCount: 4, // …and discovered four live strings
+			burstActive: true,
+			setCloudInverterSn: () => {},
+			createPvStates: async () => {},
+		});
+
+		const poller = makePoller({
+			cloud,
+			adapter,
+			devices,
+			stationDevices: new Set([42]),
+			slowPollFactor: 1,
+		});
+
+		await poller.poll();
+
+		assert.deepStrictEqual(
+			moduleCalls.sort((a, b) => a - b),
+			[1, 2, 3, 4],
+			"the burst-discovered string count must widen the module polling",
+		);
 		poller.stop();
 	});
 

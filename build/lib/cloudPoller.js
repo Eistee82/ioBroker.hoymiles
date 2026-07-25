@@ -1,4 +1,5 @@
 import { toKwh } from "./convert.js";
+import { MAX_PV_PORTS } from "./deviceContext.js";
 import { CLOUD_POLL_CONCURRENCY, CLOUD_STATION_STALE_MS, DEFAULT_POLL_MS, MIN_POLL_MS, RELAY_POLL_DELAY_MS, } from "./constants.js";
 import { formatDtuVersion, formatSwVersion } from "./protobufHandler.js";
 import { anonymize, deriveStationTzOffsetMs, errorMessage, logOnError, mapLimit, stationWallClockToEpoch, } from "./utils.js";
@@ -26,7 +27,7 @@ const WEATHER_DESCRIPTIONS = {
     "50n": { en: "Mist/Fog", de: "Nebel" },
 };
 class CloudPoller {
-    static PORT_COUNT_RE = /(\d+)T$/;
+    static PORT_COUNT_RE = /(\d+)\s*(?:T|WB)$/i;
     cloud;
     adapter;
     devices;
@@ -541,11 +542,11 @@ class CloudPoller {
                 }
                 const pvTasks = [];
                 const children = dtu.children || [];
+                const portRules = await this.cloud.getMicroPortRules();
                 if (!dtuDev.pvStatesCreated && children.length > 0) {
-                    let maxPorts = dtuDev.pvCount;
+                    let maxPorts = 0;
                     for (const inv of children) {
-                        const m = CloudPoller.PORT_COUNT_RE.exec(inv.model_no || "");
-                        maxPorts = Math.max(maxPorts, Math.min(Math.max(m ? parseInt(m[1], 10) : 2, 1), 6));
+                        maxPorts = Math.max(maxPorts, this.resolvePortCount(inv, portRules, dtuDev.pvCount));
                     }
                     if (maxPorts > 0) {
                         await dtuDev.createPvStates(maxPorts, true);
@@ -556,11 +557,7 @@ class CloudPoller {
                     if (!inv.id) {
                         continue;
                     }
-                    const portMatch = CloudPoller.PORT_COUNT_RE.exec(inv.model_no || "");
-                    if (!portMatch) {
-                        this.adapter.log.debug(`Could not extract port count from model "${inv.model_no}", using default: 2`);
-                    }
-                    const portCount = Math.min(Math.max(portMatch ? parseInt(portMatch[1], 10) : 2, 1), 6);
+                    const portCount = this.resolvePortCount(inv, portRules, dtuDev.pvCount);
                     for (let p = 1; p <= portCount; p++) {
                         pvTasks.push(this.cloud
                             .getModuleRealtimeData(stationId, inv.id, p, today, [
@@ -597,6 +594,21 @@ class CloudPoller {
                 this.lastFirmwareCheckDay.delete(sid);
             }
         }
+    }
+    resolvePortCount(inv, portRules, knownPvCount) {
+        const sn = inv.sn || "";
+        const fromRules = portRules.get(sn.slice(0, 4)) ?? portRules.get(sn.slice(0, 3));
+        if (fromRules) {
+            return Math.min(fromRules, MAX_PV_PORTS);
+        }
+        const known = Number.isFinite(knownPvCount) ? knownPvCount : 0;
+        const match = CloudPoller.PORT_COUNT_RE.exec(inv.model_no || "");
+        if (!match) {
+            this.adapter.log.debug(`No port rule for serial prefix and no port count in model "${inv.model_no}", ` +
+                `falling back to ${Math.max(known, 2)}`);
+        }
+        const fromModel = match ? parseInt(match[1], 10) : 2;
+        return Math.min(Math.max(fromModel, known, 1), MAX_PV_PORTS);
     }
     async setPvStates(cs, sn, pvIndex, modValues, skipPower = false) {
         if (!modValues) {
