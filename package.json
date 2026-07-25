@@ -62,8 +62,10 @@
       "form-data": "^4.0.6"
     },
     "deepl-node": {
-      "form-data": "^3.0.5"
-    }
+      "form-data": "^3.0.5",
+      "adm-zip": "^0.6.0"
+    },
+    "brace-expansion@1": "1.1.16"
   },
   "devDependencies": {
     "@alcalzone/release-script": "^5.2.1",
