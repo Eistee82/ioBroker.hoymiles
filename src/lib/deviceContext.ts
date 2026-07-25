@@ -15,6 +15,7 @@ import { decodeGridProfile, byteSwap16 } from "./gridProfile.js";
 import { INFO_FALLBACK_TIMEOUT_MS, SCALE_POWER, CLOUD_DEV_TYPE_DTU } from "./constants.js";
 import { whToKwh } from "./convert.js";
 import { errorMessage, safeJsonStringify, unixSeconds } from "./utils.js";
+import { inverterIcon } from "./deviceIcons.js";
 
 /**
  * Maximum number of PV ports supported by any Hoymiles inverter model. Upper bound of the
@@ -388,7 +389,10 @@ class DeviceContext {
 			common: {
 				name: `DTU ${this.deviceId}`,
 				statusStates: { onlineId: "info.connected" },
-				icon: "hoymiles.png",
+				// Model isn't known at creation (it arrives later from the cloud), so use the
+				// default micro-inverter icon — correct for the HMS line (incl. WB), which is
+				// the overwhelming majority. The Device Manager card refines this per model.
+				icon: inverterIcon(""),
 			},
 			native: { host: this.host },
 		});

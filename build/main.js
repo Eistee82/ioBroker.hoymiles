@@ -8,12 +8,14 @@ import { discoverDtus, probeHost } from "./lib/networkDiscovery.js";
 import { destroyAgent } from "./lib/httpClient.js";
 import { DISCOVERY_CONCURRENCY, DISCOVERY_TIMEOUT_MS, PROBE_TIMEOUT_MS } from "./lib/constants.js";
 import { anonymize, errorMessage, mapLimit } from "./lib/utils.js";
+import { HoymilesDeviceManagement } from "./lib/deviceManagement.js";
 class Hoymiles extends utils.Adapter {
     devices;
     localContexts;
     cloudManager;
     sharedProtobuf;
     lastConnectionState;
+    deviceManagement;
     constructor(options = {}) {
         super({ ...options, name: "hoymiles", useFormatDate: true });
         this.on("ready", this.onReady.bind(this));
@@ -24,6 +26,7 @@ class Hoymiles extends utils.Adapter {
         this.localContexts = [];
         this.cloudManager = null;
         this.sharedProtobuf = null;
+        this.deviceManagement = new HoymilesDeviceManagement(this);
     }
     async onReady() {
         const cfg = this.config;
@@ -195,6 +198,9 @@ class Hoymiles extends utils.Adapter {
         }
     }
     onMessage(obj) {
+        if (typeof obj?.command === "string" && obj.command.startsWith("dm:")) {
+            return;
+        }
         if (typeof obj === "object" && obj.command) {
             if (obj.command === "discover") {
                 void this.handleDiscover(obj).catch(err => this.log.error(`Discover failed: ${errorMessage(err)}`));
@@ -321,29 +327,7 @@ class Hoymiles extends utils.Adapter {
             this.log.info(`[testCloudLogin] starting diagnostics for ${anonymize(user, "acct")}`);
             const cloud = new CloudConnection(user, password, m => this.log.debug(`[testCloudLogin] ${m}`));
             const results = await cloud.loginDiagnostics();
-            const summary = results
-                .map(r => {
-                const head = `${r.flow}@${new URL(r.host).host}`;
-                if (r.flow === "region") {
-                    return r.ok
-                        ? `${head}: ok (dc=${r.dc ?? "n/a"})`
-                        : `${head}: failed${r.status ? ` status=${r.status}` : ""}${r.message ? ` "${r.message}"` : ""}`;
-                }
-                if (r.flow === "preInsp") {
-                    return r.ok
-                        ? `${head}: ok (v=${r.v ?? "?"} salt=${r.saltPresent ? "yes" : "no"})`
-                        : `${head}: failed${r.status ? ` status=${r.status}` : ""}${r.message ? ` "${r.message}"` : ""}`;
-                }
-                if (r.flow === "probe") {
-                    return r.ok
-                        ? `${head}: profile=${r.profile ?? "?"}${r.status ? ` (status=${r.status})` : ""}`
-                        : `${head}: probe failed${r.message ? ` "${r.message}"` : ""}`;
-                }
-                return r.ok
-                    ? `${head}: ACCEPTED (token received)`
-                    : `${head}: rejected${r.status ? ` status=${r.status}` : ""}${r.message ? ` "${r.message}"` : ""}`;
-            })
-                .join(" | ");
+            const summary = this.formatLoginDiagnostics(results);
             this.log.info(`[testCloudLogin] result for ${anonymize(user, "acct")}: ${summary}`);
             const anyAccepted = results.some(r => r.flow === "login" && r.ok);
             this.reply(obj, {
@@ -358,6 +342,61 @@ class Hoymiles extends utils.Adapter {
         catch (err) {
             this.log.error(`[testCloudLogin] unexpected error: ${errorMessage(err)}`);
             this.reply(obj, { error: errorMessage(err) });
+        }
+    }
+    formatLoginDiagnostics(results) {
+        return results
+            .map(r => {
+            const head = `${r.flow}@${new URL(r.host).host}`;
+            if (r.flow === "region") {
+                return r.ok
+                    ? `${head}: ok (dc=${r.dc ?? "n/a"})`
+                    : `${head}: failed${r.status ? ` status=${r.status}` : ""}${r.message ? ` "${r.message}"` : ""}`;
+            }
+            if (r.flow === "preInsp") {
+                return r.ok
+                    ? `${head}: ok (v=${r.v ?? "?"} salt=${r.saltPresent ? "yes" : "no"})`
+                    : `${head}: failed${r.status ? ` status=${r.status}` : ""}${r.message ? ` "${r.message}"` : ""}`;
+            }
+            if (r.flow === "probe") {
+                return r.ok
+                    ? `${head}: profile=${r.profile ?? "?"}${r.status ? ` (status=${r.status})` : ""}`
+                    : `${head}: probe failed${r.message ? ` "${r.message}"` : ""}`;
+            }
+            return r.ok
+                ? `${head}: ACCEPTED (token received)`
+                : `${head}: rejected${r.status ? ` status=${r.status}` : ""}${r.message ? ` "${r.message}"` : ""}`;
+        })
+            .join(" | ");
+    }
+    async dmScanNetwork() {
+        try {
+            const found = await discoverDtus(DISCOVERY_TIMEOUT_MS, DISCOVERY_CONCURRENCY);
+            if (found.length === 0) {
+                return "No DTUs found on the local network.";
+            }
+            return `Found ${found.length} DTU(s): ${found
+                .map(d => `${d.host}${d.dtuSerial ? ` (${d.dtuSerial})` : ""}`)
+                .join(", ")}`;
+        }
+        catch (err) {
+            return `Network scan failed: ${errorMessage(err)}`;
+        }
+    }
+    async dmTestCloudLogin() {
+        const cfg = this.config;
+        const user = (cfg.cloudUser ?? "").trim();
+        const password = cfg.cloudPassword ?? "";
+        if (!user || !password) {
+            return "Cloud is not configured.";
+        }
+        try {
+            const cloud = new CloudConnection(user, password, m => this.log.debug(`[dm testCloudLogin] ${m}`));
+            const results = await cloud.loginDiagnostics();
+            return this.formatLoginDiagnostics(results);
+        }
+        catch (err) {
+            return `Cloud login test failed: ${errorMessage(err)}`;
         }
     }
     onUnload(callback) {

@@ -9,6 +9,7 @@ import { decodeGridProfile, byteSwap16 } from "./gridProfile.js";
 import { INFO_FALLBACK_TIMEOUT_MS, SCALE_POWER, CLOUD_DEV_TYPE_DTU } from "./constants.js";
 import { whToKwh } from "./convert.js";
 import { errorMessage, safeJsonStringify, unixSeconds } from "./utils.js";
+import { inverterIcon } from "./deviceIcons.js";
 export const MAX_PV_PORTS = 12;
 const PV_FIELDS_BASE = [
     { suffix: "power", en: "power", de: "Leistung", role: "value.power", unit: "W" },
@@ -213,7 +214,7 @@ class DeviceContext {
             common: {
                 name: `DTU ${this.deviceId}`,
                 statusStates: { onlineId: "info.connected" },
-                icon: "hoymiles.png",
+                icon: inverterIcon(""),
             },
             native: { host: this.host },
         });

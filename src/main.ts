@@ -8,6 +8,7 @@ import { discoverDtus, probeHost } from "./lib/networkDiscovery.js";
 import { destroyAgent } from "./lib/httpClient.js";
 import { DISCOVERY_CONCURRENCY, DISCOVERY_TIMEOUT_MS, PROBE_TIMEOUT_MS } from "./lib/constants.js";
 import { anonymize, errorMessage, mapLimit } from "./lib/utils.js";
+import { HoymilesDeviceManagement } from "./lib/deviceManagement.js";
 
 interface DeviceConfig {
 	host: string;
@@ -39,6 +40,12 @@ class Hoymiles extends utils.Adapter {
 	/** Cached connection state to avoid redundant setStateAsync calls. */
 	private lastConnectionState: boolean | undefined;
 
+	/**
+	 * ioBroker Device Manager backend. Held to keep the instance alive; it binds its own `dm:*`
+	 * message handler in its constructor and reads devices lazily from the object DB.
+	 */
+	readonly deviceManagement: HoymilesDeviceManagement;
+
 	constructor(options: Partial<utils.AdapterOptions> = {}) {
 		// useFormatDate makes `this.language` (the ioBroker system language) available, which the
 		// alarm handling uses to localize warn messages instead of hard-coding a single language.
@@ -52,6 +59,13 @@ class Hoymiles extends utils.Adapter {
 		this.localContexts = [];
 		this.cloudManager = null;
 		this.sharedProtobuf = null;
+
+		// Device Manager backend. Constructed here (not in onReady) because dm-utils binds its
+		// message handler in its own constructor. Intentionally without a communication-state id:
+		// passing one makes dm-utils touch the object DB from the constructor (before the adapter
+		// is connected), which crashes the process. The tab loads via loadDevices on open and the
+		// "Refresh" instance action reloads on demand — no GUI push needed.
+		this.deviceManagement = new HoymilesDeviceManagement(this);
 	}
 
 	private async onReady(): Promise<void> {
@@ -319,6 +333,11 @@ class Hoymiles extends utils.Adapter {
 	 * @param obj - The message object from admin
 	 */
 	private onMessage(obj: ioBroker.Message): void {
+		// Device Manager messages (`dm:*`) are handled by the dm-utils base class, which binds
+		// its own message listener. Let them pass through untouched instead of replying "unknown".
+		if (typeof obj?.command === "string" && obj.command.startsWith("dm:")) {
+			return;
+		}
 		if (typeof obj === "object" && obj.command) {
 			if (obj.command === "discover") {
 				void this.handleDiscover(obj).catch(err => this.log.error(`Discover failed: ${errorMessage(err)}`));
@@ -480,29 +499,7 @@ class Hoymiles extends utils.Adapter {
 
 			// Compose human-readable summary, log it (so forum users can copy from logs),
 			// and return raw results to the UI.
-			const summary = results
-				.map(r => {
-					const head = `${r.flow}@${new URL(r.host).host}`;
-					if (r.flow === "region") {
-						return r.ok
-							? `${head}: ok (dc=${r.dc ?? "n/a"})`
-							: `${head}: failed${r.status ? ` status=${r.status}` : ""}${r.message ? ` "${r.message}"` : ""}`;
-					}
-					if (r.flow === "preInsp") {
-						return r.ok
-							? `${head}: ok (v=${r.v ?? "?"} salt=${r.saltPresent ? "yes" : "no"})`
-							: `${head}: failed${r.status ? ` status=${r.status}` : ""}${r.message ? ` "${r.message}"` : ""}`;
-					}
-					if (r.flow === "probe") {
-						return r.ok
-							? `${head}: profile=${r.profile ?? "?"}${r.status ? ` (status=${r.status})` : ""}`
-							: `${head}: probe failed${r.message ? ` "${r.message}"` : ""}`;
-					}
-					return r.ok
-						? `${head}: ACCEPTED (token received)`
-						: `${head}: rejected${r.status ? ` status=${r.status}` : ""}${r.message ? ` "${r.message}"` : ""}`;
-				})
-				.join(" | ");
+			const summary = this.formatLoginDiagnostics(results);
 
 			this.log.info(`[testCloudLogin] result for ${anonymize(user, "acct")}: ${summary}`);
 
@@ -518,6 +515,76 @@ class Hoymiles extends utils.Adapter {
 		} catch (err) {
 			this.log.error(`[testCloudLogin] unexpected error: ${errorMessage(err)}`);
 			this.reply(obj, { error: errorMessage(err) });
+		}
+	}
+
+	/**
+	 * Format cloud login-diagnostic results into a one-line human summary. Shared by the admin
+	 * "Test cloud login" button and the Device Manager instance action.
+	 *
+	 * @param results - Per-flow diagnostic results from {@link CloudConnection.loginDiagnostics}.
+	 */
+	private formatLoginDiagnostics(results: Awaited<ReturnType<CloudConnection["loginDiagnostics"]>>): string {
+		return results
+			.map(r => {
+				const head = `${r.flow}@${new URL(r.host).host}`;
+				if (r.flow === "region") {
+					return r.ok
+						? `${head}: ok (dc=${r.dc ?? "n/a"})`
+						: `${head}: failed${r.status ? ` status=${r.status}` : ""}${r.message ? ` "${r.message}"` : ""}`;
+				}
+				if (r.flow === "preInsp") {
+					return r.ok
+						? `${head}: ok (v=${r.v ?? "?"} salt=${r.saltPresent ? "yes" : "no"})`
+						: `${head}: failed${r.status ? ` status=${r.status}` : ""}${r.message ? ` "${r.message}"` : ""}`;
+				}
+				if (r.flow === "probe") {
+					return r.ok
+						? `${head}: profile=${r.profile ?? "?"}${r.status ? ` (status=${r.status})` : ""}`
+						: `${head}: probe failed${r.message ? ` "${r.message}"` : ""}`;
+				}
+				return r.ok
+					? `${head}: ACCEPTED (token received)`
+					: `${head}: rejected${r.status ? ` status=${r.status}` : ""}${r.message ? ` "${r.message}"` : ""}`;
+			})
+			.join(" | ");
+	}
+
+	/**
+	 * Device-Manager helper: scan the local network for DTUs and return a short human summary.
+	 * Report-only — it does not modify the configured device list (unlike the admin discover button).
+	 */
+	public async dmScanNetwork(): Promise<string> {
+		try {
+			const found = await discoverDtus(DISCOVERY_TIMEOUT_MS, DISCOVERY_CONCURRENCY);
+			if (found.length === 0) {
+				return "No DTUs found on the local network.";
+			}
+			return `Found ${found.length} DTU(s): ${found
+				.map(d => `${d.host}${d.dtuSerial ? ` (${d.dtuSerial})` : ""}`)
+				.join(", ")}`;
+		} catch (err) {
+			return `Network scan failed: ${errorMessage(err)}`;
+		}
+	}
+
+	/**
+	 * Device-Manager helper: run cloud login diagnostics for the configured credentials and
+	 * return the same one-line summary the admin "Test cloud login" button produces.
+	 */
+	public async dmTestCloudLogin(): Promise<string> {
+		const cfg = this.config as HoymilesConfig;
+		const user = (cfg.cloudUser ?? "").trim();
+		const password = cfg.cloudPassword ?? "";
+		if (!user || !password) {
+			return "Cloud is not configured.";
+		}
+		try {
+			const cloud = new CloudConnection(user, password, m => this.log.debug(`[dm testCloudLogin] ${m}`));
+			const results = await cloud.loginDiagnostics();
+			return this.formatLoginDiagnostics(results);
+		} catch (err) {
+			return `Cloud login test failed: ${errorMessage(err)}`;
 		}
 	}
 
