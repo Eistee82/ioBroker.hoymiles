@@ -6,6 +6,7 @@ import type { ProtobufHandler } from "./protobufHandler.js";
 import { stationChannels } from "./stateDefinitions.js";
 import { CLOUD_DISCOVER_CONCURRENCY, CLOUD_RETRY_INITIAL_MS, CLOUD_RETRY_MAX_MS } from "./constants.js";
 import { errorMessage, mapLimit } from "./utils.js";
+import { STATION_ICON } from "./deviceIcons.js";
 
 interface CloudManagerOptions {
 	adapter: HoymilesAdapter;
@@ -428,7 +429,7 @@ class CloudManager {
 			common: {
 				name: stationName,
 				statusStates: { onlineId: "info.stationStatus" },
-				icon: "hoymiles.png",
+				icon: STATION_ICON,
 			},
 			native: { stationId },
 		});

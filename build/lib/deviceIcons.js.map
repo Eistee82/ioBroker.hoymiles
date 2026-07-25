@@ -1,0 +1,1 @@
+{"version":3,"file":"deviceIcons.js","sourceRoot":"","sources":["../../src/lib/deviceIcons.ts"],"names":[],"mappings":"AAmBA,MAAM,UAAU,GACf,gmIAAgmI,CAAC;AAElmI,MAAM,gBAAgB,GACrB,o1HAAo1H,CAAC;AAGt1H,MAAM,CAAC,MAAM,YAAY,GACxB,4lIAA4lI,CAAC;AAQ9lI,MAAM,UAAU,YAAY,CAAC,KAAa;IACzC,OAAO,MAAM,CAAC,IAAI,CAAC,KAAK,CAAC,CAAC,CAAC,CAAC,gBAAgB,CAAC,CAAC,CAAC,UAAU,CAAC;AAC3D,CAAC"}

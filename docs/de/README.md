@@ -86,6 +86,34 @@ Login ist ein einzelner v3-Flow plus anschließender Profil-Probe (`region_c →
 
 Wenn unsicher: Knopf **Cloud-Login testen** neben dem Passwortfeld klicken. Er läuft die vier Phasen einmal mit den aktuellen Zugangsdaten durch (`region_c`, `pre-insp`, `login`, `probe`) und meldet `v` und Salt-Vorhandensein aus pre-insp, ob der Login einen Token produziert hat und welches Profil die Probe zuweist (`installer` / `home`). Das Ergebnis steht im Adapter-Log — gut für Forum-Bug-Reports. Der Test speichert keinen Token und ändert keinen Adapter-Zustand.
 
+## Geräte-Manager
+
+Der Adapter ist in den ioBroker-**Geräte-Manager** eingebunden: Jeder Wechselrichter und jede Cloud-Station erscheint als Kachel im *Geräte-Manager*-Tab der Admin-Oberfläche — mit Live-Status, Bedienelementen und einem Einstellungsdialog, ohne dass du eine eigene VIS-Ansicht bauen musst.
+
+**Was angezeigt wird**
+
+- Jede **DTU/Wechselrichter** (`<dtuSerial>`) und jede **Cloud-Station** (`station-<id>`), die der Adapter angelegt hat.
+- Eine Live-**Verbindungsanzeige** (grün/rot) und bei lokal verbundenen DTUs die WLAN-Signalstärke. Der Kacheltitel nutzt den Namen der Anlage, zu der der Wechselrichter gehört — den Namen, den du in der S-Miles-App vergeben hast — plus die DTU-Seriennummer (z. B. `Zuhause · 4143A01CEDE4`), wodurch jeder Wechselrichter eindeutig bleibt; ohne Anlage wird auf den Modellnamen oder die Seriennummer zurückgegriffen.
+- **Live-Werte direkt auf der Kachel:** aktuelle Leistung (W), Tagesenergie (kWh), die Leistung jedes tatsächlich vorhandenen PV-Strangs (eine Zeile pro Strang) und die Wechselrichter-Temperatur — alles automatisch aktualisiert. Stationen zeigen die aggregierte Leistung und Energie.
+- Ein **Geräte-Icon** je Typ — flacher Mikro-Wechselrichter, hochkant dreiphasiger Wechselrichter (HMT-Reihe) oder Anlage/Station. Es sind eigene, neutrale Icons für den Adapter, keine Hersteller-Produktbilder. Dieselben Icons werden auch für die Geräte-Objekte im Objektbaum verwendet.
+- Ein **Firmware-Update-Hinweis**, wenn die Cloud eines meldet (aus `dtu.fwUpdateAvailable`).
+- Ein **„Mehr"**-Knopf öffnet eine schreibgeschützte Detailansicht (Seriennummern, Hardware-/Software-Versionen, Modell, Signalstärke; bei Stationen Leistung, Status und Standort).
+
+**Bedienelemente** (auf jeder Wechselrichter-Kachel)
+
+Die Kachel spiegelt die schreibbaren Datenpunkte, ein Klick läuft also über den normalen Befehlsweg (lokaler TCP-Link bevorzugt, Cloud als Fallback):
+
+- **Schalter:** Wechselrichter ein/aus, Wechselrichter sperren.
+- **Schieberegler / Zahlen:** Leistungslimit (Laufzeit), Leistungsfaktor-Limit, Blindleistungs-Limit, persistentes Leistungslimit, Cloud-Sendeintervall.
+- **Knöpfe (mit Bestätigung):** Wechselrichter neustarten, DTU neustarten, Warnungen löschen, Erdungsfehler löschen.
+- **Einstellungen** (Knopf, lokale Geräte): ein Dialog, um Cloud-Sendeintervall und persistentes Leistungslimit gemeinsam zu ändern.
+
+Bei **reinen Cloud**-Wechselrichtern (keine lokale Verbindung, z. B. HMS-800-2WB) werden nur die Aktionen gezeigt, die die Cloud ausführen kann — Wechselrichter ein/aus, Wechselrichter neustarten, DTU neustarten —, weil die übrigen Befehle nur lokal möglich sind. Stationen zeigen nur Status und Details (keine Bedienelemente).
+
+**Instanz-Aktionen** (über der Geräteliste): **Netzwerk durchsuchen** sucht im LAN nach DTUs und meldet die Funde, und **Cloud-Login testen** führt die Login-Diagnose aus. (Zum Neuladen der Liste dient der eingebaute Aktualisieren-Button des Geräte-Managers.)
+
+> **Hinweis:** Erst später über die Cloud entdeckte Geräte (bis ~60 s nach dem Start) erscheinen nach einem Klick auf **Aktualisieren** oder beim erneuten Öffnen des Tabs; der Live-Status bereits gelisteter Geräte aktualisiert sich von selbst.
+
 ## Verbindungsmodi
 
 Der Adapter unterstützt verschiedene Verbindungsmodi je nach Konfiguration:

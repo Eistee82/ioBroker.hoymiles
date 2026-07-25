@@ -86,6 +86,34 @@ Login is a single v3 flow followed by a profile probe (`region_c → pre-insp �
 
 When in doubt, click the **Test cloud login** button next to the password field. It runs the four phases once with your current credentials (`region_c`, `pre-insp`, `login`, `probe`) and reports `v` and salt presence from pre-insp, whether the login produced a token, and which profile the probe assigned (`installer` / `home`). The result is logged so you can paste it into a forum bug report. The test does not store a token or change adapter state.
 
+## Device Manager
+
+The adapter integrates with the ioBroker **Device Manager**, so every inverter and cloud station appears as a card on the *Device Manager* tab in the admin UI — with live status, controls and a settings dialog, without building your own VIS view.
+
+**What is shown**
+
+- Every **DTU/inverter** (`<dtuSerial>`) and every **cloud station** (`station-<id>`) the adapter has created.
+- A live **connection indicator** (green/red), and for locally connected DTUs the WiFi signal strength. The card title uses the name of the station (plant) the inverter belongs to — the name you gave it in the S-Miles app — plus the DTU serial number (e.g. `Zuhause · 4143A01CEDE4`), which keeps every inverter distinct; without a station it falls back to the model name or the serial number.
+- **Live values right on the card:** current power (W), today's energy (kWh), the power of each PV string the inverter actually has (one line per string), and the inverter temperature — all updated automatically. Stations show the aggregated power and energy.
+- A device **icon** by type — a flat micro-inverter, an upright three-phase inverter (HMT line), or a station. These are original, neutral icons drawn for the adapter, not vendor product images. The same icons are used for the device objects in the object tree.
+- A **firmware-update indicator** when the cloud reports one (from `dtu.fwUpdateAvailable`).
+- A **"More"** button opens a read-only details panel (serial numbers, hardware/software versions, model, signal strength; for stations the capacity, status and address).
+
+**Controls** (on each inverter card)
+
+The card mirrors the writable states, so a click routes through the normal command path (local TCP link preferred, cloud fallback):
+
+- **Switches:** inverter on/off, lock inverter.
+- **Sliders / numbers:** power limit (runtime), power factor limit, reactive power limit, persistent power limit, cloud send interval.
+- **Buttons (with confirmation):** reboot inverter, reboot DTU, clear warnings, clear grounding fault.
+- **Settings** (button, local devices): a dialog to change the cloud send interval and the persistent power limit at once.
+
+For **cloud-only** inverters (no local connection, e.g. HMS-800-2WB) only the actions the cloud can actuate are shown — inverter on/off, reboot inverter, reboot DTU — because the other commands are local-only. Stations show status and details only (no controls).
+
+**Instance actions** (above the device list): **Scan network** searches the LAN for DTUs and reports what it finds, and **Test cloud login** runs the login diagnostics. (Reloading the list uses the Device Manager's own built-in refresh button.)
+
+> **Note:** Devices discovered later over the cloud (up to ~60 s after start) appear after pressing **Refresh** or reopening the tab; the live status of already-listed devices updates on its own.
+
 ## Connection Modes
 
 The adapter supports several connection modes depending on the configuration:
