@@ -2,6 +2,11 @@ import * as crypto from "node:crypto";
 export function unixSeconds() {
     return Math.floor(Date.now() / 1000);
 }
+export function localMidnight(timestampSec = unixSeconds()) {
+    const d = new Date(timestampSec * 1000);
+    d.setHours(0, 0, 0, 0);
+    return Math.floor(d.getTime() / 1000);
+}
 export function anonymize(value, prefix = "id") {
     if (!value) {
         return `${prefix}:none`;

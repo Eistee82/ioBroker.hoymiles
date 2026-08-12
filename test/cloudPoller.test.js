@@ -162,6 +162,45 @@ describe("CloudPoller – state transitions", function () {
 		assert.strictEqual(poller.pollTimer, undefined, "pollTimer should remain undefined");
 		poller.stop();
 	});
+
+	// NIGHT_MODE used to be escapable only via onLocalConnected(). A BLE-only inverter whose local
+	// link does not come back in the morning then left the adapter polling weather forever, with no
+	// cloud values at all — even though the station was uploading again.
+	it("leaves NIGHT_MODE when the station uploads again, without a local connection", async function () {
+		const cloud = makeMockCloud();
+		cloud.getStationRealtime = async () => ({
+			real_power: "180",
+			today_eq: "0",
+			total_eq: "0",
+			// Station-local wall clock; no cached tz offset in the test, so this is read as UTC.
+			data_time: new Date().toISOString().replace("T", " ").slice(0, 19),
+		});
+		const poller = makePoller({ cloud, stationDevices: new Set([1]) });
+		poller.state = "NIGHT_MODE";
+
+		await poller.nightPoll();
+
+		assert.strictEqual(poller.state, "POLLING_ACTIVE", "a fresh station upload must resume active polling");
+		poller.stop();
+	});
+
+	it("stays in NIGHT_MODE while the station upload is stale", async function () {
+		const cloud = makeMockCloud();
+		const old = new Date(Date.now() - 6 * 60 * 60 * 1000);
+		cloud.getStationRealtime = async () => ({
+			real_power: "0",
+			today_eq: "0",
+			total_eq: "0",
+			data_time: old.toISOString().replace("T", " ").slice(0, 19),
+		});
+		const poller = makePoller({ cloud, stationDevices: new Set([1]) });
+		poller.state = "NIGHT_MODE";
+
+		await poller.nightPoll();
+
+		assert.strictEqual(poller.state, "NIGHT_MODE", "a stale station must not wake the poller");
+		poller.stop();
+	});
 });
 
 // ============================================================

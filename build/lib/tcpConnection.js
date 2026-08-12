@@ -1,6 +1,6 @@
 import * as net from "node:net";
 import { EventEmitter } from "node:events";
-const NATIVE_TIMERS = {
+export const NATIVE_TIMERS = {
     setTimeout: (cb, ms) => globalThis.setTimeout(cb, ms),
     clearTimeout: handle => globalThis.clearTimeout(handle),
     setInterval: (cb, ms) => globalThis.setInterval(cb, ms),

@@ -101,6 +101,9 @@ class CloudManager {
         if (!this.adapter.devices.has(ctx.dtuSerial)) {
             this.adapter.devices.set(ctx.dtuSerial, ctx);
         }
+        if (ctx.enableLocal) {
+            this.burstPoller?.releaseDtu(ctx.dtuSerial);
+        }
         const stationId = this.pendingCloudMatches.get(ctx.dtuSerial);
         if (stationId !== undefined) {
             ctx.cloudStationId = stationId;
@@ -114,6 +117,9 @@ class CloudManager {
     onLocalConnected(ctx) {
         if (this.cloudPoller && ctx.cloudSendTimeMin > 0) {
             this.cloudPoller.setServerSendTime(ctx.cloudSendTimeMin);
+        }
+        if (ctx.dtuSerial) {
+            this.burstPoller?.releaseDtu(ctx.dtuSerial);
         }
         this.cloudPoller?.onLocalConnected();
     }

@@ -1,4 +1,6 @@
 import DtuConnection from "./dtuConnection.js";
+import BleConnection from "./bleConnection.js";
+import type { EsphomeGateway } from "./esphomeGateway.js";
 import CloudRelay from "./cloudRelay.js";
 import {
 	type ProtobufHandler,
@@ -7,14 +9,42 @@ import {
 	formatSwVersion,
 	formatInvVersion,
 } from "./protobufHandler.js";
-import { executeCommand, executeCloudCommand } from "./commandHandler.js";
+import {
+	executeCommand,
+	executeCloudCommand,
+	flashWritingStateForAction,
+	type FlashGuardOptions,
+	type FlashWriteState,
+} from "./commandHandler.js";
 import Encryption from "./encryption.js";
-import { channels, states } from "./stateDefinitions.js";
+import {
+	buildShellyBindData,
+	encodeShellyBindBody,
+	parseEnergyFlow,
+	parseMeterDevices,
+	SHELLY_DEV_TYPE_GRID,
+	SHELLY_DEV_TYPE_METER_ONLY,
+} from "./shellyProtocol.js";
+
+/** `CommCmd` carrier tag — the same one the pairing handshake uses. */
+const SHELLY_CMD_TAG = [0xa3, 0x18] as const;
+import { channels, states, meterMeasurementStates, meterControlStates, buildStateCommon } from "./stateDefinitions.js";
 import { getAlarmDescription } from "./alarmCodes.js";
 import { decodeGridProfile, byteSwap16 } from "./gridProfile.js";
-import { INFO_FALLBACK_TIMEOUT_MS, SCALE_POWER, CLOUD_DEV_TYPE_DTU } from "./constants.js";
+import EnergyGuard from "./energyGuard.js";
+import { cloudTagLabel, describeCloudTag, refusalReason } from "./cloudTranslator.js";
+import {
+	INFO_FALLBACK_TIMEOUT_MS,
+	SCALE_POWER,
+	SCALE_POWER_LIMIT_BLE,
+	SCALE_POWER_LIMIT_TCP,
+	CLOUD_DEV_TYPE_DTU,
+	POWER_LIMIT_DEADBAND_DEFAULT,
+	POWER_LIMIT_MIN_INTERVAL_SEC_DEFAULT,
+	HIST_MAX_PAGES,
+} from "./constants.js";
 import { whToKwh } from "./convert.js";
-import { errorMessage, safeJsonStringify, unixSeconds } from "./utils.js";
+import { anonymize, errorMessage, safeJsonStringify, unixSeconds } from "./utils.js";
 import { inverterIcon } from "./deviceIcons.js";
 
 /**
@@ -53,7 +83,28 @@ interface DeviceContextOptions {
 	enableCloudRelay: boolean;
 	dataInterval: number;
 	slowPollFactor: number;
+	/** Smallest power-limit change worth a flash write, in percent. 0 disables the dead band. */
+	powerLimitDeadband?: number;
+	/** Shortest gap between two power-limit flash writes, in seconds. 0 disables the throttle. */
+	powerLimitMinIntervalSec?: number;
+	/** Local transport: "tcp" (default, DTU on port 10081) or "ble" (ESPHome BLE proxy). */
+	transport?: "tcp" | "ble";
+	/** BLE-only: the ESPHome gateway that tunnels this inverter's GATT traffic. */
+	gateway?: EsphomeGateway;
+	/** BLE-only: numeric BLE address of the inverter. */
+	bleMac?: number;
+	/** BLE-only: serial-number bytes for the SN-CBC bootstrap. */
+	bleSn?: Buffer;
+	/** BLE-only: pairing PIN. */
+	blePin?: string;
+	/** BLE-only: advertised BLE address type (0 = public, 1 = random); needed for the GATT connect. */
+	bleAddressType?: number;
+	/** BLE-only: called when pairing hard-fails (wrong PIN / device refusal). */
+	onPairingFailed?: (ctx: DeviceContext, reason: string) => void;
 }
+
+/** Local transport kind. */
+type DeviceConnection = DtuConnection | BleConnection;
 
 /** A non-routine downlink frame the cloud sent to the relay (server → DTU command). */
 interface CloudRelayCommand {
@@ -74,9 +125,12 @@ const PV_FIELDS_BASE = [
 const PV_FIELDS_LOCAL_ONLY = [
 	{ suffix: "dailyEnergy", en: "daily energy", de: "Tagesenergie", role: "value.energy", unit: "kWh" },
 	{ suffix: "totalEnergy", en: "total energy", de: "Gesamtenergie", role: "value.energy", unit: "kWh" },
-	// PvMO.error_code (field 8): per-string fault code, 0 in normal operation. Raw value
-	// (no scaling) — firmware-confirmed field, decoded but previously unexposed.
-	{ suffix: "errorCode", en: "error code", de: "Fehlercode", role: "value", unit: "" },
+	// PvMO field 8 was exposed here as "error code". It is not one: the WB encoder at
+	// 0x4080b8ac-0x4080b8be reads three separate bytes off the inverter's data block (+0x37,
+	// +0x39, +0x3b) and shifts them together by 24, 16 and 8 bits, leaving the lowest byte always
+	// zero — hence the 0x03000000 that looked like a fault. It never changed across readings, and
+	// the T series leaves the field at 0 entirely. What the three bytes mean is not established,
+	// so publishing them as a fault code stated something that was not known to be true.
 ] as const;
 
 /** Writable state IDs that need subscriptions (relative to device prefix). */
@@ -129,11 +183,41 @@ class DeviceContext {
 	/** Whether initial InfoData has been received (serial + encryption known). */
 	private infoReceived: boolean;
 
-	connection: DtuConnection | null;
+	connection: DeviceConnection | null;
 	cloudRelay: CloudRelay | null;
+	/** Local transport kind (default "tcp"). */
+	readonly transport: "tcp" | "ble";
+	private readonly gateway: EsphomeGateway | null;
+	private readonly bleMac: number;
+	private readonly bleAddressType?: number;
+	private readonly bleSn: Buffer;
+	private readonly blePin: string;
+	private readonly onPairingFailed?: (ctx: DeviceContext, reason: string) => void;
 	protobuf: ProtobufHandler;
 	encryption: Encryption | null;
 	encryptionRequired: boolean;
+	/** Keeps the "cannot relay encrypted RealData" warning to one line per session. */
+	private warnedEncryptedRelay: boolean;
+	/** Dead band and minimum interval for the commands the DTU persists to flash. */
+	private readonly flashGuard: FlashGuardOptions;
+	/** Last flash-writing command per state id — the guard judges the next write against it. */
+	private readonly flashWrites: Map<string, FlashWriteState>;
+	/** Keeps cumulative energy counters from stepping backwards after a device restart. */
+	private readonly energyGuard: EnergyGuard;
+	/** Keeps the "cloud writes the power limit faster than the guard allows" warning to one line. */
+	private warnedCloudFlashRate: boolean;
+	/** Page of the day curve currently being collected (`cp`). */
+	private histPage: number;
+	/** Samples gathered across the pages of the current curve, in W. */
+	private histSamples: number[];
+	/** Unix timestamp of the first sample of the current curve. */
+	private histStart: number;
+	/**
+	 * The device's last GetConfig response, raw and complete. Needed to write the configuration
+	 * without clearing the fields that are not being changed. Holds credentials the device sends
+	 * in the clear (`lock_password`, `wifi_password`) — never log it, never put it in a state.
+	 */
+	private configSnapshot: Record<string, unknown> | null;
 
 	/** Matched cloud station ID for this device. */
 	cloudStationId: number | null;
@@ -150,6 +234,10 @@ class DeviceContext {
 	 */
 	burstActive: boolean;
 	private meterStatesCreated: boolean;
+	private meterMeasurementStatesCreated: boolean;
+	private meterControlStatesCreated: boolean;
+	/** Set once the "device sends unmapped lists" hint has been logged, so it stays a one-off. */
+	private extraListsReported: boolean;
 	private histStatesCreated: boolean;
 	private pollCount: number;
 	private slowPollEvery: number;
@@ -209,6 +297,18 @@ class DeviceContext {
 		this.enableCloudRelay = options.enableCloudRelay;
 		this.dataInterval = options.dataInterval;
 		this.slowPollEvery = options.slowPollFactor || 6;
+		// `?? default` rather than `|| default`: 0 is a deliberate "switch this off", not a missing value.
+		this.flashGuard = {
+			deadband: options.powerLimitDeadband ?? POWER_LIMIT_DEADBAND_DEFAULT,
+			minIntervalMs: (options.powerLimitMinIntervalSec ?? POWER_LIMIT_MIN_INTERVAL_SEC_DEFAULT) * 1000,
+		};
+		this.flashWrites = new Map();
+		this.energyGuard = new EnergyGuard();
+		this.warnedCloudFlashRate = false;
+		this.configSnapshot = null;
+		this.histPage = 0;
+		this.histSamples = [];
+		this.histStart = 0;
 
 		this.dtuSerial = "";
 		this.deviceId = "";
@@ -217,9 +317,17 @@ class DeviceContext {
 
 		this.connection = null;
 		this.cloudRelay = null;
+		this.transport = options.transport ?? "tcp";
+		this.gateway = options.gateway ?? null;
+		this.bleMac = options.bleMac ?? 0;
+		this.bleAddressType = options.bleAddressType;
+		this.bleSn = options.bleSn ?? Buffer.alloc(0);
+		this.blePin = options.blePin ?? "";
+		this.onPairingFailed = options.onPairingFailed;
 		this.protobuf = options.protobuf;
 		this.encryption = null;
 		this.encryptionRequired = false;
+		this.warnedEncryptedRelay = false;
 		this.cloudStationId = null;
 
 		this.pollTimer = undefined;
@@ -227,6 +335,9 @@ class DeviceContext {
 		this.pvCount = 0;
 		this.burstActive = false;
 		this.meterStatesCreated = false;
+		this.meterMeasurementStatesCreated = false;
+		this.meterControlStatesCreated = false;
+		this.extraListsReported = false;
 		this.histStatesCreated = false;
 		this.pollCount = 0;
 
@@ -262,21 +373,39 @@ class DeviceContext {
 
 	// --- Connection lifecycle ---
 
-	/** Start local TCP connection to DTU. */
+	/** Start the local connection (TCP to the DTU, or BLE via the ESPHome gateway). */
 	connect(): void {
-		if (!this.enableLocal || !this.host) {
-			return;
+		if (this.transport === "ble") {
+			if (!this.gateway || !this.bleMac) {
+				return;
+			}
+			this.connection = new BleConnection({
+				gateway: this.gateway,
+				mac: this.bleMac,
+				sn: this.bleSn,
+				pin: this.blePin,
+				addressType: this.bleAddressType,
+				timers: this.adapter,
+				log: this.adapter.log,
+			});
+			this.connection.on("pairingFailed", (reason: string) => {
+				this.adapter.log.warn(`[${this.host}] BLE pairing failed: ${reason}`);
+				this.onPairingFailed?.(this, reason);
+			});
+		} else {
+			if (!this.enableLocal || !this.host) {
+				return;
+			}
+			this.connection = new DtuConnection(
+				this.host,
+				10081,
+				() => {
+					const ts = unixSeconds();
+					return this.protobuf.encodeHeartbeat(ts);
+				},
+				this.adapter,
+			);
 		}
-
-		this.connection = new DtuConnection(
-			this.host,
-			10081,
-			() => {
-				const ts = unixSeconds();
-				return this.protobuf.encodeHeartbeat(ts);
-			},
-			this.adapter,
-		);
 
 		let lastErrorMsg = "";
 		let errorRepeatCount = 0;
@@ -464,6 +593,28 @@ class DeviceContext {
 			this.adapter.subscribeStates(`${this.deviceId}.${stateId}`);
 		}
 
+		// A BLE device can take a Shelly/ecotracker meter — the 2T cannot (no meter input, no
+		// energy management). Its controls have to exist before a meter is bound, otherwise there
+		// would be no way to bind one in the first place.
+		if (this.transport === "ble") {
+			await this.adapter.setObjectNotExistsAsync(`${this.deviceId}.meter`, {
+				type: "channel",
+				common: { name: { en: "Shelly meter", de: "Shelly-Zähler" } },
+				native: {},
+			});
+			this.meterControlStatesCreated = true;
+			for (const def of meterControlStates) {
+				await this.adapter.extendObjectAsync(`${this.deviceId}.${def.id}`, {
+					type: "state",
+					common: buildStateCommon(def),
+					native: {},
+				});
+				if (def.write) {
+					this.adapter.subscribeStates(`${this.deviceId}.${def.id}`);
+				}
+			}
+		}
+
 		this.statesCreated = true;
 		this.adapter.log.info(`[${this.deviceId}] Device states created`);
 	}
@@ -485,6 +636,11 @@ class DeviceContext {
 			rel.startsWith("meter.") || // dynamic meter channel
 			rel === "history" ||
 			rel.startsWith("history."); // dynamic history channel
+		// `shelly.*` is deliberately NOT listed: an earlier build put the network meter under that
+		// name, which was wrong twice over — the firmware supports ecotracker devices just as well
+		// (`SHELLY=1, ECOTRACKER=2` in its own type table), and a `meter` channel already existed
+		// for the wired meter. Leaving it out of the known set is what removes the old branch from
+		// installations that ran that build.
 
 		const prefix = `${this.adapter.namespace}.${this.deviceId}.`;
 		try {
@@ -585,6 +741,15 @@ class DeviceContext {
 			m("currentPhaseA", "Current phase A", "Strom Phase A", "value.current", "A"),
 			m("currentPhaseB", "Current phase B", "Strom Phase B", "value.current", "A"),
 			m("currentPhaseC", "Current phase C", "Strom Phase C", "value.current", "A"),
+			m("energyPhaseAExport", "Phase A energy export", "Phase A Energie Export", "value.energy", "kWh"),
+			m("energyPhaseBExport", "Phase B energy export", "Phase B Energie Export", "value.energy", "kWh"),
+			m("energyPhaseCExport", "Phase C energy export", "Phase C Energie Export", "value.energy", "kWh"),
+			m("energyPhaseAImport", "Phase A energy import", "Phase A Energie Import", "value.energy", "kWh"),
+			m("energyPhaseBImport", "Phase B energy import", "Phase B Energie Import", "value.energy", "kWh"),
+			m("energyPhaseCImport", "Phase C energy import", "Phase C Energie Import", "value.energy", "kWh"),
+			m("powerFactorPhaseA", "Power factor phase A", "Leistungsfaktor Phase A", "value", ""),
+			m("powerFactorPhaseB", "Power factor phase B", "Leistungsfaktor Phase B", "value", ""),
+			m("powerFactorPhaseC", "Power factor phase C", "Leistungsfaktor Phase C", "value", ""),
 			m("faultCode", "Fault code", "Fehlercode", "value", ""),
 		];
 		await Promise.all(
@@ -624,8 +789,17 @@ class DeviceContext {
 		// so there is no accumulated state to preserve from a previous cycle.
 		this.slowPollQueue = [
 			ts => this.protobuf.encodeGetConfigRequest(ts),
-			ts => this.protobuf.encodeAlarmTrigger(ts),
+			// AlarmTrigger (ALARM_LIST / action 50) is rejected by the BLE-only 2WB (error 1); the
+			// MiWarnRequest below covers warning reads there, so only send it on the TCP path.
+			...(this.transport !== "ble" ? [(ts: number) => this.protobuf.encodeAlarmTrigger(ts)] : []),
 			ts => this.protobuf.encodeMiWarnRequest(ts),
+			// The device keeps its own power curve for the day, at one sample per minute on the 2T.
+			// This asks for the first page; handleHistPower walks the rest and publishes once the
+			// whole day is together.
+			ts => {
+				this.histPage = 0;
+				return this.protobuf.encodeHistPowerRequest(ts, 0);
+			},
 		];
 
 		this.adapter.log.info(
@@ -676,36 +850,201 @@ class DeviceContext {
 		if (!this.protobuf || !this.cloudRelay) {
 			return;
 		}
+		const label = cloudTagLabel(cmd.cmdLow);
 		try {
 			// The cloud acks our command-status with 0x23 0x06 (CommandStatusResDTO). For a
 			// grid-profile read the real DTU uploads the grid file (0x22 0x0e) only after this
 			// status-ack, so complete a pending read here rather than up front.
-			if (cmd.cmdHigh === 0x23 && cmd.cmdLow === 0x06) {
+			if (cmd.cmdLow === 0x06) {
 				this.handleCloudStatusAck(cmd.payload);
 				return;
 			}
 			// Cloud action commands arrive as 0x23 0x05 (CommandResDTO with an action code).
-			if (!(cmd.cmdHigh === 0x23 && cmd.cmdLow === 0x05)) {
-				this.adapter.log.debug(
-					`[${this.deviceId}] [diag] cloud command 0x${cmd.cmdHigh.toString(16)} 0x${cmd.cmdLow.toString(16)} — not handled`,
+			if (cmd.cmdLow === 0x05) {
+				this.handleCloudAction(cmd);
+				return;
+			}
+			const info = describeCloudTag(cmd.cmdLow);
+			if (!info) {
+				// Neither firmware dispatches this tag. Worth a warning rather than a shrug: it
+				// means the server speaks something this analysis has not seen.
+				this.adapter.log.warn(
+					`[${this.deviceId}] cloud sent ${label}, ${cmd.payload.length} bytes — no firmware dispatches it`,
 				);
 				return;
 			}
-			const ResDTO = this.protobuf.getType("CommandPB", "CommandResDTO");
-			const obj = ResDTO.toObject(ResDTO.decode(cmd.payload), { longs: Number, defaults: true }) as Record<
-				string,
-				unknown
-			>;
-			const action = Number(obj.action) || 0;
-			const tid = Number(obj.tid) || 0;
-			this.adapter.log.debug(`[${this.deviceId}] [diag] cloud command action=${action} tid=${tid}`);
-			if (action === 41) {
-				this.serveGridProfileToCloud(tid);
-			} else if (action === 4) {
-				this.serveVersionToCloud(tid);
-			}
+			// Everything below is a tag both sides know but the adapter has no proven contract
+			// for. It is named and counted, never silently discarded — the previous behaviour
+			// made an unimplemented downlink indistinguishable from no downlink at all.
+			this.adapter.log.info(
+				`[${this.deviceId}] cloud sent ${label} (${info.kind}), ${cmd.payload.length} bytes — ` +
+					`not acted on${info.note ? `: ${info.note}` : ""}`,
+			);
 		} catch (err) {
-			this.adapter.log.warn(`[${this.deviceId}] handleCloudCommand error: ${errorMessage(err)}`);
+			this.adapter.log.warn(`[${this.deviceId}] handleCloudCommand ${label} error: ${errorMessage(err)}`);
+		}
+	}
+
+	/**
+	 * Handle a cloud action command (`0x23 0x05`, `CommandResDTO`).
+	 *
+	 * Three outcomes, in this order: an action the adapter answers from data it already holds
+	 * (grid profile, version), an action that is refused on purpose, or a plain forward to the
+	 * device. Forwarding keeps the cloud tag — request and response families are symmetric in
+	 * the firmware and both are reachable over the local socket, so rewriting the tag to the
+	 * `0xa3` family would put the answer in the wrong slot.
+	 *
+	 * @param cmd - The downlink frame.
+	 */
+	private handleCloudAction(cmd: CloudRelayCommand): void {
+		if (!this.protobuf) {
+			return;
+		}
+		const ResDTO = this.protobuf.getType("CommandPB", "CommandResDTO");
+		const obj = ResDTO.toObject(ResDTO.decode(cmd.payload), { longs: Number, defaults: true }) as Record<
+			string,
+			unknown
+		>;
+		const action = Number(obj.action) || 0;
+		const tid = Number(obj.tid) || 0;
+		this.adapter.log.debug(`[${this.deviceId}] cloud command action=${action} tid=${tid}`);
+
+		if (action === 41) {
+			this.serveGridProfileToCloud(tid);
+			return;
+		}
+		if (action === 4) {
+			this.serveVersionToCloud(tid);
+			return;
+		}
+		const refusal = refusalReason(action);
+		if (refusal) {
+			this.adapter.log.warn(
+				`[${this.deviceId}] refusing cloud action ${action} (tid=${tid}): it ${refusal}. ` +
+					`Such commands are not executed unattended.`,
+			);
+			return;
+		}
+		this.forwardCloudActionToDevice(cmd, action, tid);
+	}
+
+	/**
+	 * Hand a cloud action to the local device and acknowledge it upstream.
+	 *
+	 * The payload is re-framed rather than re-encoded: the bytes the cloud sent are exactly what
+	 * the device expects, so only the sequence number is replaced with one from the local
+	 * counter. Anything else would risk changing a field the cloud set deliberately.
+	 *
+	 * **A cloud command is deliberately NOT throttled by the flash guard**, even when it writes
+	 * flash. Two reasons. The relay stands in for the device: without the adapter in the middle
+	 * the DTU would receive this very command straight from the cloud and write flash just the
+	 * same, so dropping it would make the device behave differently merely because the adapter is
+	 * running. And this method acknowledges the command upstream — skipping the send while still
+	 * acknowledging would tell the server the limit was applied when it was not, leaving the
+	 * S-Miles app showing a value the inverter does not have.
+	 *
+	 * What it does instead is **book the wear in the same place the local path uses**. Both routes
+	 * end in the same two flash sectors, so they have to share one memory; otherwise the next
+	 * local write is judged against a value the device no longer holds.
+	 *
+	 * @param cmd - The downlink frame.
+	 * @param action - Decoded action code, for the acknowledgement.
+	 * @param tid - Transaction id to echo back.
+	 */
+	private forwardCloudActionToDevice(cmd: CloudRelayCommand, action: number, tid: number): void {
+		const relay = this.cloudRelay;
+		if (!relay || !this.protobuf) {
+			return;
+		}
+		if (!this.enableLocal || !this.connection?.connected) {
+			this.adapter.log.info(
+				`[${this.deviceId}] cloud action ${action} (tid=${tid}) not executed — no local connection`,
+			);
+			return;
+		}
+		const frame = this.protobuf.buildMessage(cmd.cmdHigh, cmd.cmdLow, cmd.payload);
+		this.connection.send(frame).catch(e => {
+			this.adapter.log.warn(`[${this.deviceId}] forwarding cloud action ${action} failed: ${errorMessage(e)}`);
+		});
+		this.bookCloudFlashWrite(action);
+		const ts = unixSeconds();
+		relay.sendFrame(this.protobuf.encodeCloudCommandAck(ts, this.dtuSerial, action, tid));
+		relay.sendFrame(this.protobuf.encodeCloudCommandStatus(ts, this.dtuSerial, action, tid));
+		this.adapter.log.debug(`[${this.deviceId}] cloud action ${action} forwarded to device (tid=${tid})`);
+	}
+
+	/**
+	 * Record a flash-writing cloud command in the same memory the local command path uses.
+	 *
+	 * The value is left unknown: the cloud's payload is forwarded verbatim and its `data` field is
+	 * not always parseable, and guessing it would be worse than admitting the gap. The dead band
+	 * therefore cannot apply to the following local write, but the minimum interval can — and that
+	 * is the limit that actually protects the flash.
+	 *
+	 * A cloud-driven control loop is also worth one warning: the user cannot see it in the ioBroker
+	 * states at all, and it wears the same sectors as their own automation.
+	 *
+	 * @param action - Action code the cloud sent.
+	 */
+	private bookCloudFlashWrite(action: number): void {
+		const stateId = flashWritingStateForAction(action);
+		if (!stateId) {
+			return;
+		}
+		let entry = this.flashWrites.get(stateId);
+		if (!entry) {
+			entry = { lastValue: null, lastWriteMs: 0, skipsLogged: 0 };
+			this.flashWrites.set(stateId, entry);
+		}
+		const now = Date.now();
+		const sinceMs = now - entry.lastWriteMs;
+		if (entry.lastWriteMs > 0 && this.flashGuard.minIntervalMs > 0 && sinceMs < this.flashGuard.minIntervalMs) {
+			if (!this.warnedCloudFlashRate) {
+				this.warnedCloudFlashRate = true;
+				this.adapter.log.warn(
+					`[${this.deviceId}] The cloud is sending power-limit commands faster than the configured ` +
+						`minimum interval (${Math.round(sinceMs / 1000)}s apart). These are forwarded unchanged — ` +
+						`the adapter does not silently drop a command it has already acknowledged to the server — ` +
+						`but each one erases two flash sectors in the inverter.`,
+				);
+			}
+		}
+		entry.lastValue = null;
+		entry.lastWriteMs = now;
+		entry.skipsLogged = 0;
+	}
+
+	/**
+	 * Handle the cloud's acknowledgement of one of our uploads (`0x2301`, `0x2302`, `0x230c`,
+	 * `0x230d`). These used to be discarded inside the relay, which threw away the server time
+	 * and hid rejected uploads.
+	 *
+	 * @param cmd - The acknowledgement frame.
+	 */
+	private handleCloudAck(cmd: CloudRelayCommand): void {
+		if (!this.protobuf) {
+			return;
+		}
+		const info = describeCloudTag(cmd.cmdLow);
+		const label = cloudTagLabel(cmd.cmdLow);
+		if (!info?.decode) {
+			this.adapter.log.debug(`[${this.deviceId}] cloud ack ${label}, ${cmd.payload.length} bytes`);
+			return;
+		}
+		try {
+			const obj = this.protobuf.decodePayload(info.decode.proto, info.decode.message, cmd.payload);
+			const errorCode = Number(obj.errorCode ?? 0);
+			if (errorCode !== 0) {
+				// The upload was rejected. Without this the relay would keep sending into a
+				// refusing server and look healthy while the cloud showed nothing.
+				this.adapter.log.warn(`[${this.deviceId}] cloud rejected our upload (${label}, error ${errorCode})`);
+				return;
+			}
+			this.adapter.log.debug(
+				`[${this.deviceId}] cloud ack ${label} (server time ${Number(obj.time ?? 0)}, offset ${Number(obj.offset ?? 0)})`,
+			);
+		} catch (err) {
+			this.adapter.log.debug(`[${this.deviceId}] cloud ack ${label} could not be decoded: ${errorMessage(err)}`);
 		}
 	}
 
@@ -828,7 +1167,7 @@ class DeviceContext {
 	 * @param message - Encoded protobuf message to send
 	 * @param timeoutMs - Timeout in milliseconds before giving up
 	 */
-	private sendAndWait(conn: DtuConnection, message: Buffer, timeoutMs = 3000): Promise<boolean> {
+	private sendAndWait(conn: DeviceConnection, message: Buffer, timeoutMs = 3000): Promise<boolean> {
 		// Expected response: request 0xa3 XX → response 0xa2 XX
 		const cmdHigh = message[2] === 0xa3 ? 0xa2 : message[2];
 		const cmdLow = message[3];
@@ -950,7 +1289,7 @@ class DeviceContext {
 			const tag = this.deviceId || this.host;
 			switch ((cmdHigh << 8) | cmdLow) {
 				case 0xa211:
-					this.cloudRelay?.updateRealData(message);
+					this.relayRealData(message);
 					this.handleRealData(decryptedPayload).catch(err =>
 						this.adapter.log.warn(`[${tag}] handleRealData error: ${errorMessage(err)}`),
 					);
@@ -998,11 +1337,9 @@ class DeviceContext {
 				case 0xa216:
 					this.adapter.log.debug(`[${this.host}] HistEnergy response: ${decryptedPayload.length} bytes`);
 					break;
-				case 0xa213:
-					this.handleAutoSearch(decryptedPayload).catch(err =>
-						this.adapter.log.warn(`[${tag}] handleAutoSearch error: ${errorMessage(err)}`),
-					);
-					break;
+				// 0xa213 (AutoSearch response) had a case here. Neither device dispatches the a313
+				// request, so the answer cannot arrive — verified live: no reply within 15 s while
+				// a311 answered in 0.24 s.
 				case 0xa207:
 					try {
 						this.handleDevConfigFetch(decryptedPayload);
@@ -1018,6 +1355,41 @@ class DeviceContext {
 		} catch (err) {
 			this.adapter.log.warn(`[${this.host}] Error handling response: ${errorMessage(err)}`);
 		}
+	}
+
+	/**
+	 * Hand a fresh local RealData frame to the cloud relay.
+	 *
+	 * The relay does not re-encode the message — it keeps the protobuf payload byte for byte
+	 * and only puts a cloud tag and its own sequence number in front of it. That is sound while
+	 * the payload is plain, and it is plain on every DTU this relay serves: real cloud traffic
+	 * on port 10081 carries unencrypted `0x22NN`/`0x23NN` frames (captures under
+	 * `_fwanalysis/captures/`, protobuf directly parseable, serial in the clear).
+	 *
+	 * It stops being sound the moment a DTU demands encryption (`dfs` bit 25): key and IV are
+	 * derived from `enc_rand` **plus message id plus sequence number** (see `Encryption`), and
+	 * the re-framing changes both — the server would receive bytes it cannot decrypt. Sending
+	 * nothing is the better failure: the cloud then sees a device that went quiet rather than
+	 * one that talks gibberish.
+	 *
+	 * @param message - The raw HM-framed local RealData response (`0xa211`).
+	 */
+	private relayRealData(message: Buffer): void {
+		if (!this.cloudRelay) {
+			return;
+		}
+		if (this.encryptionRequired) {
+			if (!this.warnedEncryptedRelay) {
+				this.warnedEncryptedRelay = true;
+				this.adapter.log.warn(
+					`[${this.deviceId || this.host}] This DTU encrypts its local messages, so the cloud relay ` +
+						`cannot forward RealData — the cloud would not be able to decrypt it. Relay uploads are ` +
+						`skipped; local states are unaffected.`,
+				);
+			}
+			return;
+		}
+		this.cloudRelay.updateRealData(message);
 	}
 
 	// --- State management ---
@@ -1136,14 +1508,192 @@ class DeviceContext {
 
 	private async handleRealData(payload: Buffer): Promise<void> {
 		try {
-			const data = this.protobuf.decodeRealDataNew(payload);
+			// The power-limit scale differs by device family and cannot be told from the value
+			// (a 2T at 100 % and a 2WB at 10 % both send 1000), so the transport decides it.
+			const data = this.protobuf.decodeRealDataNew(
+				payload,
+				this.transport === "ble" ? SCALE_POWER_LIMIT_BLE : SCALE_POWER_LIMIT_TCP,
+			);
+			// Report the effective inverter power / daily energy: the dtu-level fields on TCP, the
+			// per-inverter / per-string values on BLE (where the dtu-level fields are not populated) —
+			// so the debug line matches what the states actually show.
+			const effPower = data.dtuPower > 0 ? data.dtuPower : data.sgs.length > 0 ? data.sgs[0].activePower : 0;
+			const effDaily =
+				data.dtuDailyEnergy > 0 ? data.dtuDailyEnergy : data.pv.reduce((s, pv) => s + (pv.energyDaily || 0), 0);
 			this.adapter.log.debug(
-				`[${this.deviceId || this.host}] RealData: power=${data.dtuPower}W, dailyEnergy=${data.dtuDailyEnergy}, sgs=${data.sgs.length}, pv=${data.pv.length}, meter=${data.meter.length}`,
+				`[${this.deviceId || this.host}] RealData: power=${effPower}W, dailyEnergy=${effDaily}, sgs=${data.sgs.length}, pv=${data.pv.length}, meter=${data.meter.length}`,
 			);
 			await this.applyRealData(data);
+			// A Shelly/ecotracker meter reports in fields 13/14/15, which the shared schema cannot
+			// express — field 13 is `dtu_daily_energy` there, which is correct on the 2T. So these
+			// are read off the raw payload instead, and only for BLE devices: the 2T has no meter
+			// input and no energy management at all (firmware-verified).
+			if (this.transport === "ble") {
+				await this.applyShellyData(payload);
+			}
 		} catch (err) {
 			this.adapter.log.warn(`[${this.deviceId || this.host}] Error decoding RealData: ${errorMessage(err)}`);
 		}
+	}
+
+	/**
+	 * Write the meter states from a raw RealData payload.
+	 *
+	 * The DTU sends the energy-flow message whenever an inverter is in the frame, but `grid` and
+	 * `sp` only carry real values once a meter is bound. The states are therefore created lazily,
+	 * on the first frame that actually contains a metering device — a device without a meter never
+	 * grows an empty `shelly` branch.
+	 *
+	 * @param payload - raw RealData protobuf bytes
+	 */
+	/**
+	 * Apply a change to one of the meter controls.
+	 *
+	 * Writing the MAC only records it — nothing is sent until a mode is chosen, so a half-entered
+	 * address cannot reach the device. Choosing a mode binds the meter in that role.
+	 *
+	 * @param stateId - `meter.mode` or `meter.deviceId`
+	 * @param state - the new value
+	 */
+	private async handleShellyStateChange(stateId: string, state: ioBroker.State): Promise<void> {
+		if (stateId === "meter.deviceId") {
+			const mac = String(state.val ?? "").trim();
+			try {
+				// Validate through the same builder the command uses, so a bad address is refused
+				// here rather than silently ignored by the device later.
+				buildShellyBindData(mac, SHELLY_DEV_TYPE_METER_ONLY);
+			} catch (err) {
+				this.adapter.log.warn(`[${this.deviceId}] Meter MAC rejected: ${errorMessage(err)}`);
+				return;
+			}
+			await this.setState("meter.deviceId", mac, true);
+			return;
+		}
+
+		const mode = Number(state.val ?? 0);
+		if (mode === 0) {
+			// Nothing is sent: the DTU has no "forget this meter" that would not also disturb a
+			// running poll, and unbinding is not what a user reaching for "off" usually wants.
+			// The value is acknowledged so the choice is visible, and no further binds happen.
+			await this.setState("meter.mode", 0, true);
+			this.adapter.log.info(`[${this.deviceId}] Meter mode set to off — no further binding sent`);
+			return;
+		}
+		const macState = this.deviceId ? await this.adapter.getStateAsync(`${this.deviceId}.meter.deviceId`) : null;
+		const mac = String(macState?.val ?? "").trim();
+		if (!mac) {
+			this.adapter.log.warn(`[${this.deviceId}] Set the meter MAC before choosing a mode.`);
+			return;
+		}
+		const devType = mode === 2 ? SHELLY_DEV_TYPE_GRID : SHELLY_DEV_TYPE_METER_ONLY;
+		try {
+			const sent = await this.bindShellyMeter(mac, devType);
+			if (sent) {
+				await this.setState("meter.mode", mode, true);
+			} else {
+				this.adapter.log.warn(`[${this.deviceId}] Meter binding could not be sent.`);
+			}
+		} catch (err) {
+			this.adapter.log.warn(`[${this.deviceId}] Meter binding failed: ${errorMessage(err)}`);
+		}
+	}
+
+	/**
+	 * Bind a Shelly/ecotracker meter, or re-bind it in a different role.
+	 *
+	 * This is what starts the DTU's own `EM.GetStatus` WebSocket poll; with
+	 * {@link SHELLY_DEV_TYPE_GRID} the meter additionally becomes the grid device its energy
+	 * management regulates on, which is what makes zero export work without the adapter in the loop.
+	 *
+	 * The command is idempotent — re-sending it restarts a poll that has died, which the device is
+	 * known to do after a few minutes.
+	 *
+	 * @param mac - meter MAC (with or without separators)
+	 * @param devType - 0 = meter only, 2 = grid device
+	 * @returns whether the frame was handed to the transport
+	 */
+	async bindShellyMeter(mac: string, devType: number): Promise<boolean> {
+		if (this.transport !== "ble") {
+			throw new Error("Only BLE devices can take a Shelly meter.");
+		}
+		if (!this.connection?.connected || !this.protobuf) {
+			throw new Error("Device is not connected.");
+		}
+		const body = encodeShellyBindBody(mac, devType, unixSeconds());
+		const frame = this.protobuf.buildMessage(SHELLY_CMD_TAG[0], SHELLY_CMD_TAG[1], body);
+		this.adapter.log.info(
+			`[${this.deviceId || this.host}] Binding Shelly meter ${anonymize(mac)} as ` +
+				`${devType === SHELLY_DEV_TYPE_GRID ? "grid device (zero export)" : "meter only"}`,
+		);
+		return this.connection.send(frame);
+	}
+
+	/** Create the `shelly` channel and its states. Called once, on the first frame with a meter. */
+	private async createShellyStates(): Promise<void> {
+		if (!this.deviceId) {
+			return;
+		}
+		this.adapter.log.info(`[${this.deviceId}] Shelly meter detected, creating meter states`);
+		await this.adapter.setObjectNotExistsAsync(`${this.deviceId}.meter`, {
+			type: "channel",
+			common: { name: { en: "Shelly meter", de: "Shelly-Zähler" } },
+			native: {},
+		});
+		await Promise.all(
+			meterMeasurementStates.map(def =>
+				this.adapter.extendObjectAsync(`${this.deviceId}.${def.id}`, {
+					type: "state",
+					common: buildStateCommon(def),
+					native: {},
+				}),
+			),
+		);
+	}
+
+	private async applyShellyData(payload: Buffer): Promise<void> {
+		const devices = parseMeterDevices(payload);
+		const flow = parseEnergyFlow(payload);
+		if (devices.length === 0 && !this.meterMeasurementStatesCreated) {
+			return; // no meter bound (yet) — nothing to show
+		}
+		if (!this.meterMeasurementStatesCreated) {
+			await this.createShellyStates();
+			this.meterMeasurementStatesCreated = true;
+		}
+
+		const entries: Array<[string, ioBroker.StateValue]> = [];
+		if (flow) {
+			entries.push(
+				["meter.gridPower", flow.grid],
+				["meter.pvPower", flow.pv],
+				["meter.loadPower", flow.load],
+				["meter.storagePower", flow.sp],
+				["meter.plugPower", flow.plug],
+			);
+		}
+		// "Connected" means the DTU's meter poll is alive. It dies silently after a few minutes,
+		// and then the device simply drops out of the frame — so presence in this frame is the
+		// only honest indicator.
+		entries.push(["meter.connected", devices.length > 0]);
+		if (devices.length > 0) {
+			const meter = devices[0];
+			entries.push(["meter.lastData", Date.now()]);
+			if (meter.serial) {
+				entries.push(["meter.deviceId", meter.serial]);
+			}
+			if (meter.frequency > 0) {
+				entries.push(["meter.frequency", meter.frequency]);
+			}
+			// The device labels its own phases, so use that number rather than the array position.
+			for (const ph of meter.phases) {
+				entries.push(
+					[`meter.l${ph.phase}Voltage`, ph.voltage],
+					[`meter.l${ph.phase}Current`, ph.current],
+					[`meter.l${ph.phase}Power`, ph.activePower],
+				);
+			}
+		}
+		await this.setStates(entries, true);
 	}
 
 	/**
@@ -1156,10 +1706,19 @@ class DeviceContext {
 	 */
 	async applyRealData(data: RealDataResult): Promise<void> {
 		try {
+			// The top-level dtu_power / dtu_daily_energy fields are populated on the TCP path but not
+			// on the BLE-only 2WB (where those field numbers carry a mode flag / an energy-flow
+			// message instead). Fall back to the per-inverter and per-string values, which are correct
+			// on both transports. The fallbacks only trigger when the top-level value is 0, so the TCP
+			// path is unaffected.
+			const sgsPower = data.sgs.length > 0 ? data.sgs[0].activePower : 0;
+			const pvDailyWh = data.pv.reduce((sum, pv) => sum + (pv.energyDaily || 0), 0);
+			const dailyEnergyWh = data.dtuDailyEnergy > 0 ? data.dtuDailyEnergy : pvDailyWh;
+
 			const entries: Array<[string, ioBroker.StateValue]> = [
 				["info.lastResponse", unixSeconds()],
-				["inverter.active", data.sgs.length > 0 && data.dtuPower > 0],
-				["grid.dailyEnergy", whToKwh(data.dtuDailyEnergy)],
+				["inverter.active", data.sgs.length > 0 && (data.dtuPower > 0 || sgsPower > 0)],
+				["grid.dailyEnergy", whToKwh(dailyEnergyWh)],
 			];
 
 			if (data.sgs.length > 0) {
@@ -1183,9 +1742,12 @@ class DeviceContext {
 						? [["inverter.linkStatus", sgs.linkStatus] as [string, ioBroker.StateValue]]
 						: []),
 					["inverter.serialNumber", sgs.serialNumber],
-					["inverter.activePowerLimit", sgs.powerLimit],
-					// SGSMO #20: packed (two bytes), exact decode not yet confirmed → raw
-					["inverter.modulationIndexSignal", sgs.modulationIndexSignal],
+					// Only write a limit the device actually reported. The 2T leaves this field empty
+					// (measured: 0 while producing 82.9 W), and proto3 cannot tell "absent" from 0 —
+					// so writing it anyway would claim the inverter is throttled to a standstill.
+					...(sgs.powerLimit > 0
+						? [["inverter.activePowerLimit", sgs.powerLimit] as [string, ioBroker.StateValue]]
+						: []),
 				);
 			}
 
@@ -1201,7 +1763,18 @@ class DeviceContext {
 					[`${prefix}.current`, pv.current],
 					[`${prefix}.dailyEnergy`, whToKwh(pv.energyDaily)],
 					[`${prefix}.totalEnergy`, Math.round(pv.energyTotal / 100) / 10], // double normalization: round at Wh precision, then → kWh
-					[`${prefix}.errorCode`, pv.errorCode],
+				);
+			}
+
+			// One line, once, if the device actually fills a list the adapter does not map yet.
+			// Silence here would mean nobody ever finds out that there is data to be had.
+			const extra = data.extraLists;
+			if (extra && !this.extraListsReported && (extra.rp || extra.rsd || extra.tgs)) {
+				this.extraListsReported = true;
+				this.adapter.log.info(
+					`[${this.deviceId || this.host}] device also sends unmapped telemetry lists ` +
+						`(rp=${extra.rp}, rsd=${extra.rsd}, tgs=${extra.tgs}) — please report this, ` +
+						`these values could become additional states`,
 				);
 			}
 
@@ -1225,14 +1798,55 @@ class DeviceContext {
 					["meter.currentPhaseA", m.currentPhaseA],
 					["meter.currentPhaseB", m.currentPhaseB],
 					["meter.currentPhaseC", m.currentPhaseC],
+					["meter.energyPhaseAExport", m.energyPhaseAExport],
+					["meter.energyPhaseBExport", m.energyPhaseBExport],
+					["meter.energyPhaseCExport", m.energyPhaseCExport],
+					["meter.energyPhaseAImport", m.energyPhaseAImport],
+					["meter.energyPhaseBImport", m.energyPhaseBImport],
+					["meter.energyPhaseCImport", m.energyPhaseCImport],
+					["meter.powerFactorPhaseA", m.powerFactorPhaseA],
+					["meter.powerFactorPhaseB", m.powerFactorPhaseB],
+					["meter.powerFactorPhaseC", m.powerFactorPhaseC],
 					["meter.faultCode", m.faultCode],
 				);
 			}
 
-			await this.setStates(entries, true);
+			await this.setStates(this.guardCounters(entries), true);
 		} catch (err) {
 			this.adapter.log.warn(`[${this.deviceId || this.host}] Error applying RealData: ${errorMessage(err)}`);
 		}
+	}
+
+	/**
+	 * Drop cumulative counter values that would move a counter backwards.
+	 *
+	 * The device reports a few Wh below the previous figure after a restart — the inverter
+	 * re-reads its last persisted value and starts from there. Written through, that is a
+	 * downward step in every history and statistics consumer downstream, and CLAUDE.md forbids
+	 * it. Non-counter entries pass untouched.
+	 *
+	 * @param entries - The state writes about to be applied.
+	 * @returns The same list minus the rejected counter values.
+	 */
+	private guardCounters(entries: Array<[string, ioBroker.StateValue]>): Array<[string, ioBroker.StateValue]> {
+		const now = Date.now();
+		const kept: Array<[string, ioBroker.StateValue]> = [];
+		for (const entry of entries) {
+			const [id, value] = entry;
+			if (typeof value !== "number") {
+				kept.push(entry);
+				continue;
+			}
+			const accepted = this.energyGuard.accept(id, value, now);
+			if (accepted === null) {
+				this.adapter.log.debug(
+					`[${this.deviceId || this.host}] ${id}: ignoring ${value}, it would move the counter backwards`,
+				);
+				continue;
+			}
+			kept.push([id, accepted]);
+		}
+		return kept;
 	}
 
 	private async handleInfoData(payload: Buffer): Promise<void> {
@@ -1292,18 +1906,29 @@ class DeviceContext {
 			entries.push(
 				["dtu.swVersion", formatDtuVersion(di.swVersion)],
 				["dtu.hwVersion", formatDtuVersion(di.hwVersion).replace("V", "H")],
-				["dtu.rssi", di.signalStrength],
+				["dtu.signalQuality", di.signalStrength],
 				["dtu.connState", di.errorCode],
 				["dtu.stepTime", di.dtuStepTime],
 				["dtu.accessModel", di.accessModel],
 				["dtu.communicationTime", di.communicationTime * 1000],
 				["dtu.wifiVersion", di.wifiVersion],
 			);
+			// Publish the meters the device itself knows about, so the user can pick one instead of
+			// looking up a MAC address. Only for BLE devices — the T series has no meter input.
+			if (this.transport === "ble" && this.meterControlStatesCreated) {
+				entries.push(["meter.detected", safeJsonStringify(di.knownMeters)]);
+			}
 		}
 		await this.setStates(entries, true);
 	}
 
 	private setupEncryption(info: ReturnType<ProtobufHandler["decodeInfoData"]>): void {
+		// BLE frames are already decrypted by the transport (GCM/SN-CBC); DeviceContext must not
+		// layer its own CBC decryption on top.
+		if (this.transport === "ble") {
+			this.encryptionRequired = false;
+			return;
+		}
 		if (!info.dtuInfo) {
 			return;
 		}
@@ -1341,6 +1966,22 @@ class DeviceContext {
 	// --- Cloud relay ---
 
 	private async initCloudRelay(dtuSn: string): Promise<void> {
+		// The relay exists for one reason: on a TCP device (HMS-*-xT) the DTU serves a single
+		// socket on port 10081, so while the adapter is connected locally the DTU cannot reach
+		// the cloud itself — the adapter has to upload on its behalf.
+		//
+		// A BLE device (HMS-800-2WB) has no local TCP port at all. The adapter talks to it over
+		// GATT and never occupies its cloud socket, so the device keeps uploading by itself.
+		// Running a relay there would upload a SECOND stream under the same serial while the
+		// device is still sending its own — duplicate data from two sources.
+		if (this.transport === "ble") {
+			if (this.enableCloudRelay) {
+				this.adapter.log.debug(
+					`[${this.deviceId}] no cloud relay on BLE — the device keeps its own cloud connection`,
+				);
+			}
+			return;
+		}
 		if (this.enableCloudRelay && this.protobuf && dtuSn && !this.cloudRelay && !this.cloudRelayInitializing) {
 			const serverState = await this.adapter.getStateAsync(`${this.deviceId}.config.serverDomain`);
 			const portState = await this.adapter.getStateAsync(`${this.deviceId}.config.serverPort`);
@@ -1372,6 +2013,7 @@ class DeviceContext {
 					void this.adapter.onRelayDataSent();
 				});
 				this.cloudRelay.on("command", (cmd: CloudRelayCommand) => this.handleCloudCommand(cmd));
+				this.cloudRelay.on("ack", (cmd: CloudRelayCommand) => this.handleCloudAck(cmd));
 				this.cloudRelay.connect();
 			}
 		} else if (this.cloudRelay && this.protobuf && dtuSn) {
@@ -1386,7 +2028,9 @@ class DeviceContext {
 				this.adapter.clearTimeout(this.infoFallbackTimer);
 				this.infoFallbackTimer = undefined;
 			}
-			if (this.protobuf && this.connection?.connected) {
+			// PERFORMANCE_DATA_MODE is a DTU-internal fast-push mode the BLE-only 2WB does not have (it
+			// rejects the command with error 1); BLE is polled directly, so skip it there.
+			if (this.protobuf && this.connection?.connected && this.transport !== "ble") {
 				this.adapter.log.info(`[${this.host}] Enabling performance data mode`);
 				const ts = unixSeconds();
 				void this.connection.send(this.protobuf.encodePerformanceDataMode(ts)).catch(e => {
@@ -1399,27 +2043,52 @@ class DeviceContext {
 
 	private async handleConfigData(payload: Buffer): Promise<void> {
 		try {
+			// The snapshot lets a later configuration write round-trip every field, including the
+			// ones deliberately not exposed as states. It is auxiliary: if it fails, the states are
+			// still the point of this handler, and a write will simply refuse itself later rather
+			// than go out incomplete.
+			try {
+				this.configSnapshot = this.protobuf.decodeGetConfigRaw(payload);
+			} catch (err) {
+				this.adapter.log.debug(
+					`[${this.deviceId || this.host}] could not keep a configuration snapshot: ${errorMessage(err)}`,
+				);
+			}
 			const config = this.protobuf.decodeGetConfig(payload);
 			this.adapter.log.debug(
 				`[${this.deviceId || this.host}] Config: server=${config.serverDomain}:${config.serverPort}, sendTime=${config.serverSendTime}min`,
 			);
 
+			// limit_power_mypower is the DTU-stored (persistent) limit. The 2WB briefly reports 0,
+			// which is below the state's 2 % minimum ("0 %" is not a valid limit) — treat 0 as
+			// "not reported" and skip the write rather than emit an out-of-range warning.
+			const limitPct = config.limitPower / SCALE_POWER;
 			await this.setStates(
 				[
-					// limit_power_mypower is the DTU-stored (persistent) limit — expose it as the
-					// persistent state, not the runtime inverter.powerLimit setpoint.
-					["config.limitPowerMyPower", config.limitPower / SCALE_POWER],
+					...(limitPct >= 2
+						? ([["config.limitPowerMyPower", limitPct]] as Array<[string, ioBroker.StateValue]>)
+						: []),
 					["config.serverDomain", config.serverDomain],
 					["config.serverPort", config.serverPort],
 					["config.serverSendTime", config.serverSendTime],
 					["config.wifiSsid", config.wifiSsid],
-					["config.wifiRssi", config.wifiRssi],
+					["config.wifiSignalQuality", config.wifiRssi],
 					["config.netDhcpSwitch", config.dhcpSwitch],
 					["config.dtuApSsid", config.dtuApSsid],
 					["config.netmodeSelect", config.netmodeSelect],
 					["config.invType", config.invType],
 					["config.wifiIpAddress", config.wifiIpAddress],
 					["config.wifiMacAddress", config.wifiMacAddress],
+					["config.ipAddress", config.ipAddress],
+					["config.subnetMask", config.subnetMask],
+					["config.gateway", config.gateway],
+					["config.dnsServer", config.dnsServer],
+					["config.macAddress", config.macAddress],
+					["config.meterKind", config.meterKind],
+					["config.meterInterface", config.meterInterface],
+					["config.zeroExportEnable", config.zeroExportEnable],
+					["config.zeroExport433Addr", config.zeroExport433Addr],
+					["config.lockTime", config.lockTime],
 				],
 				true,
 			);
@@ -1602,10 +2271,17 @@ class DeviceContext {
 					},
 					{
 						id: "history.stepTime",
-						name: { en: "Step time", de: "Schrittzeit" },
+						name: { en: "Seconds between samples", de: "Sekunden zwischen zwei Messpunkten" },
 						type: "number" as const,
 						role: "value",
 						unit: "s",
+					},
+					{
+						id: "history.startTime",
+						name: { en: "First sample of the curve", de: "Erster Messpunkt der Kurve" },
+						type: "number" as const,
+						role: "value.time",
+						unit: "",
 					},
 				];
 				for (const s of histStates) {
@@ -1624,33 +2300,44 @@ class DeviceContext {
 				}
 				this.histStatesCreated = true;
 			}
-			await this.setState("history.powerJson", safeJsonStringify(data.powerArray), true);
-			await this.setState("history.dailyEnergy", data.dailyEnergy, true);
-			await this.setState("history.totalEnergy", Math.round(data.totalEnergy / 100) / 10, true); // double normalization: round at Wh precision, then → kWh
+			// The device splits the day into pages of at most 200 samples and reports how many
+			// there are in `ap`. Collect them all before publishing, so the curve is never half a
+			// day — page 0 alone ends at mid-morning.
+			if (this.histPage === 0) {
+				this.histSamples = [];
+				this.histStart = data.absoluteStart;
+			}
+			this.histSamples.push(...data.powerArray);
+			const pages = data.pageCount > 0 ? Math.min(data.pageCount, HIST_MAX_PAGES) : 1;
+			if (data.powerArray.length > 0 && this.histPage + 1 < pages && this.connection?.connected) {
+				this.histPage++;
+				const next = this.protobuf.encodeHistPowerRequest(unixSeconds(), this.histPage);
+				void this.connection
+					.send(next)
+					.catch(err =>
+						this.adapter.log.debug(
+							`[${this.deviceId}] HistPower page ${this.histPage} request failed: ${errorMessage(err)}`,
+						),
+					);
+				return;
+			}
+			this.histPage = 0;
+			this.adapter.log.debug(
+				`[${this.deviceId}] HistPower: ${this.histSamples.length} samples at ${data.stepTime}s`,
+			);
+			await this.setState("history.powerJson", safeJsonStringify(this.histSamples), true);
+			await this.setState("history.startTime", this.histStart * 1000, true);
+			await this.setStates(
+				this.guardCounters([
+					["history.dailyEnergy", data.dailyEnergy],
+					// double normalization: round at Wh precision, then → kWh
+					["history.totalEnergy", Math.round(data.totalEnergy / 100) / 10],
+				]),
+				true,
+			);
 			await this.setState("history.stepTime", data.stepTime, true);
 		} catch (err) {
 			this.adapter.log.warn(`[${this.deviceId}] Error decoding HistPower: ${errorMessage(err)}`);
-		}
-	}
-
-	private async handleAutoSearch(payload: Buffer): Promise<void> {
-		if (!this.protobuf || !this.deviceId) {
-			return;
-		}
-		try {
-			const ReqDTO = this.protobuf.getType("AutoSearch", "AutoSearchReqDTO");
-			const msg = ReqDTO.decode(payload);
-			const obj = ReqDTO.toObject(msg, { longs: Number, defaults: true }) as Record<string, unknown>;
-
-			const serialNumbers = (obj.miSerialNumbers as number[]) || [];
-			const hexSerials = serialNumbers.map(sn => (Number(sn) || 0).toString(16).toUpperCase());
-			this.adapter.log.info(
-				`[${this.deviceId}] AutoSearch found ${hexSerials.length} inverter(s): ${hexSerials.join(", ")}`,
-			);
-
-			await this.setState("dtu.searchResult", JSON.stringify(hexSerials), true);
-		} catch (err) {
-			this.adapter.log.warn(`[${this.deviceId}] Error decoding AutoSearch: ${errorMessage(err)}`);
 		}
 	}
 
@@ -1730,8 +2417,32 @@ class DeviceContext {
 			return;
 		}
 		try {
-			this.protobuf.getType("NetworkInfo", "NetworkInfoReqDTO").decode(payload);
-			this.adapter.log.debug(`[${this.deviceId || this.host}] NetworkInfo response received`);
+			// The payload carries eight fields, and none of them earns a state. All eight were
+			// traced through the response builder on both devices (2T `hm_build_send_cmd_a214`
+			// @0x408161ec, 2WB @0x4080f31a; see _fwanalysis/ADAPTER_FINDINGS.md §12):
+			//
+			//   net_set_mod / net_work_mod  literal 1, stored straight from `movi #0x1` — no information.
+			//   net_set_time / net_work_time / net_set_state / net_work_state / ap_set_state
+			//                               raw values with no enum table and no time base found;
+			//                               a state would be a meaningless number.
+			//   csq                         the ONLY field with proven meaning, and it is the very
+			//                               same byte the adapter already publishes as
+			//                               `config.wifiSignalQuality` (2T gp-109642 = 0x6BC9E; 2WB gp-83830
+			//                               in both builders), copied into two protobuf fields. A
+			//                               second state for it would be a duplicate under another
+			//                               name. Note it is a 0..100 signal QUALITY, not dBm:
+			//                               clamp(2 * (95 - |rssi_dBm|), 0, 100), named "wifi_rssi"
+			//                               against "rssi" in the firmware's own debug output.
+			//
+			// The debug line stays: it is the only place the raw values are visible if anyone ever
+			// wants to decide the five open fields on real data instead of a guess.
+			const info = this.protobuf.decodePayload("NetworkInfo", "NetworkInfoReqDTO", payload);
+			this.adapter.log.debug(
+				`[${this.deviceId || this.host}] NetworkInfo: csq=${Number(info.csq ?? 0)}, ` +
+					`workMode=${Number(info.netWorkMod ?? 0)}, workState=${Number(info.netWorkState ?? 0)}, ` +
+					`setMode=${Number(info.netSetMod ?? 0)}, setState=${Number(info.netSetState ?? 0)}, ` +
+					`apState=${Number(info.apSetState ?? 0)}`,
+			);
 		} catch (err) {
 			this.adapter.log.warn(`[${this.deviceId || this.host}] Error decoding NetworkInfo: ${errorMessage(err)}`);
 		}
@@ -1790,6 +2501,12 @@ class DeviceContext {
 	 * @param state - The new state value
 	 */
 	async handleStateChange(stateId: string, state: ioBroker.State): Promise<void> {
+		// The meter controls are not device commands in the usual sense — they configure which
+		// meter the DTU should talk to — so they are handled before the command table.
+		if (stateId === "meter.mode" || stateId === "meter.deviceId") {
+			await this.handleShellyStateChange(stateId, state);
+			return;
+		}
 		// Local link takes precedence: a locally-connected DTU is actuated directly over TCP.
 		if (this.connection?.connected) {
 			await executeCommand(stateId, state, {
@@ -1800,6 +2517,16 @@ class DeviceContext {
 				log: this.adapter.log,
 				setState: (id, val, ack) => this.setState(id, val, ack),
 				resetButton: id => this.scheduleButtonReset(id),
+				configSnapshot: this.configSnapshot,
+				flashGuard: this.flashGuard,
+				flashWriteState: id => {
+					let entry = this.flashWrites.get(id);
+					if (!entry) {
+						entry = { lastValue: null, lastWriteMs: 0, skipsLogged: 0 };
+						this.flashWrites.set(id, entry);
+					}
+					return entry;
+				},
 			});
 			return;
 		}
@@ -1884,6 +2611,15 @@ class DeviceContext {
 		}
 		this.stopPollCycle();
 		this.stateCache.clear();
+		// A remembered limit belongs to the device that was connected, not to whatever connects
+		// next — keeping it would throttle the first write to a different DTU.
+		this.flashWrites.clear();
+		this.energyGuard.clear();
+		// The snapshot describes the device that was connected. Keeping it would let a write go
+		// out built from another device's configuration.
+		this.configSnapshot = null;
+		this.histPage = 0;
+		this.histSamples = [];
 		if (this.connection) {
 			this.connection.removeAllListeners();
 			this.connection.disconnect();

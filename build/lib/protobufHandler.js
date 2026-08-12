@@ -2,7 +2,7 @@ import * as path from "node:path";
 import protobuf from "protobufjs";
 import { getAlarmDescription } from "./alarmCodes.js";
 import { crc16 } from "./crc16.js";
-import { DTU_TIME_OFFSET, HM_MAGIC_0, HM_MAGIC_1, SCALE_VOLTAGE, SCALE_POWER, SCALE_TEMPERATURE, SCALE_CURRENT, SCALE_FREQUENCY, SCALE_ENERGY, SCALE_POWER_FACTOR, } from "./constants.js";
+import { DTU_TIME_OFFSET, HM_MAGIC_0, HM_MAGIC_1, SCALE_VOLTAGE, SCALE_POWER, SCALE_POWER_LIMIT_TCP, SCALE_TEMPERATURE, SCALE_CURRENT, SCALE_FREQUENCY, SCALE_ENERGY, SCALE_POWER_FACTOR, } from "./constants.js";
 import { unixSeconds } from "./utils.js";
 function pad2(n) {
     return String(n).padStart(2, "0");
@@ -32,7 +32,6 @@ const CMD = {
     HEARTBEAT: [0xa3, 0x02],
     NETWORK_INFO: [0xa3, 0x14],
     COMMAND_STATUS: [0xa3, 0x06],
-    AUTO_SEARCH: [0xa3, 0x13],
     DEV_CONFIG_FETCH: [0xa3, 0x07],
     DEV_CONFIG_PUT: [0xa3, 0x08],
 };
@@ -229,6 +228,17 @@ class ProtobufHandler {
         const payload = ResDTO.encode(msg).finish();
         return this.buildMessage(CMD.GET_CONFIG[0], CMD.GET_CONFIG[1], payload);
     }
+    encodeHistPowerRequest(timestamp, page = 0) {
+        const ResDTO = this.getType("AppGetHistPower", "AppGetHistPowerResDTO");
+        const msg = ResDTO.create({
+            cp: page,
+            offset: DTU_TIME_OFFSET,
+            requestedTime: timestamp,
+            requestedDay: 0,
+        });
+        const payload = ResDTO.encode(msg).finish();
+        return this.buildMessage(CMD.HIST_POWER[0], CMD.HIST_POWER[1], payload);
+    }
     encodeCommandAction(action, timestamp, data, cmd, devKind = 1) {
         const ResDTO = this.getType("CommandPB", "CommandResDTO");
         const msg = ResDTO.create({
@@ -260,15 +270,35 @@ class ProtobufHandler {
     encodeInverterReboot(timestamp) {
         return this.encodeCommandAction(ACTION.INV_REBOOT, timestamp, undefined, CMD.COMMAND_CLOUD);
     }
-    encodeSetConfig(timestamp, config) {
+    encodeSetConfig(timestamp, config, base) {
         const ResDTO = this.getType("SetConfig", "SetConfigResDTO");
+        if (!base) {
+            throw new Error("cannot write the configuration without having read it first — a partial SetConfig " +
+                "clears every field it does not carry");
+        }
+        const envelope = new Set(["offset", "time", "tid", "errorCode", "appPage"]);
+        const carried = {};
+        for (const name of Object.keys(ResDTO.fields)) {
+            if (envelope.has(name)) {
+                continue;
+            }
+            const value = base[name];
+            if (value !== undefined && value !== null) {
+                carried[name] = value;
+            }
+        }
         const msg = ResDTO.create({
+            ...carried,
             offset: DTU_TIME_OFFSET,
             time: timestamp,
             ...config,
         });
         const payload = ResDTO.encode(msg).finish();
         return this.buildMessage(CMD.SET_CONFIG[0], CMD.SET_CONFIG[1], payload);
+    }
+    decodeGetConfigRaw(payload) {
+        const ReqDTO = this.getType("GetConfig", "GetConfigReqDTO");
+        return ReqDTO.toObject(ReqDTO.decode(payload), { longs: Number, defaults: true });
     }
     encodeWarnDataRequest(timestamp, packageNow = 0) {
         const ResDTO = this.getType("WarnData", "WarnResDTO");
@@ -315,15 +345,6 @@ class ProtobufHandler {
     encodeUnlockInverter(timestamp) {
         return this.encodeCommandAction(ACTION.UNLOCK, timestamp, undefined, CMD.COMMAND_CLOUD);
     }
-    encodeAutoSearch(timestamp) {
-        const ResDTO = this.getType("AutoSearch", "AutoSearchResDTO");
-        const msg = ResDTO.create({
-            offset: DTU_TIME_OFFSET,
-            time: timestamp,
-        });
-        const payload = ResDTO.encode(msg).finish();
-        return this.buildMessage(CMD.AUTO_SEARCH[0], CMD.AUTO_SEARCH[1], payload);
-    }
     encodeDevConfigFetch(timestamp, dtuSn, devSn, currentPackage = 0) {
         const ResDTO = this.getType("DevConfig", "DevConfigFetchResDTO");
         const msg = ResDTO.create({
@@ -368,7 +389,7 @@ class ProtobufHandler {
         });
         return this.buildMessage(0x22, 0x0e, ReqDTO.encode(msg).finish());
     }
-    decodeRealDataNew(payload) {
+    decodeRealDataNew(payload, powerLimitScale = SCALE_POWER_LIMIT_TCP) {
         const obj = this.decodePayload("RealDataNew", "RealDataNewReqDTO", payload);
         const result = {
             dtuSn: obj.deviceSerialNumber || "",
@@ -386,15 +407,14 @@ class ProtobufHandler {
                 voltage: scaled(sgs.voltage, SCALE_VOLTAGE),
                 frequency: scaled(sgs.frequency, SCALE_FREQUENCY),
                 activePower: scaled(sgs.activePower, SCALE_POWER),
-                reactivePower: scaled(sgs.reactivePower, SCALE_POWER),
+                reactivePower: scaled(s16(sgs.reactivePower), SCALE_POWER),
                 current: scaled(sgs.current, SCALE_CURRENT),
                 powerFactor: scaled(sgs.powerFactor, SCALE_POWER_FACTOR),
                 temperature: scaled(s16(sgs.temperature), SCALE_TEMPERATURE),
                 warningNumber: num(sgs.warningNumber),
                 crcChecksum: num(sgs.crcChecksum),
                 linkStatus: num(sgs.linkStatus),
-                powerLimit: scaled(sgs.powerLimit, SCALE_POWER),
-                modulationIndexSignal: num(sgs.modulationIndexSignal),
+                powerLimit: scaled(sgs.powerLimit, powerLimitScale),
             });
         }
         for (const pv of arr(obj.pvData)) {
@@ -409,6 +429,11 @@ class ProtobufHandler {
                 errorCode: num(pv.errorCode),
             });
         }
+        result.extraLists = {
+            rp: arr(obj.rpData).length,
+            rsd: arr(obj.rsdData).length,
+            tgs: arr(obj.tgsData).length,
+        };
         for (const m of arr(obj.meterData)) {
             result.meter.push({
                 deviceType: num(m.deviceType),
@@ -420,6 +445,15 @@ class ProtobufHandler {
                 powerFactorTotal: scaled(m.powerFactorTotal, SCALE_POWER_FACTOR),
                 energyTotalPower: scaled(m.energyTotalPower, SCALE_ENERGY),
                 energyTotalConsumed: scaled(m.energyTotalConsumed, SCALE_ENERGY),
+                energyPhaseAExport: scaled(m.energyPhase_A, SCALE_ENERGY),
+                energyPhaseBExport: scaled(m.energyPhase_B, SCALE_ENERGY),
+                energyPhaseCExport: scaled(m.energyPhase_C, SCALE_ENERGY),
+                energyPhaseAImport: scaled(m.energyPhase_AConsumed, SCALE_ENERGY),
+                energyPhaseBImport: scaled(m.energyPhase_BConsumed, SCALE_ENERGY),
+                energyPhaseCImport: scaled(m.energyPhase_CConsumed, SCALE_ENERGY),
+                powerFactorPhaseA: scaled(m.powerFactorPhase_A, SCALE_POWER_FACTOR),
+                powerFactorPhaseB: scaled(m.powerFactorPhase_B, SCALE_POWER_FACTOR),
+                powerFactorPhaseC: scaled(m.powerFactorPhase_C, SCALE_POWER_FACTOR),
                 faultCode: num(m.faultCode),
                 voltagePhaseA: scaled(m.voltagePhase_A, SCALE_VOLTAGE),
                 voltagePhaseB: scaled(m.voltagePhase_B, SCALE_VOLTAGE),
@@ -460,6 +494,10 @@ class ProtobufHandler {
                 wifiVersion: di.wifiVersion || "",
                 dtu485Mode: num(di.dtu485Mode),
                 sub1gFrequencyBand: num(di.sub1gFrequencyBand),
+                knownMeters: (Array.isArray(di.shls) ? di.shls : [])
+                    .map(v => (typeof v === "string" ? BigInt(v) : BigInt(Number(v) || 0)))
+                    .filter(v => v > 0n)
+                    .map(v => v.toString(16).padStart(12, "0")),
             };
         }
         for (const pv of arr(obj.pvInfo)) {
@@ -480,6 +518,7 @@ class ProtobufHandler {
         const subnetMask = formatIpv4(obj.subnetMask_0, obj.subnetMask_1, obj.subnetMask_2, obj.subnetMask_3);
         const gateway = formatIpv4(obj.defaultGateway_0, obj.defaultGateway_1, obj.defaultGateway_2, obj.defaultGateway_3);
         const wifiIp = formatIpv4(obj.wifiIpAddr_0, obj.wifiIpAddr_1, obj.wifiIpAddr_2, obj.wifiIpAddr_3);
+        const dns = formatIpv4(obj.cableDns_0, obj.cableDns_1, obj.cableDns_2, obj.cableDns_3);
         const mac = formatMac(obj.mac_0, obj.mac_1, obj.mac_2, obj.mac_3, obj.mac_4, obj.mac_5);
         const wifiMac = formatMac(obj.wifiMac_0, obj.wifiMac_1, obj.wifiMac_2, obj.wifiMac_3, obj.wifiMac_4, obj.wifiMac_5);
         return {
@@ -507,6 +546,8 @@ class ProtobufHandler {
             wifiIpAddress: wifiIp,
             macAddress: mac,
             wifiMacAddress: wifiMac,
+            dnsServer: dns,
+            lockTime: num(obj.lockTime),
         };
     }
     decodeAlarmData(payload) {
@@ -533,13 +574,14 @@ class ProtobufHandler {
         const obj = this.decodePayload("AppGetHistPower", "AppGetHistPowerReqDTO", payload);
         return {
             serialNumber: serialToHex(obj.serialNumber),
-            powerArray: obj.powerArray || [],
+            powerArray: (obj.powerArray || []).map(v => num(v) / SCALE_POWER),
             totalEnergy: num(obj.totalEnergy),
             dailyEnergy: num(obj.dailyEnergy),
             stepTime: num(obj.stepTime),
-            startTime: num(obj.startTime),
             relativePower: num(obj.relativePower),
             warningNumber: num(obj.warningNumber),
+            pageCount: num(obj.ap),
+            absoluteStart: num(obj.absoluteStart),
         };
     }
     decodeWarnData(payload) {

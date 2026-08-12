@@ -103,9 +103,20 @@ describe("BurstPoller – start() station discovery", function () {
 		poller.stop();
 	});
 
-	it("does not fetch a realtime uri for a station with no cloud-only inverters", async function () {
-		const { adapter } = createTrackingAdapter();
+	it("still runs a station-only loop when every inverter is served locally (live station aggregate)", async function () {
+		const { adapter, calls } = createTrackingAdapter();
 		let uriCalled = false;
+		const modes = [];
+
+		let resolveStation;
+		const stationDone = new Promise(r => (resolveStation = r));
+		const trackedSetState = adapter.setStateAsync;
+		adapter.setStateAsync = async (id, val) => {
+			await trackedSetState(id, val);
+			if (id === "station-1.grid.pvUtilization") {
+				resolveStation();
+			}
+		};
 
 		const cloud = {
 			getDeviceTree: async () => [dtuNode("DTU_LOCAL_ONLY", ["INV_LOCAL"])],
@@ -113,24 +124,42 @@ describe("BurstPoller – start() station discovery", function () {
 				uriCalled = true;
 				return "https://eurt.example.com/rds/api/0/burst/get?k=abc&t=1";
 			},
-			pollRealtimeBurst: async () => ({ mis: [], dly: 5000 }),
+			pollRealtimeBurst: async (uri, body) => {
+				modes.push(body.m);
+				return { con: 1, dly: 5000, power: { pv: 781, pvr: 48.8, grid: 0, load: 781, bat: 0 } };
+			},
 		};
 
-		const devices = new Map([
-			["DTU_LOCAL_ONLY", makeDevice({ dtuSerial: "DTU_LOCAL_ONLY", connection: { connected: true } })],
-		]);
+		const burstActiveStations = new Set();
+		const dev = makeDevice({ dtuSerial: "DTU_LOCAL_ONLY", connection: { connected: true } });
+		const devices = new Map([["DTU_LOCAL_ONLY", dev]]);
 
 		const poller = new BurstPoller({
 			cloud,
 			adapter,
 			devices,
 			stationDevices: new Set([1]),
-			burstActiveStations: new Set(),
+			burstActiveStations,
 		});
 		await poller.start();
+		await stationDone;
 
-		assert.strictEqual(uriCalled, false, "getRealtimeUri must not be called when no target inverters exist");
-		assert.strictEqual(poller.stations.size, 0);
+		assert.strictEqual(uriCalled, true, "the station-level aggregate still needs a realtime uri");
+		assert.ok(
+			modes.length > 0 && modes.every(m => m === 0),
+			"only the m:0 station aggregate may be polled — no per-inverter m:3",
+		);
+		assert.strictEqual(poller.stations.size, 1, "the station loop must keep running");
+		assert.strictEqual(burstActiveStations.has(1), true, "the burst owns the station-level power");
+		assert.strictEqual(dev.burstActive, undefined, "a locally served DTU must never be claimed per-inverter");
+
+		const byId = Object.fromEntries(calls.map(([id, val]) => [id, val]));
+		assert.deepStrictEqual(byId["station-1.grid.power"], { val: 781, ack: true, q: 0x00 });
+		assert.strictEqual(
+			byId["DTU_LOCAL_ONLY.grid.power"],
+			undefined,
+			"no per-inverter state may be written for a locally served DTU",
+		);
 		poller.stop();
 	});
 
@@ -156,21 +185,32 @@ describe("BurstPoller – start() station discovery", function () {
 		poller.stop();
 	});
 
-	it("skips devices with enableLocal=true even when not currently connected (never claims a locally-configured DTU)", async function () {
+	it("never claims a DTU with enableLocal=true per-inverter, even when not currently connected", async function () {
 		const { adapter } = createTrackingAdapter();
-		let uriCalled = false;
+		const modes = [];
+
+		let resolveStation;
+		const stationDone = new Promise(r => (resolveStation = r));
+		const trackedSetState = adapter.setStateAsync;
+		adapter.setStateAsync = async (id, val) => {
+			await trackedSetState(id, val);
+			if (id === "station-1.grid.pvUtilization") {
+				resolveStation();
+			}
+		};
 
 		const cloud = {
 			getDeviceTree: async () => [dtuNode("DTU_ENABLELOCAL", ["INV1"])],
-			getRealtimeUri: async () => {
-				uriCalled = true;
-				return "https://eurt.example.com/rds/api/0/burst/get?k=abc&t=1";
+			getRealtimeUri: async () => "https://eurt.example.com/rds/api/0/burst/get?k=abc&t=1",
+			pollRealtimeBurst: async (uri, body) => {
+				modes.push(body.m);
+				return { con: 1, dly: 5000, power: { pv: 100, pvr: 12.5, grid: 0, load: 100, bat: 0 } };
 			},
-			pollRealtimeBurst: async () => ({ mis: [], dly: 5000 }),
 		};
 
 		const burstActiveStations = new Set();
-		// enableLocal=true but no active connection (e.g. WR offline at night) — must still be skipped.
+		// enableLocal=true but no active connection (e.g. WR offline at night) — must still be skipped
+		// as a per-inverter target; only the station-level aggregate is served from the burst.
 		const dev = makeDevice({ dtuSerial: "DTU_ENABLELOCAL", enableLocal: true, connection: null });
 		const devices = new Map([["DTU_ENABLELOCAL", dev]]);
 
@@ -182,11 +222,14 @@ describe("BurstPoller – start() station discovery", function () {
 			burstActiveStations,
 		});
 		await poller.start();
+		await stationDone;
 
-		assert.strictEqual(uriCalled, false, "getRealtimeUri must not be called for a locally-configured DTU");
-		assert.strictEqual(poller.stations.size, 0, "station must not be tracked when only a local DTU is present");
+		assert.ok(
+			modes.every(m => m === 0),
+			"a locally-configured DTU must never be polled per-inverter (m:3)",
+		);
 		assert.strictEqual(dev.burstActive, undefined, "burstActive must not be set for a locally-configured device");
-		assert.strictEqual(burstActiveStations.has(1), false, "station must not be flagged burst-active");
+		assert.strictEqual(burstActiveStations.has(1), true, "the station aggregate is still served by the burst");
 		poller.stop();
 	});
 
@@ -565,6 +608,66 @@ describe("BurstPoller – claim release/recovery on poll failures", function () 
 		assert.strictEqual(dev.burstActive, true, "claim must be reacquired once a poll succeeds again");
 		assert.strictEqual(burstActiveStations.has(1), true, "station must be burst-active again");
 
+		poller.stop();
+	});
+
+	it("releases and reclaims a station-only loop (no per-inverter targets) across poll failures", async function () {
+		const { adapter } = createTrackingAdapter();
+		const driver = driveManually(adapter);
+
+		let callCount = 0;
+		const cloud = {
+			getDeviceTree: async () => [dtuNode("DTU_LOCAL_ONLY", ["INV1"])],
+			getRealtimeUri: async () => "https://eurt.example.com/rds/api/0/burst/get?k=abc&t=1",
+			pollRealtimeBurst: async () => {
+				callCount++;
+				if (callCount <= BURST_MAX_FAILURES) {
+					throw new Error("burst poll failed");
+				}
+				return { con: 1, dly: 2000, power: { pv: 42, pvr: 5, grid: 0, load: 42, bat: 0 } };
+			},
+		};
+
+		const devices = new Map([
+			["DTU_LOCAL_ONLY", makeDevice({ dtuSerial: "DTU_LOCAL_ONLY", connection: { connected: true } })],
+		]);
+		const burstActiveStations = new Set();
+
+		const poller = new BurstPoller({
+			cloud,
+			adapter,
+			devices,
+			stationDevices: new Set([1]),
+			burstActiveStations,
+		});
+
+		const firstScheduled = driver.waitScheduled();
+		await poller.start();
+		let cycle = await firstScheduled; // attempt 1
+
+		assert.strictEqual(burstActiveStations.has(1), true, "station claim is held after a single failure");
+
+		for (let i = 2; i <= BURST_MAX_FAILURES; i++) {
+			const next = driver.waitScheduled();
+			driver.fire(cycle);
+			cycle = await next;
+		}
+		assert.strictEqual(
+			burstActiveStations.has(1),
+			false,
+			"station claim must be released after BURST_MAX_FAILURES failures so the slow poller resumes",
+		);
+		assert.strictEqual(poller.stations.has(1), true, "the station-only loop keeps retrying");
+
+		const next = driver.waitScheduled();
+		driver.fire(cycle);
+		await next;
+
+		assert.strictEqual(
+			burstActiveStations.has(1),
+			true,
+			"station must be reclaimed once a poll succeeds again, even with no per-inverter targets",
+		);
 		poller.stop();
 	});
 });

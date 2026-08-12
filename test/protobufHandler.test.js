@@ -9,6 +9,7 @@ import {
 	formatInvVersion,
 } from "../build/lib/protobufHandler.js";
 import { crc16 } from "../build/lib/crc16.js";
+import { SCALE_POWER_LIMIT_TCP, SCALE_POWER_LIMIT_BLE } from "../build/lib/constants.js";
 
 // ============================================================
 // protobufHandler
@@ -159,7 +160,6 @@ describe("protobufHandler", function () {
 			assert.deepStrictEqual(CMD.HIST_POWER, [0xa3, 0x15]);
 			assert.deepStrictEqual(CMD.HEARTBEAT, [0xa3, 0x02]);
 			assert.deepStrictEqual(CMD.NETWORK_INFO, [0xa3, 0x14]);
-			assert.deepStrictEqual(CMD.AUTO_SEARCH, [0xa3, 0x13]);
 			assert.deepStrictEqual(CMD.DEV_CONFIG_FETCH, [0xa3, 0x07]);
 		});
 
@@ -271,16 +271,6 @@ describe("protobufHandler", function () {
 			const decoded = ResDTO.decode(parsed.payload);
 			const obj = ResDTO.toObject(decoded, { longs: Number, defaults: true });
 			assert.strictEqual(obj.action, ACTION.CLEAN_GROUNDING_FAULT);
-		});
-	});
-
-	describe("encodeAutoSearch", function () {
-		it("creates valid message with correct command bytes", function () {
-			const msg = handler.encodeAutoSearch(1700000000);
-			assert.ok(Buffer.isBuffer(msg));
-			assert.ok(msg.length > HEADER_SIZE);
-			assert.strictEqual(msg[2], 0xa3);
-			assert.strictEqual(msg[3], 0x13);
 		});
 	});
 
@@ -453,7 +443,7 @@ describe("protobufHandler – additional encoders", function () {
 	});
 
 	it("encodeSetConfig creates valid message with SET_CONFIG command", function () {
-		const msg = handler.encodeSetConfig(1700000000, { serverSendTime: 5 });
+		const msg = handler.encodeSetConfig(1700000000, { serverSendTime: 5 }, {}, {});
 		assert.strictEqual(msg[2], 0xa3);
 		assert.strictEqual(msg[3], 0x10); // SET_CONFIG
 		const parsed = handler.parseResponse(msg);
@@ -466,11 +456,15 @@ describe("protobufHandler – additional encoders", function () {
 		// SetConfigRes has no wifi_rssi field, so everything from serverport onward is one lower
 		// than in GetConfig. Round-trips through the same proto can't catch a wrong numbering —
 		// assert the raw wire tags (fieldNo << 3 | wireType) as verified on-device.
-		const msg = handler.encodeSetConfig(1700000000, {
-			serverport: 10081,
-			wifiPassword: "secret",
-			serverDomainName: "dataeu.hoymiles.com",
-		});
+		const msg = handler.encodeSetConfig(
+			1700000000,
+			{
+				serverport: 10081,
+				wifiPassword: "secret",
+				serverDomainName: "dataeu.hoymiles.com",
+			},
+			{},
+		);
 		const parsed = handler.parseResponse(msg);
 		const readVarint = (buf, pos) => {
 			let value = 0;
@@ -503,7 +497,7 @@ describe("protobufHandler – additional encoders", function () {
 	});
 
 	it("encodeSetConfig with zeroExportEnable", function () {
-		const msg = handler.encodeSetConfig(1700000000, { zeroExportEnable: 1 });
+		const msg = handler.encodeSetConfig(1700000000, { zeroExportEnable: 1 }, {});
 		const parsed = handler.parseResponse(msg);
 		const ResDTO = handler.protos.SetConfig.lookupType("SetConfigResDTO");
 		const obj = ResDTO.toObject(ResDTO.decode(parsed.payload), { longs: Number, defaults: true });
@@ -875,5 +869,341 @@ describe("protobufHandler – additional decode methods", function () {
 			assert.strictEqual(obj.tid, 50628399);
 			assert.deepStrictEqual(obj.miSnsSucs, [22070228217316]);
 		});
+	});
+});
+
+// ============================================================
+// protobufHandler – meter per-phase fields
+// ============================================================
+// These nine fields (MeterMO #9-#11, #13-#15, #23-#25) were decoded nowhere, so the values
+// existed on the wire but never reached a state. The point of this test is the FIELD NAMES:
+// protobufjs camel-cases `energy_phase_A` to `energyPhase_A` (the `_A` survives because the
+// next character is already uppercase). Get that wrong and the decoder silently yields 0 —
+// which looks exactly like a meter that reports nothing.
+describe("protobufHandler – meter per-phase fields", function () {
+	let handler;
+
+	before(async function () {
+		this.timeout(10000);
+		handler = new ProtobufHandler();
+		await handler.loadProtos();
+	});
+
+	function realDataWithMeter(meterFields) {
+		const Req = handler.getType("RealDataNew", "RealDataNewReqDTO");
+		const msg = Req.create({
+			deviceSerialNumber: "4143A01CEDE4",
+			timestamp: 1700000000,
+			meterData: [meterFields],
+		});
+		return Buffer.from(Req.encode(msg).finish());
+	}
+
+	it("decodes the per-phase exported energies", function () {
+		const payload = realDataWithMeter({
+			energyPhase_A: 1234, // ÷100 → 12.34 kWh
+			energyPhase_B: 5600,
+			energyPhase_C: 7,
+		});
+		const m = handler.decodeRealDataNew(payload).meter[0];
+		assert.strictEqual(m.energyPhaseAExport, 12.34);
+		assert.strictEqual(m.energyPhaseBExport, 56);
+		assert.strictEqual(m.energyPhaseCExport, 0.07);
+	});
+
+	it("decodes the per-phase imported energies", function () {
+		const payload = realDataWithMeter({
+			energyPhase_AConsumed: 4321,
+			energyPhase_BConsumed: 100,
+			energyPhase_CConsumed: 0,
+		});
+		const m = handler.decodeRealDataNew(payload).meter[0];
+		assert.strictEqual(m.energyPhaseAImport, 43.21);
+		assert.strictEqual(m.energyPhaseBImport, 1);
+		assert.strictEqual(m.energyPhaseCImport, 0);
+	});
+
+	it("decodes the per-phase power factors", function () {
+		const payload = realDataWithMeter({
+			powerFactorPhase_A: 998, // ÷1000
+			powerFactorPhase_B: 1000,
+			powerFactorPhase_C: 500,
+		});
+		const m = handler.decodeRealDataNew(payload).meter[0];
+		assert.strictEqual(m.powerFactorPhaseA, 0.998);
+		assert.strictEqual(m.powerFactorPhaseB, 1);
+		assert.strictEqual(m.powerFactorPhaseC, 0.5);
+	});
+
+	it("keeps the existing totals untouched", function () {
+		const payload = realDataWithMeter({
+			energyTotalPower: 10000,
+			energyTotalConsumed: 2000,
+			powerFactorTotal: 950,
+			energyPhase_A: 1234,
+		});
+		const m = handler.decodeRealDataNew(payload).meter[0];
+		assert.strictEqual(m.energyTotalPower, 100);
+		assert.strictEqual(m.energyTotalConsumed, 20);
+		assert.strictEqual(m.powerFactorTotal, 0.95);
+		assert.strictEqual(m.energyPhaseAExport, 12.34);
+	});
+});
+
+// ============================================================
+// protobufHandler – config values that were decoded and dropped
+// ============================================================
+// The DTU reports IP, mask, gateway, MAC and its meter configuration in every GetConfig.
+// Assembling them was already implemented, but nothing ever wrote them; DNS and lock duration
+// were not even decoded. As with the meter fields, the field names are the risk: protobufjs
+// yields `cableDns_0`, not `cableDns0`.
+describe("protobufHandler – config values", function () {
+	let handler;
+
+	before(async function () {
+		this.timeout(10000);
+		handler = new ProtobufHandler();
+		await handler.loadProtos();
+	});
+
+	function config(fields) {
+		const Req = handler.getType("GetConfig", "GetConfigReqDTO");
+		return Buffer.from(Req.encode(Req.create(fields)).finish());
+	}
+
+	it("assembles the DNS server from its four octets", function () {
+		const c = handler.decodeGetConfig(config({ cableDns_0: 192, cableDns_1: 168, cableDns_2: 178, cableDns_3: 1 }));
+		assert.strictEqual(c.dnsServer, "192.168.178.1");
+	});
+
+	it("decodes the inverter lock duration", function () {
+		assert.strictEqual(handler.decodeGetConfig(config({ lockTime: 300 })).lockTime, 300);
+		assert.strictEqual(handler.decodeGetConfig(config({})).lockTime, 0);
+	});
+
+	it("still assembles the network addresses that were already decoded", function () {
+		const c = handler.decodeGetConfig(
+			config({
+				ipAddr_0: 10,
+				ipAddr_1: 0,
+				ipAddr_2: 0,
+				ipAddr_3: 7,
+				subnetMask_0: 255,
+				subnetMask_1: 255,
+				subnetMask_2: 255,
+				subnetMask_3: 0,
+				defaultGateway_0: 10,
+				defaultGateway_1: 0,
+				defaultGateway_2: 0,
+				defaultGateway_3: 1,
+				mac_0: 0x40,
+				mac_1: 0xf4,
+				mac_2: 0xc9,
+				mac_3: 0x86,
+				mac_4: 0x9d,
+				mac_5: 0x50,
+			}),
+		);
+		assert.strictEqual(c.ipAddress, "10.0.0.7");
+		assert.strictEqual(c.subnetMask, "255.255.255.0");
+		assert.strictEqual(c.gateway, "10.0.0.1");
+		assert.strictEqual(c.macAddress.toLowerCase(), "40:f4:c9:86:9d:50");
+	});
+
+	it("reports the meter configuration as sent", function () {
+		const c = handler.decodeGetConfig(config({ meterKind: "SHELLY", meterInterface: "WIFI" }));
+		assert.strictEqual(c.meterKind, "SHELLY");
+		assert.strictEqual(c.meterInterface, "WIFI");
+	});
+});
+
+// ============================================================
+// protobufHandler — HistPower request (a315)
+// ============================================================
+// The response handler for 0xa215 has always existed and fills the history.* states, but nothing
+// ever asked for the curve. These tests nail down the request the device expects.
+describe("protobufHandler – encodeHistPowerRequest", function () {
+	let handler;
+
+	before(async function () {
+		this.timeout(10000);
+		handler = new ProtobufHandler();
+		await handler.loadProtos();
+	});
+
+	it("frames the request on tag 0xa315", function () {
+		const frame = handler.encodeHistPowerRequest(1753900000, 0);
+		assert.strictEqual(frame[0], 0x48, "HM magic");
+		assert.strictEqual(frame[1], 0x4d);
+		assert.strictEqual(frame[2], 0xa3, "local request family");
+		assert.strictEqual(frame[3], 0x15, "HistPower");
+	});
+
+	// requested_day must be 0. The handler truncates the field to one byte and keeps it as an
+	// anchor that a running counter is compared against; a real timestamp truncates to an
+	// arbitrary byte and the device then answers without the array at all. Measured on a 2T:
+	// local midnight produced 0 samples, 0 produced the full day.
+	it("always asks with requested_day = 0, never a date", function () {
+		const ResDTO = handler.getType("AppGetHistPower", "AppGetHistPowerResDTO");
+		for (const page of [0, 3]) {
+			const frame = handler.encodeHistPowerRequest(1753900000, page);
+			const msg = ResDTO.toObject(ResDTO.decode(frame.subarray(10)), { longs: Number, defaults: true });
+			assert.strictEqual(Number(msg.requestedDay), 0, "a date here yields an empty curve");
+			assert.strictEqual(Number(msg.requestedTime), 1753900000);
+			assert.strictEqual(Number(msg.cp), page, "cp selects the page");
+		}
+	});
+
+	it("declares the total length in the header, matching the payload", function () {
+		const frame = handler.encodeHistPowerRequest(1753900000, 0);
+		const total = (frame[8] << 8) | frame[9];
+		assert.strictEqual(total, frame.length, "header length must match the frame");
+		assert.ok(total - 10 < 0x401, "payload must stay under the 2T's 1024-byte limit");
+	});
+
+	// The device sends 0.1 W per unit. Integrating a measured full day at its reported step
+	// reproduced its own daily-energy figure to within 0.12 %, which is what settles the unit.
+	it("scales the power samples from 0.1 W units to W", function () {
+		const ReqDTO = handler.getType("AppGetHistPower", "AppGetHistPowerReqDTO");
+		const payload = ReqDTO.encode(
+			ReqDTO.create({ powerArray: [0, 3612, 6020], stepTime: 60, ap: 5, absoluteStart: 1785382614 }),
+		).finish();
+		const r = handler.decodeHistPower(Buffer.from(payload));
+		assert.deepStrictEqual(r.powerArray, [0, 361.2, 602], "6020 is 602 W, not 6020 W");
+		assert.strictEqual(r.stepTime, 60, "seconds between samples");
+		assert.strictEqual(r.pageCount, 5, "ap is the page count");
+		assert.strictEqual(r.absoluteStart, 1785382614, "first sample of this page");
+	});
+});
+
+// ============================================================
+// protobufHandler — SetConfig must always be a full set
+// ============================================================
+// The DTU copies every decoded field into its configuration without checking whether it was
+// actually transmitted, and proto3 does not transmit a field holding its default. A partial write
+// therefore clears everything it does not carry — on the 2WB that wiped the server domain, the
+// port and the power limit in a live test.
+describe("protobufHandler – encodeSetConfig full set", function () {
+	let handler;
+
+	before(async function () {
+		this.timeout(10000);
+		handler = new ProtobufHandler();
+		await handler.loadProtos();
+	});
+
+	function baseConfig() {
+		return {
+			serverDomainName: "dataeu.hoymiles.com",
+			serverport: 10081,
+			serverSendTime: 5,
+			limitPowerMypower: 1000,
+			lockPassword: 987654,
+			lockTime: 30,
+			invType: 2,
+			netmodeSelect: 1,
+			dhcpSwitch: 1,
+			meterKind: "NONE",
+			meterInterface: "NONE",
+		};
+	}
+
+	function decodeSet(frame) {
+		const ResDTO = handler.getType("SetConfig", "SetConfigResDTO");
+		return ResDTO.toObject(ResDTO.decode(frame.subarray(10)), { longs: Number, defaults: true });
+	}
+
+	it("refuses to build a message without a base configuration", function () {
+		assert.throws(
+			() => handler.encodeSetConfig(1753900000, { serverSendTime: 10 }, null),
+			/without having read it first/i,
+			"a partial write is never safe and must not be produced at all",
+		);
+	});
+
+	it("carries every untouched field over from the base", function () {
+		const msg = decodeSet(handler.encodeSetConfig(1753900000, { serverSendTime: 10 }, baseConfig()));
+		assert.strictEqual(Number(msg.serverSendTime), 10, "the changed field");
+		assert.strictEqual(msg.serverDomainName, "dataeu.hoymiles.com", "server must not fall back to the default");
+		assert.strictEqual(Number(msg.serverport), 10081, "port must not be cleared to 0");
+		assert.strictEqual(Number(msg.limitPowerMypower), 1000, "power limit must survive");
+		assert.strictEqual(Number(msg.lockPassword), 987654, "the lock password must not be erased");
+		assert.strictEqual(Number(msg.lockTime), 30);
+		assert.strictEqual(msg.meterKind, "NONE");
+	});
+
+	it("never sets app_page, which would unlock the WiFi credential branch", function () {
+		const msg = decodeSet(
+			handler.encodeSetConfig(1753900000, { limitPowerMypower: 800 }, { ...baseConfig(), appPage: 1 }),
+		);
+		assert.strictEqual(Number(msg.appPage ?? 0), 0, "app_page must stay 0 even if the base carries 1");
+	});
+
+	it("lets the requested change win over the base value", function () {
+		const msg = decodeSet(handler.encodeSetConfig(1753900000, { limitPowerMypower: 800 }, baseConfig()));
+		assert.strictEqual(Number(msg.limitPowerMypower), 800);
+		assert.strictEqual(Number(msg.serverSendTime), 5, "the untouched field keeps the device's value");
+	});
+
+	it("stays inside the 2T's 1024-byte payload limit with a full base", function () {
+		const frame = handler.encodeSetConfig(1753900000, { serverSendTime: 10 }, baseConfig());
+		assert.ok(frame.length - 10 < 0x401, `payload ${frame.length - 10} must stay under 1024`);
+	});
+});
+
+// ============================================================
+// protobufHandler – power limit scale
+// ============================================================
+describe("protobufHandler – SGSMO power limit", function () {
+	// The two device families disagree on the scale of this field, and the value alone cannot tell
+	// them apart: a 2T at 100 % and a 2WB at 10 % both send 1000. The caller therefore passes the
+	// divisor, chosen by transport.
+	//
+	// 2T (TCP), firmware-traced: action 8 parses "A:800,..." and stores the raw number in
+	// gp-108260 (0x40812ccc); that same variable goes unchanged into the UART string to the
+	// inverter (format "%d,A:%ld,B:%ld,C:%ld" at 0x40814e9c / 0x408163ee). Tenths of a percent.
+	// Measured: after setting 80 %, the field read 800.
+	//
+	// 2WB (BLE): the field is fed from the energy-management setpoint gp-84168 (0x4080b62a),
+	// clamped at 0x4083e09e. Measured: 10000 unthrottled, 8368 under zero-export regulation —
+	// 83.68 %, which as tenths would be an impossible 836.8 %.
+	let pb;
+	before(async function () {
+		pb = new ProtobufHandler();
+		await pb.loadProtos();
+	});
+
+	/**
+	 * Decode a RealData frame carrying just the given SGSMO fields.
+	 *
+	 * @param sgs - SGSMO fields to encode
+	 * @param scale - divisor for power_limit, or undefined for the default
+	 */
+	function decodeWith(sgs, scale) {
+		const Real = pb.getType("RealDataNew", "RealDataNewReqDTO");
+		const payload = Real.encode(Real.create({ sgsData: [sgs] })).finish();
+		return pb.decodeRealDataNew(Buffer.from(payload), scale);
+	}
+
+	it("reads the TCP scale as tenths of a percent", function () {
+		assert.strictEqual(decodeWith({ powerLimit: 800 }, SCALE_POWER_LIMIT_TCP).sgs[0].powerLimit, 80);
+		assert.strictEqual(decodeWith({ powerLimit: 1000 }, SCALE_POWER_LIMIT_TCP).sgs[0].powerLimit, 100);
+	});
+
+	it("reads the BLE scale as hundredths of a percent", function () {
+		assert.strictEqual(decodeWith({ powerLimit: 10000 }, SCALE_POWER_LIMIT_BLE).sgs[0].powerLimit, 100);
+		assert.strictEqual(decodeWith({ powerLimit: 8368 }, SCALE_POWER_LIMIT_BLE).sgs[0].powerLimit, 83.68);
+	});
+
+	it("defaults to the TCP scale", function () {
+		// The released path is TCP; a caller that forgets the argument must not break it.
+		assert.strictEqual(decodeWith({ powerLimit: 800 }).sgs[0].powerLimit, 80);
+	});
+
+	it("never shares a factor with the watt-valued fields", function () {
+		// Both were divided by SCALE_POWER before, which reported the limit as 1000 %.
+		const r = decodeWith({ activePower: 10000, powerLimit: 10000 }, SCALE_POWER_LIMIT_BLE);
+		assert.strictEqual(r.sgs[0].activePower, 1000, "activePower is 0.1 W");
+		assert.strictEqual(r.sgs[0].powerLimit, 100, "powerLimit is 0.01 %");
 	});
 });

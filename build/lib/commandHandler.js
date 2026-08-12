@@ -1,5 +1,24 @@
 import { POWER_LIMIT_MIN, POWER_LIMIT_MAX, SCALE_POWER, DEVICE_COMMAND_REBOOT, DEVICE_COMMAND_POWER_ON, DEVICE_COMMAND_POWER_OFF, DTU_COMMAND_REBOOT, CLOUD_DEV_TYPE_DTU, CLOUD_DEV_TYPE_MICRO, } from "./constants.js";
 import { unixSeconds } from "./utils.js";
+export function shouldSkipFlashWrite(value, last, guard, nowMs, valueSpan = 100) {
+    if (last.lastValue !== null && guard.deadband > 0) {
+        const change = Math.abs(value - last.lastValue);
+        const threshold = (guard.deadband * valueSpan) / 100;
+        if (change < threshold) {
+            return `the change of ${change.toFixed(2)} is below the ${guard.deadband}% dead band (${threshold.toFixed(2)})`;
+        }
+    }
+    if (last.lastWriteMs > 0 && guard.minIntervalMs > 0) {
+        const sinceMs = nowMs - last.lastWriteMs;
+        if (sinceMs < guard.minIntervalMs) {
+            return `only ${Math.round(sinceMs / 1000)}s since the last write (minimum ${Math.round(guard.minIntervalMs / 1000)}s)`;
+        }
+    }
+    return null;
+}
+export function flashWritingStateForAction(action) {
+    return action === 8 ? "inverter.powerLimit" : null;
+}
 const COMMANDS = {
     "inverter.powerLimit": {
         validate: v => v < POWER_LIMIT_MIN || v > POWER_LIMIT_MAX
@@ -7,6 +26,8 @@ const COMMANDS = {
             : null,
         encode: (v, ts, pb) => pb.encodeSetPowerLimit(Number(v), ts),
         log: v => `Setting power limit to ${v}%`,
+        writesFlash: true,
+        valueSpan: 100,
     },
     "inverter.active": {
         encode: (v, ts, pb) => (v ? pb.encodeInverterOn(ts) : pb.encodeInverterOff(ts)),
@@ -26,11 +47,15 @@ const COMMANDS = {
         validate: v => !((v >= -1 && v <= -0.8) || (v >= 0.8 && v <= 1)) ? "Power factor must be -1.0…-0.8 or 0.8…1.0" : null,
         encode: (v, ts, pb) => pb.encodePowerFactorLimit(Number(v), ts),
         log: v => `Setting power factor limit to ${v}`,
+        writesFlash: true,
+        valueSpan: 2,
     },
     "inverter.reactivePowerLimit": {
         validate: v => (v < -50 || v > 50 ? "Reactive power limit must be -50…+50°" : null),
         encode: (v, ts, pb) => pb.encodeReactivePowerLimit(Number(v), ts),
         log: v => `Setting reactive power limit to ${v}°`,
+        writesFlash: true,
+        valueSpan: 100,
     },
     "inverter.cleanWarnings": {
         encode: (_v, ts, pb) => pb.encodeCleanWarnings(ts),
@@ -48,15 +73,15 @@ const COMMANDS = {
     },
     "config.serverSendTime": {
         validate: v => (!v || v < 1 ? "Server send time must be a positive number (minutes)" : null),
-        encode: (v, ts, pb) => pb.encodeSetConfig(ts, { serverSendTime: Number(v) }),
+        encode: (v, ts, pb, base) => pb.encodeSetConfig(ts, { serverSendTime: Number(v) }, base),
         log: v => `Setting cloud send interval to ${v}min`,
     },
     "config.limitPowerMyPower": {
         validate: v => v < POWER_LIMIT_MIN || v > POWER_LIMIT_MAX
             ? `Power limit must be between ${POWER_LIMIT_MIN} and ${POWER_LIMIT_MAX}`
             : null,
-        encode: (v, ts, pb) => pb.encodeSetConfig(ts, { limitPowerMypower: Math.round(Number(v) * SCALE_POWER) }),
-        log: v => `Setting persistent power limit to ${v}% (stored in DTU)`,
+        encode: (v, ts, pb, base) => pb.encodeSetConfig(ts, { limitPowerMypower: Math.round(Number(v) * SCALE_POWER) }, base),
+        log: v => `Setting power limit to ${v}% via the DTU config field`,
     },
 };
 async function executeCommand(stateId, state, ctx) {
@@ -75,9 +100,36 @@ async function executeCommand(stateId, state, ctx) {
             return;
         }
     }
+    if (cmd.writesFlash && ctx.flashGuard && ctx.flashWriteState) {
+        const last = ctx.flashWriteState(stateId);
+        const skip = shouldSkipFlashWrite(Number(state.val), last, ctx.flashGuard, Date.now(), cmd.valueSpan);
+        if (skip) {
+            const message = `[${deviceId}] Skipping "${stateId}" to protect the DTU flash — ${skip}`;
+            if (last.skipsLogged === 0) {
+                log.info(message);
+            }
+            else {
+                log.debug(message);
+            }
+            last.skipsLogged++;
+            await ctx.setState(stateId, state.val, true);
+            return;
+        }
+        last.skipsLogged = 0;
+        last.lastValue = Number(state.val);
+        last.lastWriteMs = Date.now();
+    }
     log.info(`[${deviceId}] ${cmd.log(state.val)}`);
     const timestamp = unixSeconds();
-    await connection.send(cmd.encode(state.val, timestamp, protobuf));
+    let frame;
+    try {
+        frame = cmd.encode(state.val, timestamp, protobuf, ctx.configSnapshot ?? null);
+    }
+    catch (err) {
+        log.warn(`[${deviceId}] Cannot execute "${stateId}": ${err instanceof Error ? err.message : String(err)}`);
+        return;
+    }
+    await connection.send(frame);
     if (!cmd.button) {
         await ctx.setState(stateId, state.val, true);
     }

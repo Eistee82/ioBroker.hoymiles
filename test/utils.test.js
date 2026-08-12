@@ -3,6 +3,7 @@ import {
 	anonymize,
 	deriveStationTzOffsetMs,
 	errorMessage,
+	localMidnight,
 	logOnError,
 	mapLimit,
 	safeJsonStringify,
@@ -455,5 +456,41 @@ describe("sanitizeForLog", function () {
 		assert.strictEqual(sanitizeForLog({ token: null }).token, null);
 		assert.strictEqual(sanitizeForLog("plain-string"), "plain-string");
 		assert.strictEqual(sanitizeForLog(42), 42);
+	});
+});
+
+// ============================================================
+// utils — localMidnight
+// ============================================================
+// The power-curve request (a315) asks the device for one specific day. The device runs on local
+// time, so midnight has to be local midnight — asking in UTC fetches the wrong day around the
+// day boundary for every timezone that is not UTC.
+describe("utils – localMidnight", function () {
+	it("returns 00:00 local time of the same day", function () {
+		const noon = Math.floor(new Date(2026, 6, 30, 12, 34, 56).getTime() / 1000);
+		const midnight = localMidnight(noon);
+		const d = new Date(midnight * 1000);
+		assert.strictEqual(d.getHours(), 0);
+		assert.strictEqual(d.getMinutes(), 0);
+		assert.strictEqual(d.getSeconds(), 0);
+		assert.strictEqual(d.getDate(), 30);
+		assert.strictEqual(d.getMonth(), 6);
+		assert.strictEqual(d.getFullYear(), 2026);
+	});
+
+	it("is idempotent — midnight maps to itself", function () {
+		const noon = Math.floor(new Date(2026, 6, 30, 12, 0, 0).getTime() / 1000);
+		const midnight = localMidnight(noon);
+		assert.strictEqual(localMidnight(midnight), midnight);
+	});
+
+	it("stays on the earlier day one second before midnight", function () {
+		const justBefore = Math.floor(new Date(2026, 6, 30, 23, 59, 59).getTime() / 1000);
+		assert.strictEqual(new Date(localMidnight(justBefore) * 1000).getDate(), 30);
+	});
+
+	it("moves to the next day one second after midnight", function () {
+		const justAfter = Math.floor(new Date(2026, 6, 31, 0, 0, 1).getTime() / 1000);
+		assert.strictEqual(new Date(localMidnight(justAfter) * 1000).getDate(), 31);
 	});
 });

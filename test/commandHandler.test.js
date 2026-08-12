@@ -1,5 +1,11 @@
 import assert from "node:assert";
-import { COMMANDS, executeCommand, executeCloudCommand } from "../build/lib/commandHandler.js";
+import {
+	COMMANDS,
+	executeCommand,
+	executeCloudCommand,
+	flashWritingStateForAction,
+	shouldSkipFlashWrite,
+} from "../build/lib/commandHandler.js";
 import { ProtobufHandler } from "../build/lib/protobufHandler.js";
 
 // ============================================================
@@ -162,7 +168,7 @@ describe("commandHandler – executeCommand", function () {
 
 	it("limitPowerMyPower encode produces buffer with limitPowerMypower 500 for value 50", async function () {
 		const cmd = COMMANDS["config.limitPowerMyPower"];
-		const buf = cmd.encode(50, 1700000000, handler);
+		const buf = cmd.encode(50, 1700000000, handler, {});
 		assert.ok(Buffer.isBuffer(buf), "encode must return a Buffer");
 		assert.ok(buf.length > 0, "buffer must not be empty");
 		// Decode the protobuf payload to verify the scaled value
@@ -284,5 +290,173 @@ describe("commandHandler – executeCloudCommand", function () {
 		const handled = await executeCloudCommand("inverter.reboot", st(true), ctx);
 		assert.strictEqual(handled, true);
 		assert.deepStrictEqual(resets, ["inverter.reboot"]); // button still reset in finally
+	});
+});
+
+// ============================================================
+// commandHandler — flash protection for power-limit writes
+// ============================================================
+// Every accepted power-limit command erases and writes two 4 KB flash sectors on both devices
+// (2T: action 8 success path → 0x4080d642 → erase+write regions 3 and 0xe; 2WB: sys_cfg_write
+// runs nv_erase+nv_write twice). A control loop that writes every few seconds would wear the
+// flash out, so a dead band and a minimum interval gate those writes.
+describe("commandHandler – flash guard", function () {
+	let handler;
+
+	before(async function () {
+		this.timeout(10000);
+		handler = new ProtobufHandler();
+		await handler.loadProtos();
+	});
+
+	it("skips a power-limit write inside the dead band", function () {
+		const guard = { deadband: 1, minIntervalMs: 0 };
+		const last = { lastValue: 50, lastWriteMs: 0, skipsLogged: 0 };
+		assert.ok(shouldSkipFlashWrite(50.5, last, guard, 100000), "0.5 % change must be skipped");
+		assert.strictEqual(shouldSkipFlashWrite(52, last, guard, 100000), null, "2 % change must pass");
+	});
+
+	it("skips a power-limit write inside the minimum interval", function () {
+		const guard = { deadband: 0, minIntervalMs: 60000 };
+		const last = { lastValue: 50, lastWriteMs: 100000, skipsLogged: 0 };
+		assert.ok(shouldSkipFlashWrite(80, last, guard, 130000), "30 s after the last write: skip");
+		assert.strictEqual(shouldSkipFlashWrite(80, last, guard, 161000), null, "61 s later: pass");
+	});
+
+	it("always lets the first write through", function () {
+		const guard = { deadband: 5, minIntervalMs: 60000 };
+		const last = { lastValue: null, lastWriteMs: 0, skipsLogged: 0 };
+		assert.strictEqual(shouldSkipFlashWrite(50, last, guard, 1000), null, "no previous value: must pass");
+	});
+
+	it("is disabled when both limits are zero", function () {
+		const guard = { deadband: 0, minIntervalMs: 0 };
+		const last = { lastValue: 50, lastWriteMs: 100000, skipsLogged: 0 };
+		assert.strictEqual(shouldSkipFlashWrite(50, last, guard, 100001), null, "no guard configured: never skip");
+	});
+
+	it("marks exactly the three commands the DTU persists to flash", function () {
+		// actions 8, 47 (0x2f) and 48 (0x30) share one success path, which calls the config
+		// serializer 0x4080d642 and rewrites two 4 KB sectors — ADAPTER_FINDINGS.md §1.
+		// SetConfig fields are NOT among them: they land in RAM only (§15).
+		const flashing = Object.entries(COMMANDS)
+			.filter(([, def]) => def.writesFlash)
+			.map(([id]) => id)
+			.sort();
+		assert.deepStrictEqual(flashing, [
+			"inverter.powerFactorLimit",
+			"inverter.powerLimit",
+			"inverter.reactivePowerLimit",
+		]);
+	});
+
+	it("gives every flash-writing command the span its dead band is scaled against", function () {
+		// Without a span the percent dead band would be read in the command's own unit and, for
+		// the power factor (whole range 2.0), swallow every change the user could make.
+		for (const [id, def] of Object.entries(COMMANDS).filter(([, d]) => d.writesFlash)) {
+			assert.ok(typeof def.valueSpan === "number" && def.valueSpan > 0, `"${id}" has no valueSpan`);
+		}
+	});
+
+	it("scales the dead band to the command's range", function () {
+		const guard = { deadband: 1, minIntervalMs: 0 };
+		const last = { lastValue: 0.9, lastWriteMs: 0, skipsLogged: 0 };
+		// 1 % of the power factor's 2.0 range is 0.02, so a step of 0.1 must pass...
+		assert.strictEqual(shouldSkipFlashWrite(1.0, last, guard, Date.now(), 2), null);
+		// ...while a step of 0.01 stays below it.
+		assert.ok(shouldSkipFlashWrite(0.91, last, guard, Date.now(), 2));
+		// On a 0-100 range the dead band keeps meaning plain percentage points.
+		assert.ok(shouldSkipFlashWrite(50.5, { ...last, lastValue: 50 }, guard, Date.now(), 100));
+		assert.strictEqual(shouldSkipFlashWrite(52, { ...last, lastValue: 50 }, guard, Date.now(), 100), null);
+	});
+
+	it("does not send a throttled command but still acknowledges the state", async function () {
+		const sent = [];
+		const acks = [];
+		const infos = [];
+		const ctx = flashCtx(sent, acks, infos, { deadband: 5, minIntervalMs: 0 });
+		await executeCommand("inverter.powerLimit", { val: 50, ack: false }, ctx);
+		await executeCommand("inverter.powerLimit", { val: 52, ack: false }, ctx);
+		assert.strictEqual(sent.length, 1, "the second write is inside the dead band and must not be sent");
+		assert.strictEqual(acks.length, 2, "both values are acknowledged — the wish was refused, not lost");
+		assert.ok(
+			infos.some(m => /flash/i.test(m)),
+			"the skipped write must say why",
+		);
+	});
+
+	it("does not throttle a command that writes no flash", async function () {
+		const sent = [];
+		const ctx = flashCtx(sent, [], [], { deadband: 100, minIntervalMs: 999999 });
+		await executeCommand("inverter.reboot", { val: true, ack: false }, ctx);
+		await executeCommand("inverter.reboot", { val: true, ack: false }, ctx);
+		assert.strictEqual(sent.length, 2, "reboot does not touch flash and must never be throttled");
+	});
+
+	function flashCtx(sent, acks, infos, flashGuard) {
+		const flashState = new Map();
+		return {
+			connection: {
+				connected: true,
+				send: async buf => {
+					sent.push(buf);
+				},
+			},
+			protobuf: handler,
+			deviceId: "DTU1",
+			host: "192.168.1.1",
+			log: {
+				info: m => infos.push(m),
+				warn: m => infos.push(m),
+				debug: () => {},
+			},
+			setState: async (id, val, ack) => {
+				acks.push({ id, val, ack });
+			},
+			resetButton: () => {},
+			flashGuard,
+			flashWriteState: id => {
+				if (!flashState.has(id)) {
+					flashState.set(id, { lastValue: null, lastWriteMs: 0, skipsLogged: 0 });
+				}
+				return flashState.get(id);
+			},
+		};
+	}
+});
+
+// ============================================================
+// commandHandler — flash guard, edge cases found in review
+// ============================================================
+describe("commandHandler – flash guard edge cases", function () {
+	// A limit of 0 is not a legal power limit, but the guard must still tell "0 was written"
+	// apart from "nothing was written yet" — a truthiness check would conflate them and let
+	// every write through after a 0.
+	it("treats a remembered 0 as a real value, not as 'nothing written yet'", function () {
+		const guard = { deadband: 5, minIntervalMs: 0 };
+		const last = { lastValue: 0, lastWriteMs: 1000, skipsLogged: 0 };
+		assert.ok(shouldSkipFlashWrite(2, last, guard, 5000), "2 is inside the dead band around 0");
+		assert.strictEqual(shouldSkipFlashWrite(50, last, guard, 5000), null, "50 is outside it");
+	});
+
+	// A cloud-forwarded command is booked with its time but without its value, because the
+	// cloud's payload is passed through verbatim. The interval must still apply.
+	it("applies the minimum interval even when the last value is unknown", function () {
+		const guard = { deadband: 1, minIntervalMs: 60000 };
+		const last = { lastValue: null, lastWriteMs: 100000, skipsLogged: 0 };
+		assert.ok(shouldSkipFlashWrite(50, last, guard, 130000), "30 s after an unvalued write: skip");
+		assert.strictEqual(shouldSkipFlashWrite(50, last, guard, 161000), null, "61 s later: pass");
+	});
+
+	it("still lets a genuinely first write through", function () {
+		const guard = { deadband: 5, minIntervalMs: 60000 };
+		const last = { lastValue: null, lastWriteMs: 0, skipsLogged: 0 };
+		assert.strictEqual(shouldSkipFlashWrite(50, last, guard, 1000), null, "nothing written yet: pass");
+	});
+
+	it("maps only the power-limit action to a flash-writing state", function () {
+		assert.strictEqual(flashWritingStateForAction(8), "inverter.powerLimit");
+		assert.strictEqual(flashWritingStateForAction(3), null, "inverter reboot writes no config");
+		assert.strictEqual(flashWritingStateForAction(41), null, "grid-profile read writes nothing");
 	});
 });

@@ -1,263 +1,414 @@
 {
-    "type": "panel",
+    "type": "tabs",
     "i18n": true,
     "items": {
-        "_headerLocal": {
-            "type": "header",
-            "text": "tabLocal",
-            "size": 4,
-            "xs": 12,
-            "sm": 12,
-            "md": 12,
-            "lg": 12,
-            "xl": 12
-        },
-        "enableLocal": {
-            "type": "checkbox",
-            "label": "enableLocal",
-            "xs": 12,
-            "sm": 12,
-            "md": 12,
-            "lg": 12,
-            "xl": 12,
-            "default": true,
-            "help": "enableLocalHelp"
-        },
-        "_discover": {
-            "type": "sendTo",
-            "command": "discover",
-            "jsonData": "{}",
-            "label": "discoverButton",
-            "icon": "search",
-            "variant": "contained",
-            "color": "primary",
-            "useNative": true,
-            "showProcess": true,
-            "disabled": "!data.enableLocal",
-            "xs": 12,
-            "sm": 4,
-            "md": 3,
-            "lg": 3,
-            "xl": 3
-        },
-        "_testConnection": {
-            "type": "sendTo",
-            "command": "testConnections",
-            "jsonData": "{\"devices\": ${JSON.stringify(data.devices)}}",
-            "label": "testConnectionButton",
-            "icon": "send",
-            "variant": "contained",
-            "color": "primary",
-            "useNative": true,
-            "showProcess": true,
-            "disabled": "!data.enableLocal",
-            "xs": 12,
-            "sm": 4,
-            "md": 3,
-            "lg": 3,
-            "xl": 3
-        },
-        "devices": {
-            "type": "table",
-            "noDelete": false,
-            "disabled": "!data.enableLocal",
-            "xs": 12,
-            "sm": 12,
-            "md": 12,
-            "lg": 12,
-            "xl": 12,
-            "items": [
-                {
+        "_tabLocal": {
+            "type": "panel",
+            "label": "tabLocal",
+            "items": {
+                "enableLocal": {
                     "type": "checkbox",
-                    "title": "deviceEnabled",
-                    "attr": "enabled",
-                    "width": "60px",
-                    "filter": false,
-                    "sort": false,
-                    "default": true
+                    "label": "enableLocal",
+                    "xs": 12,
+                    "sm": 12,
+                    "md": 12,
+                    "lg": 12,
+                    "xl": 12,
+                    "default": true,
+                    "help": "enableLocalHelp"
                 },
-                {
-                    "type": "text",
-                    "title": "deviceHost",
-                    "attr": "host",
-                    "width": "50%",
-                    "filter": false,
-                    "sort": false,
-                    "default": ""
+                "_discover": {
+                    "type": "sendTo",
+                    "command": "discover",
+                    "jsonData": "{}",
+                    "label": "discoverButton",
+                    "icon": "search",
+                    "variant": "contained",
+                    "color": "primary",
+                    "useNative": true,
+                    "showProcess": true,
+                    "disabled": "!data.enableLocal",
+                    "xs": 12,
+                    "sm": 4,
+                    "md": 3,
+                    "lg": 3,
+                    "xl": 3
                 },
-                {
-                    "type": "text",
-                    "title": "deviceSerial",
-                    "attr": "serial",
-                    "disabled": "true",
-                    "filter": false,
-                    "sort": false,
-                    "default": ""
+                "_testConnection": {
+                    "type": "sendTo",
+                    "command": "testConnections",
+                    "jsonData": "{\"devices\": ${JSON.stringify(data.devices)}}",
+                    "label": "testConnectionButton",
+                    "icon": "send",
+                    "variant": "contained",
+                    "color": "primary",
+                    "useNative": true,
+                    "showProcess": true,
+                    "disabled": "!data.enableLocal",
+                    "xs": 12,
+                    "sm": 4,
+                    "md": 3,
+                    "lg": 3,
+                    "xl": 3
                 },
-                {
+                "devices": {
+                    "type": "table",
+                    "noDelete": false,
+                    "disabled": "!data.enableLocal",
+                    "xs": 12,
+                    "sm": 12,
+                    "md": 12,
+                    "lg": 12,
+                    "xl": 12,
+                    "items": [
+                        {
+                            "type": "checkbox",
+                            "title": "deviceEnabled",
+                            "attr": "enabled",
+                            "width": "60px",
+                            "filter": false,
+                            "sort": false,
+                            "default": true
+                        },
+                        {
+                            "type": "text",
+                            "title": "deviceHost",
+                            "attr": "host",
+                            "width": "50%",
+                            "filter": false,
+                            "sort": false,
+                            "default": ""
+                        },
+                        {
+                            "type": "text",
+                            "title": "deviceSerial",
+                            "attr": "serial",
+                            "disabled": "true",
+                            "filter": false,
+                            "sort": false,
+                            "default": ""
+                        },
+                        {
+                            "type": "checkbox",
+                            "title": "deviceReachable",
+                            "attr": "reachable",
+                            "disabled": "true",
+                            "width": "60px",
+                            "filter": false,
+                            "sort": false,
+                            "default": false
+                        }
+                    ],
+                    "help": "devicesHelp"
+                },
+                "dataInterval": {
+                    "type": "number",
+                    "label": "dataInterval",
+                    "default": 5,
+                    "min": 0,
+                    "max": 300,
+                    "xs": 12,
+                    "sm": 6,
+                    "md": 4,
+                    "lg": 4,
+                    "xl": 4,
+                    "disabled": "!data.enableLocal",
+                    "help": "dataIntervalHelp"
+                },
+                "slowPollFactor": {
+                    "type": "number",
+                    "label": "slowPollFactor",
+                    "default": 6,
+                    "min": 1,
+                    "max": 60,
+                    "xs": 12,
+                    "sm": 6,
+                    "md": 4,
+                    "lg": 4,
+                    "xl": 4,
+                    "disabled": "!data.enableLocal",
+                    "help": "slowPollFactorHelp"
+                },
+                "powerLimitDeadband": {
+                    "type": "number",
+                    "label": "powerLimitDeadband",
+                    "default": 1,
+                    "min": 0,
+                    "max": 50,
+                    "xs": 12,
+                    "sm": 6,
+                    "md": 4,
+                    "lg": 4,
+                    "xl": 4,
+                    "disabled": "!data.enableLocal",
+                    "help": "powerLimitDeadbandHelp"
+                },
+                "powerLimitMinIntervalSec": {
+                    "type": "number",
+                    "label": "powerLimitMinIntervalSec",
+                    "default": 60,
+                    "min": 0,
+                    "max": 3600,
+                    "xs": 12,
+                    "sm": 6,
+                    "md": 4,
+                    "lg": 4,
+                    "xl": 4,
+                    "disabled": "!data.enableLocal",
+                    "help": "powerLimitMinIntervalSecHelp"
+                },
+                "enableCloudRelay": {
                     "type": "checkbox",
-                    "title": "deviceReachable",
-                    "attr": "reachable",
-                    "disabled": "true",
-                    "width": "60px",
-                    "filter": false,
-                    "sort": false,
-                    "default": false
+                    "label": "enableCloudRelay",
+                    "default": true,
+                    "xs": 12,
+                    "sm": 12,
+                    "md": 4,
+                    "lg": 4,
+                    "xl": 4,
+                    "disabled": "!data.enableLocal",
+                    "help": "enableCloudRelayHelp"
+                },
+                "_cloudRelayWarning": {
+                    "type": "staticText",
+                    "text": "cloudRelayWarning",
+                    "xs": 12,
+                    "sm": 12,
+                    "md": 12,
+                    "lg": 12,
+                    "xl": 12,
+                    "hidden": "!data.enableLocal || data.enableCloudRelay",
+                    "style": {
+                        "fontSize": 13,
+                        "color": "#e65100",
+                        "fontWeight": "bold"
+                    }
                 }
-            ],
-            "help": "devicesHelp"
-        },
-        "dataInterval": {
-            "type": "number",
-            "label": "dataInterval",
-            "default": 5,
-            "min": 0,
-            "max": 300,
-            "xs": 12,
-            "sm": 6,
-            "md": 4,
-            "lg": 4,
-            "xl": 4,
-            "disabled": "!data.enableLocal",
-            "help": "dataIntervalHelp"
-        },
-        "slowPollFactor": {
-            "type": "number",
-            "label": "slowPollFactor",
-            "default": 6,
-            "min": 1,
-            "max": 60,
-            "xs": 12,
-            "sm": 6,
-            "md": 4,
-            "lg": 4,
-            "xl": 4,
-            "disabled": "!data.enableLocal",
-            "help": "slowPollFactorHelp"
-        },
-        "enableCloudRelay": {
-            "type": "checkbox",
-            "label": "enableCloudRelay",
-            "default": true,
-            "xs": 12,
-            "sm": 12,
-            "md": 4,
-            "lg": 4,
-            "xl": 4,
-            "disabled": "!data.enableLocal",
-            "help": "enableCloudRelayHelp"
-        },
-        "_cloudRelayWarning": {
-            "type": "staticText",
-            "text": "cloudRelayWarning",
-            "xs": 12,
-            "sm": 12,
-            "md": 12,
-            "lg": 12,
-            "xl": 12,
-            "hidden": "!data.enableLocal || data.enableCloudRelay",
-            "style": {
-                "fontSize": 13,
-                "color": "#e65100",
-                "fontWeight": "bold"
             }
         },
-        "_divider": {
-            "type": "divider",
-            "xs": 12,
-            "sm": 12,
-            "md": 12,
-            "lg": 12,
-            "xl": 12
+        "_tabCloud": {
+            "type": "panel",
+            "label": "tabCloud",
+            "items": {
+                "enableCloud": {
+                    "type": "checkbox",
+                    "label": "enableCloud",
+                    "default": false,
+                    "xs": 12,
+                    "sm": 12,
+                    "md": 12,
+                    "lg": 12,
+                    "xl": 12,
+                    "help": "enableCloudHelp"
+                },
+                "_cloudLink": {
+                    "type": "staticLink",
+                    "text": "cloudLink",
+                    "href": "https://global.hoymiles.com/website/home",
+                    "xs": 12,
+                    "sm": 12,
+                    "md": 12,
+                    "lg": 12,
+                    "xl": 12,
+                    "style": {
+                        "marginBottom": 8
+                    }
+                },
+                "enableRealtimeBurst": {
+                    "type": "checkbox",
+                    "label": "enableRealtimeBurst",
+                    "default": true,
+                    "xs": 12,
+                    "sm": 12,
+                    "md": 12,
+                    "lg": 12,
+                    "xl": 12,
+                    "disabled": "!data.enableCloud",
+                    "help": "enableRealtimeBurstHelp"
+                },
+                "cloudUser": {
+                    "type": "text",
+                    "label": "cloudUser",
+                    "placeholder": "email@example.com",
+                    "xs": 12,
+                    "sm": 6,
+                    "md": 6,
+                    "lg": 6,
+                    "xl": 6,
+                    "disabled": "!data.enableCloud",
+                    "validator": "!data.enableCloud || data.cloudUser !== ''",
+                    "validatorErrorText": "cloudUserRequired"
+                },
+                "cloudPassword": {
+                    "type": "password",
+                    "label": "cloudPassword",
+                    "xs": 12,
+                    "sm": 6,
+                    "md": 6,
+                    "lg": 6,
+                    "xl": 6,
+                    "disabled": "!data.enableCloud",
+                    "validator": "!data.enableCloud || data.cloudPassword !== ''",
+                    "validatorErrorText": "cloudPasswordRequired"
+                },
+                "_testCloudLogin": {
+                    "type": "sendTo",
+                    "command": "testCloudLogin",
+                    "jsonData": "{\"user\": \"${data.cloudUser}\", \"password\": \"${data.cloudPassword}\"}",
+                    "label": "testCloudLoginButton",
+                    "icon": "send",
+                    "variant": "contained",
+                    "color": "primary",
+                    "useNative": true,
+                    "showProcess": true,
+                    "disabled": "!data.enableCloud || !data.cloudUser || !data.cloudPassword",
+                    "help": "testCloudLoginHelp",
+                    "xs": 12,
+                    "sm": 6,
+                    "md": 6,
+                    "lg": 6,
+                    "xl": 6
+                },
+                "_cloudInfo": {
+                    "type": "staticText",
+                    "text": "cloudInfo",
+                    "xs": 12,
+                    "sm": 12,
+                    "md": 12,
+                    "lg": 12,
+                    "xl": 12,
+                    "style": {
+                        "fontSize": 12,
+                        "opacity": 0.7,
+                        "marginTop": 8
+                    }
+                }
+            }
         },
-        "_headerCloud": {
-            "type": "header",
-            "text": "tabCloud",
-            "size": 4,
-            "xs": 12,
-            "sm": 12,
-            "md": 12,
-            "lg": 12,
-            "xl": 12
-        },
-        "enableCloud": {
-            "type": "checkbox",
-            "label": "enableCloud",
-            "default": false,
-            "xs": 12,
-            "sm": 12,
-            "md": 12,
-            "lg": 12,
-            "xl": 12,
-            "help": "enableCloudHelp"
-        },
-        "enableRealtimeBurst": {
-            "type": "checkbox",
-            "label": "enableRealtimeBurst",
-            "default": true,
-            "xs": 12,
-            "sm": 12,
-            "md": 12,
-            "lg": 12,
-            "xl": 12,
-            "disabled": "!data.enableCloud",
-            "help": "enableRealtimeBurstHelp"
-        },
-        "cloudUser": {
-            "type": "text",
-            "label": "cloudUser",
-            "placeholder": "email@example.com",
-            "xs": 12,
-            "sm": 6,
-            "md": 6,
-            "lg": 6,
-            "xl": 6,
-            "disabled": "!data.enableCloud",
-            "validator": "!data.enableCloud || data.cloudUser !== ''",
-            "validatorErrorText": "cloudUserRequired"
-        },
-        "cloudPassword": {
-            "type": "password",
-            "label": "cloudPassword",
-            "xs": 12,
-            "sm": 6,
-            "md": 6,
-            "lg": 6,
-            "xl": 6,
-            "disabled": "!data.enableCloud",
-            "validator": "!data.enableCloud || data.cloudPassword !== ''",
-            "validatorErrorText": "cloudPasswordRequired"
-        },
-        "_testCloudLogin": {
-            "type": "sendTo",
-            "command": "testCloudLogin",
-            "jsonData": "{\"user\": \"${data.cloudUser}\", \"password\": \"${data.cloudPassword}\"}",
-            "label": "testCloudLoginButton",
-            "icon": "send",
-            "variant": "contained",
-            "color": "primary",
-            "useNative": true,
-            "showProcess": true,
-            "disabled": "!data.enableCloud || !data.cloudUser || !data.cloudPassword",
-            "help": "testCloudLoginHelp",
-            "xs": 12,
-            "sm": 6,
-            "md": 6,
-            "lg": 6,
-            "xl": 6
-        },
-        "_cloudInfo": {
-            "type": "staticText",
-            "text": "cloudInfo",
-            "xs": 12,
-            "sm": 12,
-            "md": 12,
-            "lg": 12,
-            "xl": 12,
-            "style": {
-                "fontSize": 12,
-                "opacity": 0.7,
-                "marginTop": 8
+        "_tabBle": {
+            "type": "panel",
+            "label": "tabBleGateway",
+            "items": {
+                "_bleInfo": {
+                    "type": "staticText",
+                    "text": "bleGatewayInfo",
+                    "xs": 12,
+                    "sm": 12,
+                    "md": 12,
+                    "lg": 12,
+                    "xl": 12,
+                    "style": {
+                        "fontSize": 12,
+                        "opacity": 0.7,
+                        "marginBottom": 8
+                    }
+                },
+                "_bleFlashLink": {
+                    "type": "staticLink",
+                    "text": "bleFlashLink",
+                    "href": "https://esphome.io/projects/?type=bluetooth",
+                    "xs": 12,
+                    "sm": 12,
+                    "md": 12,
+                    "lg": 12,
+                    "xl": 12,
+                    "style": {
+                        "marginBottom": 8
+                    }
+                },
+                "enableBleGateway": {
+                    "type": "checkbox",
+                    "label": "enableBleGateway",
+                    "default": false,
+                    "xs": 12,
+                    "sm": 12,
+                    "md": 12,
+                    "lg": 12,
+                    "xl": 12,
+                    "help": "enableBleGatewayHelp"
+                },
+                "_bleImport": {
+                    "type": "sendTo",
+                    "command": "importBleDevices",
+                    "jsonData": "{}",
+                    "label": "bleImportButton",
+                    "icon": "search",
+                    "variant": "contained",
+                    "color": "primary",
+                    "useNative": true,
+                    "showProcess": true,
+                    "disabled": "!data.enableBleGateway",
+                    "help": "bleImportHelp",
+                    "xs": 12,
+                    "sm": 8,
+                    "md": 6,
+                    "lg": 5,
+                    "xl": 4
+                },
+                "bleDevices": {
+                    "type": "table",
+                    "noDelete": false,
+                    "disabled": "!data.enableBleGateway",
+                    "xs": 12,
+                    "sm": 12,
+                    "md": 12,
+                    "lg": 12,
+                    "xl": 12,
+                    "items": [
+                        {
+                            "type": "checkbox",
+                            "title": "bleEnabled",
+                            "attr": "enabled",
+                            "width": "70px",
+                            "filter": false,
+                            "sort": false,
+                            "default": false
+                        },
+                        {
+                            "type": "text",
+                            "title": "bleSn",
+                            "attr": "sn",
+                            "width": "30%",
+                            "filter": false,
+                            "sort": false,
+                            "default": ""
+                        },
+                        {
+                            "type": "text",
+                            "title": "bleMac",
+                            "attr": "mac",
+                            "width": "35%",
+                            "filter": false,
+                            "sort": false,
+                            "default": ""
+                        },
+                        {
+                            "type": "text",
+                            "title": "blePin",
+                            "attr": "pin",
+                            "width": "20%",
+                            "filter": false,
+                            "sort": false,
+                            "default": ""
+                        }
+                    ],
+                    "help": "bleDevicesHelp"
+                },
+                "_bleDiscoveredHint": {
+                    "type": "staticText",
+                    "text": "bleDiscoveredHint",
+                    "xs": 12,
+                    "sm": 12,
+                    "md": 12,
+                    "lg": 12,
+                    "xl": 12,
+                    "hidden": "!data.enableBleGateway",
+                    "style": {
+                        "fontSize": 12,
+                        "opacity": 0.7,
+                        "marginTop": 8
+                    }
+                }
             }
         }
     }

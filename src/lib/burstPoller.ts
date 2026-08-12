@@ -65,6 +65,11 @@ interface StationBurst {
  * Deliberately skips any DTU with a live local or relay connection (`connection?.connected`):
  * those already have direct realtime data, and hitting the cloud burst for them would add load
  * and could interfere with the relay.
+ *
+ * The **station-level** aggregate (m:0 → `station-<id>.grid.*`) is a different matter: no local
+ * link can produce it, so every station keeps a burst loop even when all its inverters are served
+ * locally. Without it, `station-<id>.grid.power` would fall back to the cloud poller's `real_power`
+ * — a five-minute-old snapshot next to second-fresh per-inverter values.
  */
 class BurstPoller {
 	private readonly cloud: CloudConnection;
@@ -123,8 +128,42 @@ class BurstPoller {
 	}
 
 	/**
+	 * Release a DTU's per-inverter burst claim once it gains a live local link (e.g. a BLE device
+	 * that connected after the burst had already started). Local owns that DTU's per-inverter
+	 * realtime data (`<dtuSerial>.grid.power`, `<dtuSerial>.pvN.power`), so drop it from the target
+	 * map. The station loop keeps running for the **station-level aggregate**
+	 * (`station-<id>.grid.power`), which local cannot provide as a single value — with no per-inverter
+	 * targets left, {@link poll} then only fetches the m:0 station power.
+	 *
+	 * @param dtuSerial - DTU serial (state-tree prefix) that just went local.
+	 */
+	releaseDtu(dtuSerial: string): void {
+		for (const sb of this.stations.values()) {
+			let removed = false;
+			for (const [invSn, t] of sb.targets) {
+				if (t.dtuSerial === dtuSerial) {
+					t.dev.burstActive = false;
+					sb.targets.delete(invSn);
+					removed = true;
+				}
+			}
+			if (removed) {
+				this.adapter.log.info(
+					sb.targets.size === 0
+						? `Burst: all inverters of station ${sb.stationId} now served locally — keeping only the live station-level power aggregate`
+						: `Burst: DTU ${dtuSerial} now served locally`,
+				);
+			}
+		}
+	}
+
+	/**
 	 * Build the cloud-only inverter target map for a station and kick off its poll loop.
-	 * Does nothing if the station has no cloud-only inverters.
+	 *
+	 * A station with no cloud-only inverters (every DTU served locally) still gets a loop: local
+	 * delivers per-inverter realtime data but never the **station-level aggregate**, which without
+	 * the burst would fall back to the slow cloud poller's `real_power` — a snapshot that lags the
+	 * live per-inverter values by minutes. {@link poll} then only fetches the m:0 station power.
 	 *
 	 * @param stationId - Cloud station ID.
 	 */
@@ -154,10 +193,6 @@ class BurstPoller {
 			}
 		}
 
-		if (targets.size === 0) {
-			return;
-		}
-
 		const uri = await this.cloud.getRealtimeUri(stationId);
 		// Claim the overlapping power states so the slow cloud poller stops writing them.
 		for (const t of targets.values()) {
@@ -176,7 +211,9 @@ class BurstPoller {
 		};
 		this.stations.set(stationId, sb);
 		this.adapter.log.info(
-			`Burst realtime started for station ${stationId} (${targets.size} cloud-only inverter(s))`,
+			targets.size === 0
+				? `Burst realtime started for station ${stationId} (station-level power aggregate only — all inverters served locally)`
+				: `Burst realtime started for station ${stationId} (${targets.size} cloud-only inverter(s))`,
 		);
 		void this.poll(sb);
 	}
@@ -200,28 +237,23 @@ class BurstPoller {
 				sb.uriFetchedAt = Date.now();
 			}
 
-			const data = await this.cloud.pollRealtimeBurst(sb.uri, {
-				m: 3,
-				mis: [...sb.targets.keys()],
-				t: 1,
-			});
+			// Per-inverter data (m:3) — only while there are cloud-only targets. Once every inverter of
+			// the station is served locally, we keep polling for the m:0 station aggregate only.
+			let dly: number | undefined;
+			if (sb.targets.size > 0) {
+				const data = await this.cloud.pollRealtimeBurst(sb.uri, {
+					m: 3,
+					mis: [...sb.targets.keys()],
+					t: 1,
+				});
 
-			// The poll works again — take the power states back from the slow cloud poller.
-			if (sb.claimReleased) {
-				for (const t of sb.targets.values()) {
-					t.dev.burstActive = true;
+				// `con:1` = the DTU is live-streaming → the values are genuinely current (good, 0x00).
+				// Anything else means the stream is not live, so mark the sample as stale (0x42).
+				const quality: ioBroker.STATE_QUALITY[keyof ioBroker.STATE_QUALITY] = data.con === 1 ? 0x00 : 0x42;
+				for (const inv of data.mis ?? []) {
+					await this.writeInverter(sb, inv, quality);
 				}
-				this.burstActiveStations.add(sb.stationId);
-				sb.claimReleased = false;
-				this.adapter.log.info(`Burst realtime for station ${sb.stationId} resumed`);
-			}
-			sb.consecutiveFailures = 0;
-
-			// `con:1` = the DTU is live-streaming → the values are genuinely current (good, 0x00).
-			// Anything else means the stream is not live, so mark the sample as stale (0x42).
-			const quality: ioBroker.STATE_QUALITY[keyof ioBroker.STATE_QUALITY] = data.con === 1 ? 0x00 : 0x42;
-			for (const inv of data.mis ?? []) {
-				await this.writeInverter(sb, inv, quality);
+				dly = data.dly;
 			}
 
 			// Station-level power flow (m:0), aggregated live across all inverters of the station.
@@ -232,9 +264,22 @@ class BurstPoller {
 				await this.writeStation(sb.stationId, stationData.power, sq);
 			}
 
+			// Every poll of this cycle worked again — take the power states back from the slow cloud
+			// poller. Sits after the m:0 fetch (not inside the m:3 branch) so a station-only loop,
+			// which has no per-inverter targets at all, can reclaim just as well.
+			if (sb.claimReleased) {
+				for (const t of sb.targets.values()) {
+					t.dev.burstActive = true;
+				}
+				this.burstActiveStations.add(sb.stationId);
+				sb.claimReleased = false;
+				this.adapter.log.info(`Burst realtime for station ${sb.stationId} resumed`);
+			}
+			sb.consecutiveFailures = 0;
+
 			// Server tells us when to poll next; clamp to sane bounds.
 			nextDelay = Math.min(
-				Math.max(data.dly ?? BURST_MIN_INTERVAL_MS, BURST_MIN_INTERVAL_MS),
+				Math.max(dly ?? stationData.dly ?? BURST_MIN_INTERVAL_MS, BURST_MIN_INTERVAL_MS),
 				BURST_MAX_INTERVAL_MS,
 			);
 		} catch (err) {

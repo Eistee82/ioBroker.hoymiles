@@ -17,6 +17,14 @@ const CLOUD_CMD_REALDATA: [number, number] = [0x22, 0x0c]; // RealDataReqDTO (ev
 const CLOUD_CMD_REALDATA_STATUS: [number, number] = [0x22, 0x0d]; // RealDataReqDTO (every 60s with HB)
 
 /**
+ * Downlink tags that only ever acknowledge one of our uploads. They must not reach the
+ * device: `0x2301`/`0x2302`/`0x230c`/`0x230d` are the cloud's answers to InfoData, heartbeat,
+ * RealData and history. `0x2306` is deliberately absent — it is an acknowledgement too, but
+ * the grid-profile serve keys off it, so it stays on the command path.
+ */
+const ACK_ONLY = new Set([0x01, 0x02, 0x0c, 0x0d]);
+
+/**
  * Cloud Relay: Sends DTU data to the Hoymiles cloud server.
  * Uses the cloud protocol (0x22/0x23 tags) instead of local protocol (0xa2/0xa3).
  * Emulates the DTU's cloud connection: periodic heartbeats + RealData forwarding.
@@ -329,10 +337,15 @@ class CloudRelay extends TcpConnection {
 				continue;
 			}
 			const { cmdHigh, cmdLow, payload } = parsed;
-			if (cmdLow === 0x02 || cmdLow === 0x0c || cmdLow === 0x0d) {
-				continue; // routine keep-alive / realdata poll
-			}
 			const seq = (frame[4] << 8) | frame[5];
+			// The cloud's answers to our own uploads (InfoData, heartbeat, RealData, history)
+			// used to be discarded here. They carry the server time, the timezone offset and an
+			// error code — dropping them lost the time sync and hid rejected uploads. They are
+			// acknowledgements, so they are surfaced separately and never forwarded to a device.
+			if (ACK_ONLY.has(cmdLow)) {
+				this.emit("ack", { cmdHigh, cmdLow, seq, payload });
+				continue;
+			}
 			this.emit("command", { cmdHigh, cmdLow, seq, payload });
 		}
 	}

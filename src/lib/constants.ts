@@ -17,6 +17,24 @@ export const CLOUD_STATION_STALE_MS = 1200000; // 20min (DTU uploads ~every 5min
 export const DTU_PORT = 10081;
 export const RECONNECT_MAX_MS = 300000; // 5min
 
+// ESPHome Bluetooth-Proxy (Native API) — for BLE-only inverters (e.g. HMS-800-2WB)
+export const ESPHOME_API_PORT = 6053;
+/** GATT service/characteristic UUIDs of the Hoymiles BLE inverter (from BleServerConstant.java). */
+export const BLE_SERVICE_UUID = "0000e0ff-3c17-d293-8e48-14fe2e4da212";
+export const BLE_WRITE_CHAR_UUID = "0000ffe1-0000-1000-8000-00805f9b34fb";
+export const BLE_NOTIFY_CHAR_UUID = "0000ffe2-0000-1000-8000-00805f9b34fb";
+/** BLE advertisement scan duration when enumerating inverters behind a gateway. */
+export const BLE_SCAN_TIMEOUT_MS = 8000;
+/** Keepalive/handshake tick — mirrors the app cadence that keeps the BLE link warm. */
+export const BLE_HANDSHAKE_TICK_MS = 1500;
+/**
+ * No frame received for this long → drop the BLE session and reconnect. Mirrors the TCP path's
+ * `IDLE_TIMEOUT`. The proxy's device-disconnect notification is the primary signal; this is the
+ * backstop for a link that goes silent without one (verified failure mode: the inverter powers
+ * down for the night and the session stays "paired" until the adapter restarts).
+ */
+export const BLE_IDLE_TIMEOUT_MS = 300000; // 5 min
+
 // Cloud relay timing (moved from cloudRelay.ts)
 export const CLOUD_RECONNECT_DELAY_MIN_MS = 1000;
 export const CLOUD_RECONNECT_DELAY_MAX_MS = 60000;
@@ -43,6 +61,21 @@ export const MIN_PROTOBUF_PAYLOAD_SIZE = 4;
 // Scaling divisors (raw protobuf integer → real unit)
 export const SCALE_VOLTAGE = 10;
 export const SCALE_POWER = 10;
+/**
+ * `SGSMO.power_limit` is a percentage, not a power in tenths of a watt — and **the two device
+ * families disagree on its scale**, so it cannot share a single constant.
+ *
+ * Both measured directly:
+ * - **2WB (BLE):** 10000 while running unthrottled at 100 %, dropping to 8368 (= 83.68 %) under an
+ *   active zero-export regulation ⇒ hundredths of a percent.
+ * - **2T (TCP):** the field stays 0 until a limit is set at all; after setting 80 % it read 800
+ *   ⇒ tenths of a percent.
+ *
+ * Guessing from the value is impossible: a 2T at 100 % and a 2WB at 10 % both send 1000.
+ */
+export const SCALE_POWER_LIMIT_TCP = 10;
+/** See {@link SCALE_POWER_LIMIT_TCP} — the BLE family reports hundredths of a percent. */
+export const SCALE_POWER_LIMIT_BLE = 100;
 export const SCALE_TEMPERATURE = 10;
 export const SCALE_CURRENT = 100;
 export const SCALE_FREQUENCY = 100;
@@ -63,9 +96,32 @@ export const PROBE_TIMEOUT_MS = 3000;
 export const CLOUD_POLL_CONCURRENCY = 3;
 export const CLOUD_DISCOVER_CONCURRENCY = 5;
 
+/**
+ * Safety cap on the pages of the day curve. The device reports the count itself (`ap`, measured 5
+ * on a 2T with 903 one-minute samples), but a corrupted response must not turn into an endless
+ * request chain.
+ */
+export const HIST_MAX_PAGES = 16;
+
 // Command validation bounds
 export const POWER_LIMIT_MIN = 2;
 export const POWER_LIMIT_MAX = 100;
+
+/**
+ * Flash protection for power-limit writes.
+ *
+ * Every accepted power-limit command makes the DTU rewrite its configuration, and that costs two
+ * 4 KB flash sectors on both devices. On the HMS-800W-2T the success path of action 8 calls the
+ * config serializer `0x4080d642`, which runs erase (`0x40817a92`) followed by write
+ * (`0x40817bf6`) for region 3 and again for region 0xe; on the HMS-800-2WB `sys_cfg_write`
+ * (`LA 0x407fc41e`) does the equivalent twice. A zero-export control loop writing every few
+ * seconds would wear the flash out within months.
+ *
+ * Both defaults are deliberately mild and can be raised or switched off (0) in the settings —
+ * someone who knowingly wants to regulate faster must be able to say so.
+ */
+export const POWER_LIMIT_DEADBAND_DEFAULT = 1;
+export const POWER_LIMIT_MIN_INTERVAL_SEC_DEFAULT = 60;
 
 // Cloud API hosts and auth paths
 export const CLOUD_HOST_DEFAULT = "https://neapi.hoymiles.com";

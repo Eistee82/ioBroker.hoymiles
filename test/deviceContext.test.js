@@ -832,9 +832,8 @@ describe("deviceContext – createPvStates", function () {
 		await ctx.createPvStates(2);
 		const newCalls = extendCalls.slice(callsBefore);
 
-		// 2 PV inputs: each gets 1 channel + 6 states (power, voltage, current, dailyEnergy, totalEnergy, errorCode)
 		// = 2 * (1 + 6) = 14
-		assert.strictEqual(newCalls.length, 14, `Expected 14 extendObject calls, got ${newCalls.length}`);
+		assert.strictEqual(newCalls.length, 12, `Expected 12 extendObject calls, got ${newCalls.length}`);
 
 		// Verify channel creation
 		assert.ok(newCalls[0][0].endsWith("pv0"), "First call should create pv0 channel");
@@ -901,7 +900,7 @@ describe("deviceContext – createPvStates", function () {
 		// Loop uses this.pvCount (clamped to MAX_PV_PORTS = 12, the upper bound of the
 		// cloud's own micro-rule dictionary)
 		// 12 PVs × (1 channel + 6 states) = 84 calls
-		assert.strictEqual(newCalls.length, 84, "Should create exactly 84 objects for 12 clamped PV ports");
+		assert.strictEqual(newCalls.length, 72, "Should create exactly 72 objects for 12 clamped PV ports");
 		assert.strictEqual(ctx["pvCount"], 12, "pvCount should be clamped to 12");
 	});
 });
@@ -1121,6 +1120,70 @@ describe("deviceContext – handleRealData", function () {
 		// Verify grid.power value
 		const gridPowerCall = newCalls.find(c => c[0] === "TEST1234.grid.power");
 		assert.strictEqual(gridPowerCall[1], 480);
+	});
+
+	it("derives active flag and daily energy from sgs/pv when dtu_power is 0 (BLE 2WB)", async function () {
+		const { calls, adapter } = createTrackingAdapter();
+		const mockProtobuf = {
+			// The BLE-only 2WB does not populate dtu_power / dtu_daily_energy — the real values live
+			// in the per-inverter sgs and the per-string pv entries.
+			decodeRealDataNew: () => ({
+				dtuPower: 0,
+				dtuDailyEnergy: 0,
+				sgs: [
+					{
+						activePower: 254,
+						voltage: 230,
+						current: 1.1,
+						frequency: 50,
+						reactivePower: 0,
+						powerFactor: 1,
+						temperature: 30,
+						warningNumber: 0,
+						linkStatus: 1,
+						serialNumber: "INV",
+						powerLimit: 1000,
+					},
+				],
+				pv: [
+					{ portNumber: 1, power: 128, voltage: 39, current: 3.3, energyDaily: 1200, energyTotal: 40000 },
+					{ portNumber: 2, power: 126, voltage: 35, current: 3.6, energyDaily: 1100, energyTotal: 38000 },
+				],
+				meter: [],
+			}),
+		};
+
+		const ctx = new DeviceContext({
+			adapter,
+			protobuf: mockProtobuf,
+			host: "192.168.1.1",
+			enableLocal: false,
+			enableCloud: false,
+			enableCloudRelay: false,
+			dataInterval: 15,
+			slowPollFactor: 6,
+		});
+		await ctx.initFromSerial("TEST1234");
+		ctx["pvCount"] = 2;
+
+		const callsBefore = calls.length;
+		await ctx["handleRealData"](Buffer.alloc(0));
+		const newCalls = calls.slice(callsBefore);
+
+		const active = newCalls.find(c => c[0] === "TEST1234.inverter.active");
+		assert.strictEqual(
+			active[1],
+			true,
+			"inverter.active must be true when sgs reports power even if dtu_power is 0",
+		);
+		const daily = newCalls.find(c => c[0] === "TEST1234.grid.dailyEnergy");
+		assert.strictEqual(
+			daily[1],
+			2.3,
+			"grid.dailyEnergy must fall back to the pv daily sum (1200+1100 Wh = 2.3 kWh)",
+		);
+		const gridPower = newCalls.find(c => c[0] === "TEST1234.grid.power");
+		assert.strictEqual(gridPower[1], 254, "grid.power comes from sgs activePower");
 	});
 
 	it("skips PV data with out-of-range portNumber", async function () {
@@ -2062,12 +2125,13 @@ describe("deviceContext – createMeterStates", function () {
 		const newExtend = extendCalls.slice(extendBefore);
 		const newSetObj = setObjCalls.slice(setObjBefore);
 
-		// 1 channel via setObjectNotExistsAsync + 14 meter state defs via extendObjectAsync
+		// 1 channel via setObjectNotExistsAsync + 23 meter state defs via extendObjectAsync
+		// (14 originally, plus the nine per-phase energies and power factors)
 		assert.strictEqual(newSetObj.length, 1, "Should create 1 meter channel");
 		assert.ok(newSetObj[0][0].endsWith("meter"), "Channel should be named 'meter'");
 		assert.strictEqual(newSetObj[0][1].type, "channel");
 
-		assert.strictEqual(newExtend.length, 14, `Expected 14 meter state objects, got ${newExtend.length}`);
+		assert.strictEqual(newExtend.length, 23, `Expected 23 meter state objects, got ${newExtend.length}`);
 		// Verify some specific meter states
 		const stateIds = newExtend.map(c => c[0]);
 		assert.ok(stateIds.some(id => id.endsWith("meter.totalPower")));
@@ -2171,7 +2235,7 @@ describe("deviceContext – createPvStates extended", function () {
 		await ctx.createPvStates(1);
 		const newCalls = extendCalls.slice(callsBefore);
 		// 1 PV: 1 channel + 6 states = 7
-		assert.strictEqual(newCalls.length, 7, `Expected 7 calls for 1 PV, got ${newCalls.length}`);
+		assert.strictEqual(newCalls.length, 6, `Expected 6 calls for 1 PV, got ${newCalls.length}`);
 	});
 
 	it("creates 4 PV inputs with correct channel names", async function () {
@@ -2191,7 +2255,7 @@ describe("deviceContext – createPvStates extended", function () {
 		await ctx.createPvStates(4);
 		const newCalls = extendCalls.slice(callsBefore);
 		// 4 PVs * (1 channel + 6 states) = 28
-		assert.strictEqual(newCalls.length, 28, `Expected 28 calls, got ${newCalls.length}`);
+		assert.strictEqual(newCalls.length, 24, `Expected 24 calls, got ${newCalls.length}`);
 		// Check channel names
 		const channels = newCalls.filter(c => c[1].type === "channel");
 		assert.strictEqual(channels.length, 4);
@@ -2346,6 +2410,52 @@ describe("deviceContext – handleResponse", function () {
 		// handleRealData is called asynchronously (via .catch), give it a tick
 		await new Promise(r => setTimeout(r, 10));
 		assert.ok(realDataCalled, "Should dispatch to handleRealData for cmd 0xa211");
+	});
+
+	// The relay re-frames the RealData payload verbatim under a cloud tag and its own sequence
+	// number. With encryption active, key and IV come from enc_rand + msgId + seqNum, so the
+	// re-framed message would be undecryptable for the cloud — it must not be uploaded at all.
+	async function realDataRelayCtx(encryptionRequired) {
+		const { adapter, warnMsgs } = createTrackingAdapter();
+		const mockProtobuf = {
+			parseResponse: () => ({ cmdHigh: 0xa2, cmdLow: 0x11, payload: Buffer.alloc(0) }),
+			decodeRealDataNew: () => ({ dtuPower: 0, dtuDailyEnergy: 0, sgs: [], pv: [], meter: [] }),
+		};
+		const ctx = new DeviceContext({
+			adapter,
+			protobuf: mockProtobuf,
+			host: "192.168.1.1",
+			enableLocal: false,
+			enableCloud: false,
+			enableCloudRelay: false,
+			dataInterval: 15,
+			slowPollFactor: 6,
+		});
+		await ctx.initFromSerial("TEST1234");
+		const relayed = [];
+		ctx.cloudRelay = { updateRealData: m => relayed.push(m) };
+		ctx.encryptionRequired = encryptionRequired;
+		const msg = Buffer.alloc(20);
+		msg[2] = 0xa2;
+		msg[3] = 0x11;
+		return { ctx, msg, relayed, warnMsgs };
+	}
+
+	it("forwards plain RealData to the cloud relay", async function () {
+		const { ctx, msg, relayed } = await realDataRelayCtx(false);
+		ctx["handleResponse"](msg);
+		await new Promise(r => setTimeout(r, 10));
+		assert.strictEqual(relayed.length, 1, "plain RealData must reach the relay");
+	});
+
+	it("does not relay RealData when the DTU encrypts its messages", async function () {
+		const { ctx, msg, relayed, warnMsgs } = await realDataRelayCtx(true);
+		ctx["handleResponse"](msg);
+		ctx["handleResponse"](msg);
+		await new Promise(r => setTimeout(r, 10));
+		assert.strictEqual(relayed.length, 0, "encrypted RealData must not be re-framed for the cloud");
+		const warns = warnMsgs.filter(m => m.includes("cloud relay"));
+		assert.strictEqual(warns.length, 1, "the skip must be warned about exactly once, not per frame");
 	});
 
 	it("dispatches 0xa201 to handleInfoData", async function () {
@@ -3813,6 +3923,8 @@ describe("deviceContext – handleNetworkInfo / handleDevConfigFetch", function 
 			getType: () => ({
 				decode: () => ({}),
 			}),
+			// handleNetworkInfo now reads the payload fields instead of discarding them
+			decodePayload: () => ({ csq: 21, netWorkMod: 1, netWorkState: 2 }),
 		};
 
 		const ctx = new DeviceContext({
@@ -3957,143 +4069,6 @@ describe("deviceContext – handleNetworkInfo / handleDevConfigFetch", function 
 		});
 
 		assert.doesNotThrow(() => ctx["handleDevConfigFetch"](Buffer.alloc(0)));
-	});
-});
-
-// ============================================================
-// deviceContext – handleAutoSearch
-// ============================================================
-describe("deviceContext – handleAutoSearch", function () {
-	it("parses serial numbers and writes searchResult", async function () {
-		const calls = [];
-		const adapter = {
-			log: { info: () => {}, warn: () => {}, debug: () => {}, error: () => {} },
-			setStateAsync: async (...args) => {
-				calls.push(args);
-			},
-			extendObjectAsync: async () => {},
-			setObjectNotExistsAsync: async () => {},
-			getStateAsync: async () => null,
-			setInterval: () => undefined,
-			clearInterval: () => {},
-			setTimeout: () => undefined,
-			clearTimeout: () => {},
-			subscribeStates: () => {},
-			unsubscribeStates: () => {},
-			devices: new Map(),
-			matchLocalDeviceToCloud: () => {},
-			onRelayDataSent: () => {},
-			onLocalConnected: () => {},
-			onLocalDisconnected: () => {},
-			onSendTimeUpdated: () => {},
-			updateConnectionState: async () => {},
-		};
-
-		const mockProtobuf = {
-			getType: () => ({
-				decode: () => ({}),
-				toObject: () => ({ miSerialNumbers: [0x1234, 0xabcd] }),
-			}),
-		};
-
-		const ctx = new DeviceContext({
-			adapter,
-			protobuf: mockProtobuf,
-			host: "192.168.1.1",
-			enableLocal: false,
-			enableCloud: false,
-			enableCloudRelay: false,
-			dataInterval: 15,
-			slowPollFactor: 6,
-		});
-		await ctx.initFromSerial("TEST1234");
-
-		const before = calls.length;
-		await ctx["handleAutoSearch"](Buffer.alloc(0));
-		const newCalls = calls.slice(before);
-
-		const searchResultCall = newCalls.find(c => c[0] === "TEST1234.dtu.searchResult");
-		assert.ok(searchResultCall, "Should write dtu.searchResult");
-		const parsed = JSON.parse(searchResultCall[1]);
-		assert.strictEqual(parsed.length, 2);
-		assert.strictEqual(parsed[0], "1234");
-		assert.strictEqual(parsed[1], "ABCD");
-	});
-
-	it("returns early when protobuf is null", async function () {
-		const adapter = {
-			log: { info: () => {}, warn: () => {}, debug: () => {}, error: () => {} },
-			setStateAsync: async () => {},
-			extendObjectAsync: async () => {},
-			setObjectNotExistsAsync: async () => {},
-			getStateAsync: async () => null,
-			setInterval: () => undefined,
-			clearInterval: () => {},
-			setTimeout: () => undefined,
-			clearTimeout: () => {},
-			subscribeStates: () => {},
-			unsubscribeStates: () => {},
-			devices: new Map(),
-			matchLocalDeviceToCloud: () => {},
-			onRelayDataSent: () => {},
-			onLocalConnected: () => {},
-			onLocalDisconnected: () => {},
-			onSendTimeUpdated: () => {},
-			updateConnectionState: async () => {},
-		};
-
-		const ctx = new DeviceContext({
-			adapter,
-			protobuf: null,
-			host: "",
-			enableLocal: false,
-			enableCloud: false,
-			enableCloudRelay: false,
-			dataInterval: 15,
-			slowPollFactor: 6,
-		});
-		await ctx.initFromSerial("TEST1234");
-		ctx.protobuf = null;
-		// Should not throw
-		await ctx["handleAutoSearch"](Buffer.alloc(0));
-	});
-
-	it("returns early when deviceId is empty", async function () {
-		const adapter = {
-			log: { info: () => {}, warn: () => {}, debug: () => {}, error: () => {} },
-			setStateAsync: async () => {},
-			extendObjectAsync: async () => {},
-			setInterval: () => undefined,
-			clearInterval: () => {},
-			setTimeout: () => undefined,
-			clearTimeout: () => {},
-			subscribeStates: () => {},
-			unsubscribeStates: () => {},
-			devices: new Map(),
-			matchLocalDeviceToCloud: () => {},
-			onRelayDataSent: () => {},
-			onLocalConnected: () => {},
-			onLocalDisconnected: () => {},
-			onSendTimeUpdated: () => {},
-			updateConnectionState: async () => {},
-		};
-
-		const ctx = new DeviceContext({
-			adapter,
-			protobuf: {
-				getType: () => {
-					throw new Error("should not be called");
-				},
-			},
-			host: "",
-			enableLocal: false,
-			enableCloud: false,
-			enableCloudRelay: false,
-			dataInterval: 15,
-			slowPollFactor: 6,
-		});
-		// No initFromSerial
-		await ctx["handleAutoSearch"](Buffer.alloc(0));
 	});
 });
 
@@ -4306,7 +4281,6 @@ describe("deviceContext – handleInfoData with dtuInfo/pvInfo", function () {
 					swVersion: 4352,
 					hwVersion: 256,
 					signalStrength: -65,
-					errorCode: 0,
 					dtuStepTime: 30,
 					dtuRfHwVersion: 1,
 					dtuRfSwVersion: 2,
@@ -4341,7 +4315,7 @@ describe("deviceContext – handleInfoData with dtuInfo/pvInfo", function () {
 		assert.ok(stateIds.includes("DTU999.dtu.serialNumber"), "Should write dtu.serialNumber");
 		assert.ok(stateIds.includes("DTU999.dtu.swVersion"), "Should write dtu.swVersion");
 		assert.ok(stateIds.includes("DTU999.dtu.hwVersion"), "Should write dtu.hwVersion");
-		assert.ok(stateIds.includes("DTU999.dtu.rssi"), "Should write dtu.rssi");
+		assert.ok(stateIds.includes("DTU999.dtu.signalQuality"), "Should write dtu.signalQuality");
 		assert.ok(stateIds.includes("DTU999.dtu.communicationTime"), "Should write dtu.communicationTime");
 
 		// communicationTime should be multiplied by 1000
@@ -4360,7 +4334,6 @@ describe("deviceContext – handleInfoData with dtuInfo/pvInfo", function () {
 					swVersion: 0,
 					hwVersion: 0,
 					signalStrength: 0,
-					errorCode: 0,
 					dtuStepTime: 0,
 					dtuRfHwVersion: 0,
 					dtuRfSwVersion: 0,
@@ -4404,7 +4377,6 @@ describe("deviceContext – handleInfoData with dtuInfo/pvInfo", function () {
 					swVersion: 0,
 					hwVersion: 0,
 					signalStrength: 0,
-					errorCode: 0,
 					dtuStepTime: 0,
 					dtuRfHwVersion: 0,
 					dtuRfSwVersion: 0,
@@ -4474,7 +4446,6 @@ describe("deviceContext – handleInfoData with dtuInfo/pvInfo", function () {
 					swVersion: 0,
 					hwVersion: 0,
 					signalStrength: 0,
-					errorCode: 0,
 					dtuStepTime: 0,
 					dtuRfHwVersion: 0,
 					dtuRfSwVersion: 0,
@@ -4692,65 +4663,6 @@ describe("deviceContext – handleAlarmData double decode failure", function () 
 
 		await ctx["handleAlarmData"](Buffer.alloc(0));
 		assert.ok(warnMsg.includes("warn fail too"), "Should log the WarnData decode error");
-	});
-});
-
-// ============================================================
-// deviceContext – handleAutoSearch decode error
-// ============================================================
-describe("deviceContext – handleAutoSearch decode error", function () {
-	it("logs warning on decode error", async function () {
-		let warnMsg = "";
-		const adapter = {
-			log: {
-				info: () => {},
-				warn: msg => {
-					warnMsg = msg;
-				},
-				debug: () => {},
-				error: () => {},
-			},
-			setStateAsync: async () => {},
-			extendObjectAsync: async () => {},
-			setObjectNotExistsAsync: async () => {},
-			getStateAsync: async () => null,
-			setInterval: () => undefined,
-			clearInterval: () => {},
-			setTimeout: () => undefined,
-			clearTimeout: () => {},
-			subscribeStates: () => {},
-			unsubscribeStates: () => {},
-			devices: new Map(),
-			matchLocalDeviceToCloud: () => {},
-			onRelayDataSent: () => {},
-			onLocalConnected: () => {},
-			onLocalDisconnected: () => {},
-			onSendTimeUpdated: () => {},
-			updateConnectionState: async () => {},
-		};
-
-		const mockProtobuf = {
-			getType: () => ({
-				decode: () => {
-					throw new Error("auto search boom");
-				},
-			}),
-		};
-
-		const ctx = new DeviceContext({
-			adapter,
-			protobuf: mockProtobuf,
-			host: "192.168.1.1",
-			enableLocal: false,
-			enableCloud: false,
-			enableCloudRelay: false,
-			dataInterval: 15,
-			slowPollFactor: 6,
-		});
-		await ctx.initFromSerial("TEST1234");
-
-		await ctx["handleAutoSearch"](Buffer.alloc(0));
-		assert.ok(warnMsg.includes("auto search boom"), "Should log AutoSearch decode error");
 	});
 });
 
@@ -5001,5 +4913,837 @@ describe("deviceContext – cloud grid-profile handshake ordering", function () 
 		const { ctx, sent } = makeCtx();
 		ctx["handleCloudCommand"](statusAck(41, 999));
 		assert.strictEqual(sent.length, 0);
+	});
+});
+
+// ============================================================
+// deviceContext – cloud downlink coverage
+// ============================================================
+// Every 0x23NN frame the cloud sends must end up somewhere identifiable. Before, only
+// 0x2305/0x2306 were looked at and the routine acks were discarded inside the relay, so an
+// unimplemented downlink was indistinguishable from no downlink at all.
+describe("deviceContext – cloud downlink coverage", function () {
+	let handler;
+
+	before(async function () {
+		this.timeout(10000);
+		handler = new ProtobufHandler();
+		await handler.loadProtos();
+	});
+
+	function makeCtx({ localConnected = true } = {}) {
+		const logs = { info: [], warn: [], debug: [] };
+		const adapter = {
+			log: {
+				info: m => logs.info.push(m),
+				warn: m => logs.warn.push(m),
+				debug: m => logs.debug.push(m),
+				error: () => {},
+			},
+			setStateAsync: async () => {},
+			extendObjectAsync: async () => {},
+			setInterval: () => undefined,
+			clearInterval: () => {},
+			setTimeout: () => undefined,
+			clearTimeout: () => {},
+			subscribeStates: () => {},
+			unsubscribeStates: () => {},
+			devices: new Map(),
+			matchLocalDeviceToCloud: () => {},
+			onRelayDataSent: () => {},
+			onLocalConnected: () => {},
+			onLocalDisconnected: () => {},
+			onSendTimeUpdated: () => {},
+			updateConnectionState: async () => {},
+		};
+		const cloudSent = [];
+		const localSent = [];
+		const ctx = new DeviceContext({
+			adapter,
+			protobuf: handler,
+			host: "192.168.1.1",
+			enableLocal: true,
+			enableCloud: false,
+			enableCloudRelay: true,
+			dataInterval: 15,
+			slowPollFactor: 6,
+		});
+		ctx.cloudRelay = { sendFrame: b => cloudSent.push(b) };
+		ctx.connection = { connected: localConnected, send: async f => localSent.push(f) };
+		ctx.dtuSerial = "4143A01CEDE4";
+		return { ctx, cloudSent, localSent, logs };
+	}
+
+	function actionFrame(action, tid = 4711) {
+		const ResDTO = handler.getType("CommandPB", "CommandResDTO");
+		const payload = ResDTO.encode(ResDTO.create({ time: 1, action, devKind: 1, packageNub: 1, tid })).finish();
+		return { cmdHigh: 0x23, cmdLow: 0x05, seq: 1, payload: Buffer.from(payload) };
+	}
+
+	it("forwards an ordinary action to the device on the cloud tag", function () {
+		const { ctx, cloudSent, localSent } = makeCtx();
+		ctx["handleCloudCommand"](actionFrame(8)); // power limit
+		assert.strictEqual(localSent.length, 1, "command was not handed to the device");
+		// The tag must stay in the cloud family: request/response slots are separate in the
+		// firmware, so rewriting it to 0xa305 would put the answer in the wrong slot.
+		assert.strictEqual(localSent[0][2], 0x23);
+		assert.strictEqual(localSent[0][3], 0x05);
+		// and the cloud gets ack (0x22 0x05) + status (0x22 0x06)
+		assert.deepStrictEqual(
+			cloudSent.map(f => [f[2], f[3]]),
+			[
+				[0x22, 0x05],
+				[0x22, 0x06],
+			],
+		);
+	});
+
+	it("refuses an OTA action instead of forwarding it", function () {
+		const { ctx, cloudSent, localSent, logs } = makeCtx();
+		ctx["handleCloudCommand"](actionFrame(2)); // OTA download
+		assert.strictEqual(localSent.length, 0, "OTA action must not reach the device");
+		assert.strictEqual(cloudSent.length, 0);
+		assert.ok(
+			logs.warn.some(m => /refusing cloud action 2/.test(m)),
+			"refusal was not reported",
+		);
+	});
+
+	it("reports an action it cannot execute without a local connection", function () {
+		const { ctx, localSent, logs } = makeCtx({ localConnected: false });
+		ctx["handleCloudCommand"](actionFrame(8));
+		assert.strictEqual(localSent.length, 0);
+		assert.ok(logs.info.some(m => /no local connection/.test(m)));
+	});
+
+	it("names an implemented-but-unhandled downlink instead of dropping it", function () {
+		const { ctx, logs } = makeCtx();
+		ctx["handleCloudCommand"]({ cmdHigh: 0x23, cmdLow: 0x0a, seq: 1, payload: Buffer.alloc(4) });
+		assert.ok(
+			logs.info.some(m => /WaveRes/.test(m)),
+			"the tag name should appear in the log",
+		);
+	});
+
+	it("warns about a tag neither firmware dispatches", function () {
+		const { ctx, logs } = makeCtx();
+		ctx["handleCloudCommand"]({ cmdHigh: 0x23, cmdLow: 0x7f, seq: 1, payload: Buffer.alloc(2) });
+		assert.ok(logs.warn.some(m => /no firmware dispatches it/.test(m)));
+	});
+
+	it("surfaces a rejected upload from the cloud's acknowledgement", function () {
+		const { ctx, logs } = makeCtx();
+		const Res = handler.getType("RealDataNew", "RealDataNewResDTO");
+		const payload = Buffer.from(Res.encode(Res.create({ cp: 1, errorCode: 7, time: 99 })).finish());
+		ctx["handleCloudAck"]({ cmdHigh: 0x23, cmdLow: 0x0c, seq: 1, payload });
+		assert.ok(
+			logs.warn.some(m => /cloud rejected our upload/.test(m) && /error 7/.test(m)),
+			"a non-zero error code must be reported",
+		);
+	});
+
+	it("accepts a clean acknowledgement quietly", function () {
+		const { ctx, logs } = makeCtx();
+		const Res = handler.getType("APPHeartbeatPB", "HBResDTO");
+		const payload = Buffer.from(Res.encode(Res.create({ offset: 3600, time: 12345 })).finish());
+		ctx["handleCloudAck"]({ cmdHigh: 0x23, cmdLow: 0x02, seq: 1, payload });
+		assert.strictEqual(logs.warn.length, 0);
+		assert.ok(logs.debug.some(m => /HBRes/.test(m)));
+	});
+});
+
+// ============================================================
+// deviceContext – the relay is a TCP-only concern
+// ============================================================
+// The relay exists because a TCP DTU serves a single socket: while the adapter holds port
+// 10081 the device cannot reach the cloud, so the adapter uploads for it. A BLE device has no
+// local TCP port at all — the adapter never takes its cloud socket away, so it keeps uploading
+// itself. Starting a relay there would push a SECOND stream under the same serial.
+describe("deviceContext – relay only on TCP transport", function () {
+	let handler;
+
+	before(async function () {
+		this.timeout(10000);
+		handler = new ProtobufHandler();
+		await handler.loadProtos();
+	});
+
+	function makeCtx(transport) {
+		const logs = { debug: [] };
+		const adapter = {
+			log: { info: () => {}, warn: () => {}, error: () => {}, debug: m => logs.debug.push(m) },
+			setStateAsync: async () => {},
+			extendObjectAsync: async () => {},
+			getStateAsync: async () => ({ val: "dataeu.hoymiles.com" }),
+			setInterval: () => undefined,
+			clearInterval: () => {},
+			setTimeout: () => undefined,
+			clearTimeout: () => {},
+			subscribeStates: () => {},
+			unsubscribeStates: () => {},
+			devices: new Map(),
+			matchLocalDeviceToCloud: () => {},
+			onRelayDataSent: () => {},
+			onLocalConnected: () => {},
+			onLocalDisconnected: () => {},
+			onSendTimeUpdated: () => {},
+			updateConnectionState: async () => {},
+		};
+		const ctx = new DeviceContext({
+			adapter,
+			protobuf: handler,
+			host: "192.168.1.1",
+			enableLocal: false,
+			enableCloud: false,
+			enableCloudRelay: true,
+			dataInterval: 15,
+			slowPollFactor: 6,
+			transport,
+		});
+		return { ctx, logs };
+	}
+
+	it("does not start a relay for a BLE device", async function () {
+		const { ctx, logs } = makeCtx("ble");
+		await ctx["initCloudRelay"]("4161A031AB61");
+		assert.ok(!ctx.cloudRelay, "a BLE device must not get a cloud relay");
+		assert.ok(
+			logs.debug.some(m => /keeps its own cloud connection/.test(m)),
+			"the skip should be explained in the log",
+		);
+	});
+
+	it("starts a relay for a TCP device", async function () {
+		const { ctx } = makeCtx("tcp");
+		await ctx["initCloudRelay"]("4143A01CEDE4");
+		assert.ok(ctx.cloudRelay, "a TCP device needs the relay to reach the cloud");
+		ctx.cloudRelay.disconnect();
+	});
+});
+
+// ============================================================
+// deviceContext – slow-poll queue contents
+// ============================================================
+// The queue decides which non-realtime reads ever happen. A message whose handler exists but
+// which nobody requests produces no states at all — that is exactly how history.* stayed empty.
+describe("deviceContext – slow-poll queue", function () {
+	function queueFrames(transport) {
+		const adapter = {
+			log: { info: () => {}, warn: () => {}, debug: () => {}, error: () => {} },
+			setStateAsync: async () => {},
+			extendObjectAsync: async () => {},
+			setObjectNotExistsAsync: async () => {},
+			getStateAsync: async () => null,
+			setInterval: () => undefined,
+			clearInterval: () => {},
+			setTimeout: () => undefined,
+			clearTimeout: () => {},
+			subscribeStates: () => {},
+			unsubscribeStates: () => {},
+			devices: new Map(),
+			matchLocalDeviceToCloud: () => {},
+			onRelayDataSent: () => {},
+			onLocalConnected: () => {},
+			onLocalDisconnected: () => {},
+			onSendTimeUpdated: () => {},
+			updateConnectionState: async () => {},
+		};
+		const ctx = new DeviceContext({
+			adapter,
+			protobuf: handler,
+			host: "192.168.1.1",
+			enableLocal: true,
+			enableCloud: false,
+			enableCloudRelay: false,
+			dataInterval: 5,
+			slowPollFactor: 6,
+			transport,
+		});
+		ctx["startPollCycle"]();
+		const ts = 1753900000;
+		const frames = ctx["slowPollQueue"].map(f => f(ts));
+		ctx["stopPollCycle"]();
+		return frames;
+	}
+
+	function queueTags(transport) {
+		return queueFrames(transport).map(f => `0x${f[2].toString(16)}${f[3].toString(16).padStart(2, "0")}`);
+	}
+
+	let handler;
+
+	before(async function () {
+		this.timeout(10000);
+		handler = new ProtobufHandler();
+		await handler.loadProtos();
+	});
+
+	it("asks for the daily power curve on the TCP path", function () {
+		assert.ok(queueTags("tcp").includes("0xa315"), "HistPower must be requested, or history.* stays empty");
+	});
+
+	it("asks for the daily power curve on the BLE path too", function () {
+		assert.ok(queueTags("ble").includes("0xa315"), "the 2WB answers a315 as well");
+	});
+
+	// The alarm trigger and the MI-warn read are both action commands on tag 0xa305, so they can
+	// only be told apart by their action code (50 = ALARM_LIST, 46 = READ_MI_HU_WARN).
+	function queueActions(transport) {
+		const ResDTO = handler.getType("CommandPB", "CommandResDTO");
+		return queueFrames(transport)
+			.filter(f => f[2] === 0xa3 && f[3] === 0x05)
+			.map(f => Number(ResDTO.toObject(ResDTO.decode(f.subarray(10)), { defaults: true }).action));
+	}
+
+	it("still skips the alarm trigger on BLE, which the 2WB rejects", function () {
+		assert.ok(queueActions("tcp").includes(50), "TCP keeps the alarm-list trigger");
+		assert.ok(!queueActions("ble").includes(50), "BLE must not send it (2WB answers error 1)");
+		assert.ok(queueActions("ble").includes(46), "BLE reads warnings via the MI-warn request instead");
+	});
+});
+
+// ============================================================
+// deviceContext – cumulative counters never go backwards
+// ============================================================
+// After a device restart the inverter re-reads its last persisted counter and reports a few Wh
+// below the previous figure. Written through, that is a downward step in every history consumer.
+describe("deviceContext – counter monotonicity", function () {
+	let handler;
+
+	before(async function () {
+		this.timeout(10000);
+		handler = new ProtobufHandler();
+		await handler.loadProtos();
+	});
+
+	function ctxWithWrites() {
+		const written = [];
+		const adapter = {
+			log: { info: () => {}, warn: () => {}, debug: () => {}, error: () => {} },
+			setStateAsync: async (id, val) => {
+				written.push([id, val]);
+			},
+			extendObjectAsync: async () => {},
+			setObjectNotExistsAsync: async () => {},
+			getStateAsync: async () => null,
+			setInterval: () => undefined,
+			clearInterval: () => {},
+			setTimeout: () => undefined,
+			clearTimeout: () => {},
+			subscribeStates: () => {},
+			unsubscribeStates: () => {},
+			devices: new Map(),
+			matchLocalDeviceToCloud: () => {},
+			onRelayDataSent: () => {},
+			onLocalConnected: () => {},
+			onLocalDisconnected: () => {},
+			onSendTimeUpdated: () => {},
+			updateConnectionState: async () => {},
+		};
+		const ctx = new DeviceContext({
+			adapter,
+			protobuf: handler,
+			host: "192.168.1.1",
+			enableLocal: true,
+			enableCloud: false,
+			enableCloudRelay: false,
+			dataInterval: 5,
+			slowPollFactor: 6,
+		});
+		return { ctx, written };
+	}
+
+	function realData(totalWh) {
+		return {
+			dtuPower: 100,
+			dtuDailyEnergy: 0,
+			sgs: [],
+			pv: [
+				{
+					portNumber: 1,
+					power: 100,
+					voltage: 30,
+					current: 3,
+					energyDaily: 500,
+					energyTotal: totalWh,
+				},
+			],
+			meter: [],
+		};
+	}
+
+	it("writes a rising total energy", async function () {
+		const { ctx, written } = ctxWithWrites();
+		await ctx.initFromSerial("TEST1234");
+		ctx.pvCount = 1;
+		await ctx.applyRealData(realData(100000));
+		await ctx.applyRealData(realData(100100));
+		const totals = written.filter(([id]) => id.endsWith("pv0.totalEnergy")).map(([, v]) => v);
+		assert.deepStrictEqual(totals, [100, 100.1], "both rising values must be written");
+	});
+
+	it("drops a total energy that went backwards after a restart", async function () {
+		const { ctx, written } = ctxWithWrites();
+		await ctx.initFromSerial("TEST1234");
+		ctx.pvCount = 1;
+		await ctx.applyRealData(realData(100100));
+		await ctx.applyRealData(realData(100000));
+		const totals = written.filter(([id]) => id.endsWith("pv0.totalEnergy")).map(([, v]) => v);
+		assert.deepStrictEqual(totals, [100.1], "the backward step must not be written");
+	});
+
+	it("forgets its counter memory when the device disconnects", async function () {
+		const { ctx, written } = ctxWithWrites();
+		await ctx.initFromSerial("TEST1234");
+		ctx.pvCount = 1;
+		await ctx.applyRealData(realData(100100));
+		ctx.disconnect();
+		await ctx.applyRealData(realData(100000));
+		const totals = written.filter(([id]) => id.endsWith("pv0.totalEnergy")).map(([, v]) => v);
+		assert.deepStrictEqual(totals, [100.1, 100], "after a disconnect the next device starts fresh");
+	});
+});
+
+// ============================================================
+// deviceContext – cloud power-limit writes share the flash accounting
+// ============================================================
+// Both routes to a power limit end in the same two flash sectors. A cloud command is forwarded
+// unthrottled on purpose (the relay stands in for the device, and it acknowledges the command
+// upstream — dropping it would tell the server a lie), but it must still be booked, or the next
+// local write is judged against a value the device no longer holds.
+describe("deviceContext – shared flash accounting", function () {
+	let handler;
+
+	before(async function () {
+		this.timeout(10000);
+		handler = new ProtobufHandler();
+		await handler.loadProtos();
+	});
+
+	function ctxWithRelay() {
+		const sentLocal = [];
+		const warns = [];
+		const adapter = {
+			log: { info: () => {}, warn: m => warns.push(m), debug: () => {}, error: () => {} },
+			setStateAsync: async () => {},
+			extendObjectAsync: async () => {},
+			setObjectNotExistsAsync: async () => {},
+			getStateAsync: async () => null,
+			setInterval: () => undefined,
+			clearInterval: () => {},
+			setTimeout: () => undefined,
+			clearTimeout: () => {},
+			subscribeStates: () => {},
+			unsubscribeStates: () => {},
+			devices: new Map(),
+			matchLocalDeviceToCloud: () => {},
+			onRelayDataSent: () => {},
+			onLocalConnected: () => {},
+			onLocalDisconnected: () => {},
+			onSendTimeUpdated: () => {},
+			updateConnectionState: async () => {},
+		};
+		const ctx = new DeviceContext({
+			adapter,
+			protobuf: handler,
+			host: "192.168.1.1",
+			enableLocal: true,
+			enableCloud: false,
+			enableCloudRelay: true,
+			dataInterval: 5,
+			slowPollFactor: 6,
+		});
+		ctx.dtuSerial = "4143A01CEDE4";
+		ctx.deviceId = "4143A01CEDE4";
+		ctx.connection = {
+			connected: true,
+			send: async buf => {
+				sentLocal.push(buf);
+				return true;
+			},
+		};
+		ctx.cloudRelay = { sendFrame: () => {} };
+		return { ctx, sentLocal, warns };
+	}
+
+	function cloudPowerLimit() {
+		const ResDTO = handler.getType("CommandPB", "CommandResDTO");
+		const payload = ResDTO.encode(ResDTO.create({ action: 8, tid: 1, data: "A:800,B:0,C:0\r" })).finish();
+		return { cmdHigh: 0x23, cmdLow: 0x05, seq: 1, payload: Buffer.from(payload) };
+	}
+
+	it("forwards a cloud power-limit command without throttling it", function () {
+		const { ctx, sentLocal } = ctxWithRelay();
+		ctx["handleCloudAction"](cloudPowerLimit());
+		ctx["handleCloudAction"](cloudPowerLimit());
+		assert.strictEqual(sentLocal.length, 2, "the relay must not drop a command it acknowledges upstream");
+	});
+
+	it("books the cloud write so the next local write sees it", function () {
+		const { ctx } = ctxWithRelay();
+		ctx["handleCloudAction"](cloudPowerLimit());
+		const entry = ctx["flashWrites"].get("inverter.powerLimit");
+		assert.ok(entry, "the cloud write must be booked under the local state id");
+		assert.ok(entry.lastWriteMs > 0, "its time must be recorded");
+		assert.strictEqual(entry.lastValue, null, "its value is unknown and must not be guessed");
+	});
+
+	it("warns once when the cloud writes faster than the configured interval", function () {
+		const { ctx, warns } = ctxWithRelay();
+		ctx["handleCloudAction"](cloudPowerLimit());
+		ctx["handleCloudAction"](cloudPowerLimit());
+		ctx["handleCloudAction"](cloudPowerLimit());
+		const rateWarnings = warns.filter(m => /faster than the configured/.test(m));
+		assert.strictEqual(rateWarnings.length, 1, "one warning, not one per command");
+	});
+
+	it("does not book an action that writes no flash", function () {
+		const { ctx } = ctxWithRelay();
+		const ResDTO = handler.getType("CommandPB", "CommandResDTO");
+		const payload = ResDTO.encode(ResDTO.create({ action: 3, tid: 1 })).finish();
+		ctx["handleCloudAction"]({ cmdHigh: 0x23, cmdLow: 0x05, seq: 1, payload: Buffer.from(payload) });
+		assert.strictEqual(ctx["flashWrites"].size, 0, "a reboot writes no configuration");
+	});
+});
+
+// ============================================================
+// deviceContext – configuration writes need a read first
+// ============================================================
+describe("deviceContext – config snapshot", function () {
+	let handler;
+
+	before(async function () {
+		this.timeout(10000);
+		handler = new ProtobufHandler();
+		await handler.loadProtos();
+	});
+
+	function ctx() {
+		const warns = [];
+		const sent = [];
+		const adapter = {
+			log: { info: () => {}, warn: m => warns.push(m), debug: () => {}, error: () => {} },
+			setStateAsync: async () => {},
+			extendObjectAsync: async () => {},
+			setObjectNotExistsAsync: async () => {},
+			getStateAsync: async () => null,
+			setInterval: () => undefined,
+			clearInterval: () => {},
+			setTimeout: () => undefined,
+			clearTimeout: () => {},
+			subscribeStates: () => {},
+			unsubscribeStates: () => {},
+			devices: new Map(),
+			matchLocalDeviceToCloud: () => {},
+			onRelayDataSent: () => {},
+			onLocalConnected: () => {},
+			onLocalDisconnected: () => {},
+			onSendTimeUpdated: () => {},
+			updateConnectionState: async () => {},
+		};
+		const c = new DeviceContext({
+			adapter,
+			protobuf: handler,
+			host: "192.168.1.1",
+			enableLocal: true,
+			enableCloud: false,
+			enableCloudRelay: false,
+			dataInterval: 5,
+			slowPollFactor: 6,
+		});
+		c.deviceId = "DTU1";
+		c.connection = {
+			connected: true,
+			send: async b => {
+				sent.push(b);
+				return true;
+			},
+			removeAllListeners: () => {},
+			disconnect: () => {},
+		};
+		return { c, warns, sent };
+	}
+
+	it("refuses a configuration write before the configuration was read", async function () {
+		const { c, warns, sent } = ctx();
+		await c.handleStateChange("config.serverSendTime", { val: 10, ack: false });
+		assert.strictEqual(sent.length, 0, "nothing may go out — it would clear the untouched fields");
+		assert.ok(
+			warns.some(m => /without having read it first/i.test(m)),
+			"the refusal must say why",
+		);
+	});
+
+	it("writes once the device's configuration is known", async function () {
+		const { c, sent } = ctx();
+		const ReqDTO = handler.getType("GetConfig", "GetConfigReqDTO");
+		const payload = ReqDTO.encode(
+			ReqDTO.create({ serverDomainName: "dataeu.hoymiles.com", serverport: 10081, lockPassword: 4711 }),
+		).finish();
+		await c["handleConfigData"](Buffer.from(payload));
+		await c.handleStateChange("config.serverSendTime", { val: 10, ack: false });
+		assert.strictEqual(sent.length, 1, "now the write is safe");
+		const ResDTO = handler.getType("SetConfig", "SetConfigResDTO");
+		const msg = ResDTO.toObject(ResDTO.decode(sent[0].subarray(10)), { longs: Number, defaults: true });
+		assert.strictEqual(msg.serverDomainName, "dataeu.hoymiles.com", "carried over from the read");
+		assert.strictEqual(Number(msg.lockPassword), 4711, "including the field the adapter never exposes");
+	});
+
+	it("forgets the snapshot on disconnect", async function () {
+		const { c } = ctx();
+		const ReqDTO = handler.getType("GetConfig", "GetConfigReqDTO");
+		await c["handleConfigData"](Buffer.from(ReqDTO.encode(ReqDTO.create({ serverport: 10081 })).finish()));
+		assert.ok(c["configSnapshot"], "snapshot present after a read");
+		c.disconnect();
+		assert.strictEqual(c["configSnapshot"], null, "a snapshot must not outlive its device");
+	});
+});
+
+// ============================================================
+// deviceContext – the day curve is collected across all pages
+// ============================================================
+// The device splits the day into pages of at most 200 samples and reports the count in `ap`.
+// Page 0 alone ends at mid-morning, so publishing it would show a third of the day as the whole.
+describe("deviceContext – HistPower paging", function () {
+	let handler;
+
+	before(async function () {
+		this.timeout(10000);
+		handler = new ProtobufHandler();
+		await handler.loadProtos();
+	});
+
+	function pagePayload(values, pageCount) {
+		const ReqDTO = handler.getType("AppGetHistPower", "AppGetHistPowerReqDTO");
+		return Buffer.from(
+			ReqDTO.encode(
+				ReqDTO.create({
+					powerArray: values,
+					stepTime: 60,
+					ap: pageCount,
+					absoluteStart: 1785382614,
+					dailyEnergy: 4500,
+					totalEnergy: 853192,
+				}),
+			).finish(),
+		);
+	}
+
+	function ctx() {
+		const written = [];
+		const sent = [];
+		const adapter = {
+			log: { info: () => {}, warn: () => {}, debug: () => {}, error: () => {} },
+			setStateAsync: async (id, val) => {
+				written.push([id, val]);
+			},
+			extendObjectAsync: async () => {},
+			setObjectNotExistsAsync: async () => {},
+			getStateAsync: async () => null,
+			setInterval: () => undefined,
+			clearInterval: () => {},
+			setTimeout: () => undefined,
+			clearTimeout: () => {},
+			subscribeStates: () => {},
+			unsubscribeStates: () => {},
+			devices: new Map(),
+			matchLocalDeviceToCloud: () => {},
+			onRelayDataSent: () => {},
+			onLocalConnected: () => {},
+			onLocalDisconnected: () => {},
+			onSendTimeUpdated: () => {},
+			updateConnectionState: async () => {},
+		};
+		const c = new DeviceContext({
+			adapter,
+			protobuf: handler,
+			host: "192.168.1.1",
+			enableLocal: true,
+			enableCloud: false,
+			enableCloudRelay: false,
+			dataInterval: 5,
+			slowPollFactor: 6,
+		});
+		c.deviceId = "DTU1";
+		// setState is gated on the context being ready (device id known + state objects created);
+		// the paging logic under test runs after that point in real operation.
+		c.statesCreated = true;
+		c.connection = {
+			connected: true,
+			send: async b => {
+				sent.push(b);
+				return true;
+			},
+			removeAllListeners: () => {},
+			disconnect: () => {},
+		};
+		return { c, written, sent };
+	}
+
+	const curve = written => JSON.parse(written.filter(([id]) => id.endsWith("history.powerJson")).pop()[1]);
+
+	it("requests the next page instead of publishing an incomplete curve", async function () {
+		const { c, written, sent } = ctx();
+		await c["handleHistPower"](pagePayload([100, 200], 3));
+		assert.strictEqual(sent.length, 1, "a follow-up request for page 1 must go out");
+		assert.strictEqual(sent[0][3], 0x15, "and it is another HistPower request");
+		assert.strictEqual(
+			written.filter(([id]) => id.endsWith("history.powerJson")).length,
+			0,
+			"nothing may be published while pages are missing",
+		);
+	});
+
+	it("publishes the concatenated curve once the last page arrives", async function () {
+		const { c, written } = ctx();
+		await c["handleHistPower"](pagePayload([100, 200], 3));
+		await c["handleHistPower"](pagePayload([300, 400], 3));
+		await c["handleHistPower"](pagePayload([500], 3));
+		assert.deepStrictEqual(curve(written), [10, 20, 30, 40, 50], "all pages, scaled to W");
+	});
+
+	it("publishes immediately when the device reports a single page", async function () {
+		const { c, written, sent } = ctx();
+		await c["handleHistPower"](pagePayload([100, 200], 1));
+		assert.strictEqual(sent.length, 0, "no follow-up request for a one-page day");
+		assert.deepStrictEqual(curve(written), [10, 20]);
+	});
+
+	it("stops when a page comes back empty, rather than asking forever", async function () {
+		const { c, written, sent } = ctx();
+		await c["handleHistPower"](pagePayload([100], 5));
+		await c["handleHistPower"](pagePayload([], 5));
+		assert.strictEqual(sent.length, 1, "only the one follow-up, then it stops");
+		assert.deepStrictEqual(curve(written), [10]);
+	});
+
+	it("starts a fresh curve on the next round instead of appending forever", async function () {
+		const { c, written } = ctx();
+		await c["handleHistPower"](pagePayload([100, 200], 1));
+		await c["handleHistPower"](pagePayload([300], 1));
+		assert.deepStrictEqual(curve(written), [30], "the second round replaces, not appends");
+	});
+});
+
+// ============================================================
+// deviceContext – Shelly meter states (BLE only)
+// ============================================================
+describe("deviceContext – Shelly meter", function () {
+	/** Adapter mock that records every state write. */
+	function makeTrackingAdapter() {
+		const writes = new Map();
+		return {
+			writes,
+			log: { info: () => {}, warn: () => {}, debug: () => {}, error: () => {} },
+			setStateAsync: async (id, val) => {
+				writes.set(id, val && typeof val === "object" && "val" in val ? val.val : val);
+			},
+			extendObjectAsync: async () => {},
+			setObjectNotExistsAsync: async () => {},
+			setInterval: () => undefined,
+			clearInterval: () => {},
+			setTimeout: () => undefined,
+			clearTimeout: () => {},
+			subscribeStates: () => {},
+			unsubscribeStates: () => {},
+			devices: new Map(),
+			matchLocalDeviceToCloud: () => {},
+			onRelayDataSent: () => {},
+			onLocalConnected: () => {},
+			onLocalDisconnected: () => {},
+			onSendTimeUpdated: () => {},
+			updateConnectionState: async () => {},
+		};
+	}
+
+	function makeCtx(adapter, transport) {
+		const ctx = new DeviceContext({
+			adapter,
+			protobuf: new ProtobufHandler(),
+			host: "AA:BB:CC:DD:EE:FF",
+			enableLocal: true,
+			enableCloud: false,
+			enableCloudRelay: false,
+			dataInterval: 15,
+			slowPollFactor: 6,
+			transport,
+		});
+		ctx.deviceId = "4161A031AB61";
+		ctx.statesCreated = true; // skip object creation, we only care about the values
+		return ctx;
+	}
+
+	// Hand-built payload: the shared .proto cannot express fields 13/14.
+	const varint = n => {
+		const b = [];
+		let v = BigInt(n);
+		while (v > 0x7fn) {
+			b.push(Number(v & 0x7fn) | 0x80);
+			v >>= 7n;
+		}
+		b.push(Number(v));
+		return Buffer.from(b);
+	};
+	const fld = (no, wire, p) => Buffer.concat([varint((no << 3) | wire), p]);
+	const msg = p => Buffer.concat([varint(p.length), p]);
+	const vfld = (no, v) => fld(no, 0, varint(BigInt.asUintN(64, BigInt(v))));
+
+	const flow = fld(
+		13,
+		2,
+		msg(Buffer.concat([vfld(1, 5282), vfld(2, -5000), vfld(3, 12942), vfld(4, 0), vfld(5, 5002)])),
+	);
+	// Header field 1 carries the device id (eight raw bytes off the device record); field 2 gets
+	// the constant 1. Phase slot: number, voltage, current, active power.
+	const meter = fld(
+		14,
+		2,
+		msg(
+			Buffer.concat([
+				fld(1, 2, msg(Buffer.concat([vfld(1, 0xbc2411b807c0n), vfld(2, 1)]))),
+				fld(2, 2, msg(Buffer.concat([vfld(1, 1), vfld(2, 2301), vfld(3, 1234), vfld(4, 4560)]))),
+			]),
+		),
+	);
+
+	it("writes the energy flow when a meter reports", async function () {
+		const adapter = makeTrackingAdapter();
+		const ctx = makeCtx(adapter, "ble");
+		await ctx.applyShellyData(Buffer.concat([flow, meter]));
+
+		assert.strictEqual(adapter.writes.get("4161A031AB61.meter.gridPower"), -500, "export stays negative");
+		assert.strictEqual(adapter.writes.get("4161A031AB61.meter.pvPower"), 528.2);
+		assert.strictEqual(adapter.writes.get("4161A031AB61.meter.loadPower"), 1294.2);
+		assert.strictEqual(adapter.writes.get("4161A031AB61.meter.connected"), true);
+		assert.strictEqual(adapter.writes.get("4161A031AB61.meter.deviceId"), "bc2411b807c0");
+	});
+
+	it("creates nothing while no meter is bound", async function () {
+		// The DTU ships the flow message even without a meter — grid/sp are simply zero then. A
+		// device without a meter must not grow an empty shelly branch.
+		const adapter = makeTrackingAdapter();
+		const ctx = makeCtx(adapter, "ble");
+		await ctx.applyShellyData(flow);
+		assert.strictEqual(adapter.writes.size, 0, "no states before a meter ever reported");
+	});
+
+	it("keeps reporting once the meter has been seen, so a dying poll is visible", async function () {
+		const adapter = makeTrackingAdapter();
+		const ctx = makeCtx(adapter, "ble");
+		await ctx.applyShellyData(Buffer.concat([flow, meter]));
+		adapter.writes.clear();
+		// The DTU's WebSocket poll dies after a few minutes; the device then drops out of the frame.
+		await ctx.applyShellyData(flow);
+		assert.strictEqual(adapter.writes.get("4161A031AB61.meter.connected"), false, "must flag the loss");
+	});
+
+	it("is not applied on the TCP path", async function () {
+		// The 2T has neither a meter input nor an energy management (firmware-verified), and its
+		// field 13 carries dtu_daily_energy instead.
+		const adapter = makeTrackingAdapter();
+		const ctx = makeCtx(adapter, "tcp");
+		await ctx.handleRealData(Buffer.concat([flow, meter]));
+		const shellyWrites = [...adapter.writes.keys()].filter(k => k.includes(".meter."));
+		assert.deepStrictEqual(shellyWrites, [], "no shelly states on TCP devices");
 	});
 });
