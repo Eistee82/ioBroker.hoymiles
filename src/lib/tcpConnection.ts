@@ -19,7 +19,7 @@ export interface TimerScheduler {
 }
 
 /** Fallback scheduler using native timers — used when no adapter is injected (tests, standalone). */
-const NATIVE_TIMERS: TimerScheduler = {
+export const NATIVE_TIMERS: TimerScheduler = {
 	setTimeout: (cb, ms) => globalThis.setTimeout(cb, ms) as unknown as ioBroker.Timeout,
 	clearTimeout: handle => globalThis.clearTimeout(handle as unknown as NodeJS.Timeout),
 	setInterval: (cb, ms) => globalThis.setInterval(cb, ms) as unknown as ioBroker.Interval,

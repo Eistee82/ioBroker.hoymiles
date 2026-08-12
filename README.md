@@ -37,7 +37,8 @@ Two connection modes (independently configurable):
 
 ## Features
 
-- Dual mode: local TCP/Protobuf and/or S-Miles Cloud API
+- Three connection paths: local TCP/Protobuf, local Bluetooth (BLE) via an ESPHome Bluetooth Proxy, and/or the S-Miles Cloud API
+- Local BLE for the WB series (e.g. HMS-800-2WB, no local TCP port): automatic gateway discovery (mDNS), automatic best-signal gateway selection, and a one-click "add discovered inverters" import
 - Persistent TCP connection with protobuf heartbeat (auto idle keepalive every 20s)
 - Configurable data interval (0 = fastest possible, ~1s per cycle)
 - Cloud Relay: forwards inverter data to the Hoymiles Cloud on behalf of the DTU, so the local connection no longer blocks cloud uploads
@@ -70,6 +71,8 @@ Open the adapter configuration in the ioBroker admin interface.
 | **DTU devices** | (empty) | Table of DTU IP addresses/hostnames. Add one row per DTU. |
 | **Data query interval** | 5s | Seconds between data requests (0-300). Set 0 for fastest possible (no delay between requests). |
 | **Config/alarm poll factor** | 6 | Config and alarms are queried every Nth data cycle. |
+| **Power limit dead band** | 1 % | Smaller power-limit changes are not sent to the device. Every write erases two flash sectors inside the inverter. 0 = off. |
+| **Power limit minimum interval** | 60 s | Shortest gap between two power-limit writes. Protects the inverter's flash. 0 = off. |
 | **Cloud Relay** | on | Forward real-time data to Hoymiles Cloud on behalf of the DTU. Prevents the local connection from blocking cloud uploads. |
 
 ### Cloud Connection (S-Miles)
@@ -82,39 +85,47 @@ Open the adapter configuration in the ioBroker admin interface.
 
 All inverters in your cloud account are automatically discovered. No manual serial number configuration needed.
 
-Both connections can be enabled simultaneously. Local data has priority — cloud data fills in when the DTU is offline (e.g. at night).
+### BLE Gateway (ESPHome)
+
+For **WB-series** inverters (e.g. HMS-800-2WB) that can only be reached over Bluetooth. You add a small, cheap Bluetooth bridge to your network (an [ESPHome Bluetooth Proxy](https://esphome.io/projects/?type=bluetooth)), and the adapter reaches your inverter through it — without the cloud.
+
+Open the **BLE** tab, turn on **Enable BLE gateway** and save. Then click **Add discovered inverters**, enter each inverter's **PIN**, tick **Active**, and save. See the step-by-step guide in the [documentation](docs/en/README.md#ble-gateway-esphome).
+
+The settings are grouped into **Local / Cloud / BLE** tabs; any combination can be enabled at once.
 
 ## Supported Inverters
 
 This adapter is designed for **Hoymiles HMS microinverters with an integrated WiFi (or WiFi + Bluetooth) DTU** (DTUBI).
 
-**Local** = direct TCP/Protobuf connection on port 10081. **Cloud** = S-Miles Cloud API — auto-discovery, realtime data (fast burst channel ~1.5–3 s), energy aggregates, grid profile, inverter on/off + reboot, DTU reboot.
+**Local (TCP)** = direct TCP/Protobuf connection on port 10081 (WiFi models). **Local (BLE)** = local Bluetooth through an [ESPHome Bluetooth Proxy](https://esphome.io/projects/?type=bluetooth) (WB series). **Cloud** = S-Miles Cloud API — auto-discovery, realtime data (fast burst channel ~1.5–3 s), energy aggregates, grid profile, inverter on/off + reboot, DTU reboot.
 
-| Model | Strings | Local (TCP) | Cloud | Status |
-|-------|:---:|:---:|:---:|--------|
-| HMS-300W-1T | 1 | ✅ | ✅ | Untested |
-| HMS-350W-1T | 1 | ✅ | ✅ | Untested |
-| HMS-400W-1T | 1 | ✅ | ✅ | Untested |
-| HMS-450W-1T | 1 | ✅ | ✅ | Untested |
-| HMS-500W-1T | 1 | ✅ | ✅ | Untested |
-| HMS-600W-2T | 2 | ✅ | ✅ | Untested |
-| HMS-700W-2T | 2 | ✅ | ✅ | Untested |
-| HMS-800W-2T | 2 | ✅ | ✅ | **Tested** (Local + Cloud) |
-| HMS-900W-2T | 2 | ✅ | ✅ | Untested |
-| HMS-1000W-2T | 2 | ✅ | ✅ | **Tested** (Local) |
-| HMS-1600DW-4T | 4 | ✅ | ✅ | Untested |
-| HMS-1800DW-4T | 4 | ✅ | ✅ | Untested |
-| HMS-2000DW-4T | 4 | ✅ | ✅ | Untested |
-| HMS-600-2WB | 2 | ❌¹ | ✅ | Untested |
-| HMS-700-2WB | 2 | ❌¹ | ✅ | Untested |
-| HMS-800-2WB | 2 | ❌¹ | ✅ | **Tested** (Cloud: realtime burst, grid profile, on/off + reboot, DTU reboot) |
-| HMS-900-2WB | 2 | ❌¹ | ✅ | Untested |
-| HMS-1000-2WB | 2 | ❌¹ | ✅ | Untested |
-| HMS-1600-4WB | 4 | ❌¹ | ✅ | Untested |
-| HMS-1800-4WB | 4 | ❌¹ | ✅ | Untested |
-| HMS-2000-4WB | 4 | ❌¹ | ✅ | Untested |
+| Model | Strings | Local (TCP) | Local (BLE)² | Cloud | Status |
+|-------|:---:|:---:|:---:|:---:|--------|
+| HMS-300W-1T | 1 | ✅ | — | ✅ | Untested |
+| HMS-350W-1T | 1 | ✅ | — | ✅ | Untested |
+| HMS-400W-1T | 1 | ✅ | — | ✅ | Untested |
+| HMS-450W-1T | 1 | ✅ | — | ✅ | Untested |
+| HMS-500W-1T | 1 | ✅ | — | ✅ | Untested |
+| HMS-600W-2T | 2 | ✅ | — | ✅ | Untested |
+| HMS-700W-2T | 2 | ✅ | — | ✅ | Untested |
+| HMS-800W-2T | 2 | ✅ | — | ✅ | **Tested** (Local + Cloud) |
+| HMS-900W-2T | 2 | ✅ | — | ✅ | Untested |
+| HMS-1000W-2T | 2 | ✅ | — | ✅ | **Tested** (Local) |
+| HMS-1600DW-4T | 4 | ✅ | — | ✅ | Untested |
+| HMS-1800DW-4T | 4 | ✅ | — | ✅ | Untested |
+| HMS-2000DW-4T | 4 | ✅ | — | ✅ | Untested |
+| HMS-600-2WB | 2 | ❌¹ | ✅ | ✅ | Untested |
+| HMS-700-2WB | 2 | ❌¹ | ✅ | ✅ | Untested |
+| HMS-800-2WB | 2 | ❌¹ | ✅ | ✅ | **Tested** (Cloud; BLE gateway path in testing) |
+| HMS-900-2WB | 2 | ❌¹ | ✅ | ✅ | Untested |
+| HMS-1000-2WB | 2 | ❌¹ | ✅ | ✅ | Untested |
+| HMS-1600-4WB | 4 | ❌¹ | ✅ | ✅ | Untested |
+| HMS-1800-4WB | 4 | ❌¹ | ✅ | ✅ | Untested |
+| HMS-2000-4WB | 4 | ❌¹ | ✅ | ✅ | Untested |
 
-¹ The **WB series** (sold as **"HiFlow Pro"**) has no local TCP port — its only local channel is Bluetooth LE, and all data goes to the Hoymiles cloud. These inverters therefore work **cloud-only**: enable the cloud connection and the adapter reads them through the S-Miles API (realtime burst, energy, grid profile) and can send the inverter on/off + reboot and DTU reboot commands. All WB models share the same platform; only the HMS-800-2WB has been tested so far.
+¹ The **WB series** (sold as **"HiFlow Pro"**) has no local TCP port — its only local channel is Bluetooth LE. Reach it either **locally over Bluetooth** (see column *Local (BLE)*) or via the **cloud**. All WB models share the same platform; only the HMS-800-2WB has been tested so far.
+
+² **Local (BLE)** needs an [ESPHome Bluetooth Proxy](https://esphome.io/projects/?type=bluetooth) (a cheap ESP32) on your network; the adapter then reads and controls the inverter locally over Bluetooth, without the cloud. WiFi (T) models don't need this — they use the local TCP path. See the *BLE Gateway (ESPHome)* section in the [documentation](docs/en/README.md#ble-gateway-esphome).
 
 **Cloud-only operation:** any supported inverter in your S-Miles account also works without a local connection at all — the adapter discovers it automatically and provides realtime power (burst channel), energy aggregates, grid profile, and the inverter on/off + reboot and DTU reboot commands over the cloud. The remaining commands (power limit, lock, clean warnings, …) require the local TCP link.
 
@@ -138,11 +149,17 @@ Cloud stations create aggregated device nodes (e.g. `hoymiles.0.station-12345.*`
 ## Changelog
 
 ### **WORK IN PROGRESS**
-- (@Eistee82) Cloud: inverters whose model name does not end in "T" (e.g. HMS-2000-4WB) no longer lose their extra PV strings — voltage and current were only polled for the first two strings, so strings 3 and 4 showed power but nothing else. The number of PV inputs is now taken from Hoymiles' own rule dictionary, looked up by inverter serial number prefix, which is the same source the S-Miles app uses; the model name and the number of strings seen in the live data remain as fallbacks
-- (@Eistee82) Cloud: support inverters with more than six PV strings (up to 12), matching the port counts the cloud actually publishes
-- (@Eistee82) CI/tests: upgraded the coverage tool (c8 11 → 12) so the unit-test coverage step runs on Node 26 as well, and added Node 26 to the test matrix (now 22 / 24 / 26)
-- (@Eistee82) Security (dev dependencies only): cleared several advisories in the development toolchain — js-yaml and brace-expansion via `npm audit fix`, plus targeted same-major overrides for brace-expansion (1.1.16) and adm-zip (0.6.0). No change to the shipped adapter (these packages are not part of the published npm package)
-- (@Eistee82) Device Manager: inverters and cloud stations now appear on the ioBroker Device Manager tab, each inverter titled after its cloud station (the name given in the S-Miles app) plus its DTU serial, with live status, original per-type device icons (also used for the device objects in the object tree, replacing the generic adapter icon), live values right on the card (current power, today's energy, per-PV-string power and inverter temperature), per-device controls (on/off, power limit, power factor, reactive power, lock, reboot inverter/DTU, clear warnings/grounding fault, persistent power limit, cloud send interval), a settings dialog and a read-only details view. Cloud-only inverters show just the cloud-actuatable controls; instance actions cover network scan and cloud-login test. Controls reuse the existing command path, so no behaviour changes for the underlying states
+
+- (@Eistee82) **Inverters of the WB series (e.g. HMS-800-2WB) can now be used locally.** They have no network port and are only reachable over Bluetooth, so the adapter talks to them through a cheap ESP32 running an ESPHome Bluetooth Proxy — reading and controlling them without the cloud. Proxy and inverters are found automatically
+- (@Eistee82) **Your inverters and plants now appear on the Config Manager tab** with live values, controls and a settings dialog — no need to build your own view first
+- (@Eistee82) **A Shelly or ecotracker energy meter can be connected to a WB-series inverter**, either just to read it out or so the inverter throttles itself and nothing is fed into the grid. The regulation runs inside the inverter, so it keeps working even when the adapter does not
+- (@Eistee82) **The inverter's own daily power curve is now read locally** (`history.powerJson`), covering the whole day instead of just the first hours — and without the cloud
+- (@Eistee82) **Setting a power limit wears out the inverter's memory.** Every write erases two flash sectors, which was not previously known and applies to earlier versions too. The adapter now skips changes that are too small and keeps a minimum gap between writes, both adjustable. Writing a single configuration value also no longer overwrites the rest of the configuration
+- (@Eistee82) **The log stays quiet while a Bluetooth inverter is off for the night.** Every failed reconnect used to add a warning, so a night produced hundreds of them; now the first failure is reported once and the retries move to the debug log. The adapter also stops hammering the Bluetooth proxy — it waits 5s, 10s, 20s and so on, up to 5 minutes, and goes back to a quick retry as soon as the inverter answers again
+- (@Eistee82) **The plant's total power now keeps up with the individual inverters.** When every inverter is connected locally, the station total came from a slow cloud query and could show a fraction of what the inverters were reporting at that moment — 255 W next to 516 W and 265 W. It now comes from the same fast realtime channel as everything else
+- (@Eistee82) **The settings are now split into Local, Cloud and Bluetooth tabs**, with a link straight to the S-Miles portal and to the instructions for flashing a Bluetooth proxy. The unused API-key field is gone
+- (@Eistee82) **What the cloud sends back is now read instead of discarded.** The server's time and timezone reach the inverter again, and an upload the server rejects is reported rather than silently swallowed. Downlinks that would start a firmware download are refused — relaying one unattended can brick the hardware. Values the device already reports became states of their own: its network settings (`config.ipAddress`, `subnetMask`, `gateway`, `dnsServer`, `macAddress`), what kind of meter it has (`config.meterKind`, `meterInterface`), and its zero-export and lock settings
+- (@Eistee82) **Corrected readings:** the WiFi signal is a 0-100 quality, not dBm — the two states are now called `dtu.signalQuality` and `config.wifiSignalQuality` instead of carrying "rssi" in their name; reactive power can be negative; energy counters could jump backwards after an inverter restart; and `inverter.activePowerLimit` showed 0 % on a producing inverter. Three states that never held usable data (`inverter.modulationIndexSignal`, `dtu.searchResult`, `pvN.errorCode`) are gone and disappear from existing installations by themselves
 
 ### 0.4.1 (2026-07-18)
 - (@Eistee82) Packaging: removed the npm `prepare` install script — installs from GitHub now use the committed `build/` output directly, so no dev dependencies are downloaded onto the target system; npm releases are still built freshly via `prepublishOnly`

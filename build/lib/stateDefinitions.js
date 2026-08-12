@@ -23,6 +23,38 @@ const b = (id, en, de, role, extra) => ({
     unit: "",
     ...extra,
 });
+export const meterControlStates = [
+    n("meter.mode", "Meter mode", "Zählermodus", "level", "", {
+        source: "local",
+        write: true,
+        min: 0,
+        max: 2,
+        states: { 0: "not bound", 1: "meter only", 2: "zero export" },
+    }),
+    s("meter.deviceId", "Meter MAC", "Zähler-MAC", "text", { source: "local", write: true }),
+    s("meter.detected", "Detected meters (JSON)", "Erkannte Zähler (JSON)", "json", { source: "local" }),
+    b("meter.connected", "Meter delivering data", "Zähler liefert Daten", "indicator.connected", {
+        source: "local",
+    }),
+    n("meter.lastData", "Last meter reading", "Letzter Zählerwert", "value.time", "", { source: "local" }),
+];
+export const meterMeasurementStates = [
+    n("meter.gridPower", "Grid exchange power", "Netzaustauschleistung", "value.power", "W", {
+        source: "local",
+    }),
+    n("meter.pvPower", "PV power (meter view)", "PV-Leistung (Zählersicht)", "value.power", "W", {
+        source: "local",
+    }),
+    n("meter.loadPower", "House load", "Hausverbrauch", "value.power", "W", { source: "local" }),
+    n("meter.storagePower", "Storage power", "Speicherleistung", "value.power", "W", { source: "local" }),
+    n("meter.plugPower", "Plug power", "Steckdosenleistung", "value.power", "W", { source: "local" }),
+    n("meter.frequency", "Grid frequency", "Netzfrequenz", "value.frequency", "Hz", { source: "local" }),
+    ...[1, 2, 3].flatMap(p => [
+        n(`meter.l${p}Voltage`, `Voltage L${p}`, `Spannung L${p}`, "value.voltage", "V", { source: "local" }),
+        n(`meter.l${p}Current`, `Current L${p}`, `Strom L${p}`, "value.current", "A", { source: "local" }),
+        n(`meter.l${p}Power`, `Power L${p}`, `Leistung L${p}`, "value.power", "W", { source: "local" }),
+    ]),
+];
 const channels = [
     { id: "info", name: { en: "Device information", de: "Geräteinformationen" } },
     { id: "grid", name: { en: "Grid output", de: "Netzeinspeisung" } },
@@ -52,7 +84,7 @@ const states = [
     n("inverter.temperature", "Temperature", "Temperatur", "value.temperature", "\u00b0C"),
     n("inverter.powerLimit", "Power limit", "Leistungslimit", "level", "%", {
         write: true,
-        min: 0,
+        min: 2,
         max: 100,
         source: "local",
     }),
@@ -73,8 +105,11 @@ const states = [
         max: 50,
         source: "local",
     }),
-    b("inverter.cleanWarnings", "Clean warnings", "Warnungen löschen", "button", { write: true, source: "local" }),
-    b("inverter.cleanGroundingFault", "Clean grounding fault", "Erdungsfehler löschen", "button", {
+    b("inverter.cleanWarnings", "Acknowledge warnings", "Warnungen quittieren", "button", {
+        write: true,
+        source: "local",
+    }),
+    b("inverter.cleanGroundingFault", "Acknowledge grounding fault", "Erdungsfehler quittieren", "button", {
         write: true,
         source: "local",
     }),
@@ -84,9 +119,6 @@ const states = [
     }),
     s("inverter.warnMessage", "Active warning message (from WCode alarm list)", "Aktive Warnungsmeldung (aus WCode-Alarmliste)", "text", { source: "local" }),
     n("inverter.linkStatus", "Link status", "Verbindungsstatus", "value", ""),
-    n("inverter.modulationIndexSignal", "Modulation index / signal (raw, packed)", "Modulationsindex / Signal (roh, gepackt)", "value", "", {
-        source: "local",
-    }),
     s("inverter.model", "Model", "Modell", "text", { source: "cloud" }),
     b("dtu.fwUpdateAvailable", "Firmware update available", "Firmware-Update verfügbar", "indicator", {
         source: "cloud",
@@ -94,7 +126,7 @@ const states = [
     s("dtu.serialNumber", "Serial number", "Seriennummer", "text"),
     s("dtu.hwVersion", "Hardware version", "Hardware-Version", "text"),
     s("dtu.swVersion", "Software version", "Software-Version", "text"),
-    n("dtu.rssi", "Signal strength", "Signalstärke", "value", "dBm", { source: "local" }),
+    n("dtu.signalQuality", "Signal quality", "Signalqualität", "value.signal", "%", { source: "local" }),
     s("dtu.wifiVersion", "WiFi version", "WLAN-Version", "text", { source: "local" }),
     b("dtu.reboot", "Reboot DTU", "DTU neustarten", "button", { write: true }),
     n("dtu.stepTime", "Step time", "Schrittzeit", "value", "s", { source: "local" }),
@@ -104,7 +136,6 @@ const states = [
     }),
     n("dtu.communicationTime", "Last communication", "Letzte Kommunikation", "value.time", "", { source: "local" }),
     n("dtu.connState", "DTU error code", "DTU Fehlercode", "value", "", { states: { 0: "OK" }, source: "local" }),
-    s("dtu.searchResult", "AutoSearch result (inverter serials)", "AutoSearch-Ergebnis (Wechselrichter-Seriennummern)", "json", { source: "local" }),
     b("info.connected", "Connected", "Verbunden", "indicator.connected"),
     n("info.lastResponse", "Last response time", "Letzte Antwortzeit", "value.time", "", { source: "local" }),
     n("alarms.count", "Alarm count", "Alarmanzahl", "value", "", { source: "local" }),
@@ -129,14 +160,16 @@ const states = [
         write: true,
         source: "local",
     }),
-    n("config.limitPowerMyPower", "Persistent power limit", "Persistentes Leistungslimit", "level", "%", {
+    n("config.limitPowerMyPower", "Power limit (DTU config field)", "Leistungslimit (DTU-Konfigfeld)", "level", "%", {
         write: true,
         min: 2,
         max: 100,
         source: "local",
     }),
     s("config.wifiSsid", "WiFi SSID", "WLAN SSID", "text", { source: "local" }),
-    n("config.wifiRssi", "WiFi RSSI", "WLAN Signalstärke", "value", "dBm", { source: "local" }),
+    n("config.wifiSignalQuality", "WiFi signal quality", "WLAN-Signalqualität", "value.signal", "%", {
+        source: "local",
+    }),
     n("config.netDhcpSwitch", "DHCP enabled", "DHCP aktiviert", "value", "", { source: "local" }),
     s("config.dtuApSsid", "DTU AP SSID", "DTU AP SSID", "text", { source: "local" }),
     n("config.netmodeSelect", "Network mode", "Netzwerkmodus", "value", "", {
@@ -146,6 +179,22 @@ const states = [
     n("config.invType", "Inverter type", "Wechselrichter-Typ", "value", "", { source: "local" }),
     s("config.wifiIpAddress", "WiFi IP address", "WLAN IP-Adresse", "text", { source: "local" }),
     s("config.wifiMacAddress", "WiFi MAC address", "WLAN MAC-Adresse", "text", { source: "local" }),
+    s("config.ipAddress", "IP address", "IP-Adresse", "text", { source: "local" }),
+    s("config.subnetMask", "Subnet mask", "Subnetzmaske", "text", { source: "local" }),
+    s("config.gateway", "Default gateway", "Standard-Gateway", "text", { source: "local" }),
+    s("config.dnsServer", "DNS server", "DNS-Server", "text", { source: "local" }),
+    s("config.macAddress", "MAC address", "MAC-Adresse", "text", { source: "local" }),
+    s("config.meterKind", "Meter type", "Zählertyp", "text", { source: "local" }),
+    s("config.meterInterface", "Meter interface", "Zähler-Schnittstelle", "text", { source: "local" }),
+    n("config.zeroExportEnable", "Zero export enabled", "Nulleinspeisung aktiv", "value", "", {
+        source: "local",
+    }),
+    n("config.zeroExport433Addr", "Zero export 433 MHz address", "Nulleinspeisung 433-MHz-Adresse", "value", "", {
+        source: "local",
+    }),
+    n("config.lockTime", "Inverter lock duration", "Wechselrichter-Sperrdauer", "value", "s", {
+        source: "local",
+    }),
     ...gridProfileStates,
 ];
 const stationChannels = [

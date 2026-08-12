@@ -36,3 +36,40 @@ export const STATION_ICON =
 export function inverterIcon(model: string): string {
 	return /hmt/i.test(model) ? ICON_THREE_PHASE : ICON_MICRO;
 }
+
+/**
+ * Acknowledge icons for the two clear-fault buttons on a device card. The Device Manager renders
+ * an action icon only when it is a `data:image/…` URI or one of its own reserved names — a name it
+ * does not know falls back to a question mark, which is what these two buttons used to show. There
+ * is no reserved name for "acknowledge", so both are drawn here: a check mark, and a check mark
+ * above an earth symbol. Green rather than monochrome because an `<img>` cannot inherit the theme
+ * colour, and this green stays legible on the light and the dark background alike.
+ *
+ * **They are 24×24 on purpose.** The Device Manager puts a `data:image/…` action icon into a bare
+ * `<img>` with no width or height, and neither the action's `sx` style nor the `iconOwn` class
+ * reaches it — a 64 px bitmap therefore rendered at 64 px next to the 24 px material icons. The
+ * bitmap's own size is the only reliable control, so do not enlarge these without checking how
+ * they render.
+ *
+ * Source shapes, designed on a 64×64 grid and scaled by 24/64 at generation time (round-capped
+ * strokes, #2e9e4f); to regenerate after a design change:
+ *   check:       (13,34)→(26,47)→(51,18), width 10
+ *   checkGround: check (34,18)→(42,26)→(59,6) width 9; stem (22,12)→(22,34) width 8;
+ *                bars y=38 x6..38 w8, y=49 x13..31 w7, y=59 x18..26 w6
+ */
+export const ACK_ICON =
+	"data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAABgAAAAYCAYAAADgdz34AAAAzUlEQVR42mNgGAXDBujN8+fRm+cvQivDPfTm+X/Wm+f/X2+efw21DTdAMhyEv1PTcAm9ef7PkQwH4cvUDPPzaIa/15vnr0ENw1n05vlvRjP8t948fwdiNIuAXEdAzXQ0w0E4gRjDa6CKQZEWgkNNCRbDG4j1+nc0L4egyQdAxZENX0xK2F7GEq4hUDkLtOQIwodB8UGKBRpYkh3IkgIs4tfJyrk4LEHHIHkVSpIhPktA8WRDjbSOy5IIahYF6JZU0KKklAEZjCtfjILBDwCl8t/Hb2xiggAAAABJRU5ErkJggg==";
+
+/**
+ * Energy-meter icon (a meter housing with a display and three phase bars).
+ *
+ * Shipped at its final 24 px size on purpose: an action icon given as a data URI ends up in a bare
+ * `<img>` that neither the action's style nor the Admin stylesheet reaches, so a smaller bitmap
+ * would be displayed scaled up and blurry.
+ */
+export const METER_ICON =
+	"data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAABgAAAAYCAYAAADgdz34AAAAO0lEQVR42mNgGAWDCujVGv2nBh54CygNAaIUkOPqUQuoawHNI3noW4AvjHGF++CyYGjHwdAtTUfBgAAAVahdoCK2QWgAAAAASUVORK5CYII=";
+
+/** Acknowledge icon for the grounding fault (check mark above an earth symbol). */
+export const ACK_GROUND_ICON =
+	"data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAABgAAAAYCAYAAADgdz34AAABMUlEQVR42mNgoAHQm+fvojfPP0Jvnj8LLQwv0Zvn/x+Kp1Pb8AC9ef6/kSzYjU8xB0iB3jz/zyCNRBhuAFULMxxkkQc+DTZEuQSiVkJvnv9zJPUgnEPIRQ5IivdDxUARd1tvnv92kKFQMR69ef7n0QyfTEx4YrPgNpLYdb15/jJ68/zXoxm+najUg8OC7WiGvUfjXwb5iNgUgc0CCajL/2PBoDiQISXJYViAxxJQ6rEgNU1jtQCHJSHkZBqcFiClnhiiXK43z18EaiAyLkCy4DwWeRNiXSqCJZMQi2uIscCETMNBeDOxvqgBhTOJeLPePH8NhkEF9Ob5K0BzI64gAaX3BkosiCEi3G9TYgEobU8mEO4+DIMe6M3z18FSUs6mdqsAPewPU9sXBmhFgwA55gAA9CCXaJtKAr4AAAAASUVORK5CYII=";

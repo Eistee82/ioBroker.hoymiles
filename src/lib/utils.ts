@@ -8,6 +8,22 @@ export function unixSeconds(): number {
 }
 
 /**
+ * Unix timestamp of local midnight for the day a given timestamp falls in.
+ *
+ * The power-curve request asks the device for one specific day, and the device keeps its own
+ * local clock — asking in UTC would fetch the wrong day for every timezone east or west of it,
+ * most visibly in the hours around midnight.
+ *
+ * @param timestampSec - Unix timestamp in seconds; defaults to now.
+ * @returns Unix timestamp in seconds of 00:00 local time on that day.
+ */
+export function localMidnight(timestampSec: number = unixSeconds()): number {
+	const d = new Date(timestampSec * 1000);
+	d.setHours(0, 0, 0, 0);
+	return Math.floor(d.getTime() / 1000);
+}
+
+/**
  * Anonymize an identifier (DTU/inverter serial, account e-mail) for debug logs that
  * may be shared in a public forum bug report. Returns a short, STABLE token — the same
  * input always yields the same token so log lines stay correlatable, but the original

@@ -156,6 +156,13 @@ class CloudManager {
 			this.adapter.devices.set(ctx.dtuSerial, ctx);
 		}
 
+		// A live local device (TCP or BLE) now owns this DTU's realtime data — stop the redundant
+		// cloud burst for it if one was already streaming (the BLE link comes up after cloud
+		// discovery started the burst). This is the authoritative point where the serial is known.
+		if (ctx.enableLocal) {
+			this.burstPoller?.releaseDtu(ctx.dtuSerial);
+		}
+
 		// Check pending cloud matches
 		const stationId = this.pendingCloudMatches.get(ctx.dtuSerial);
 		if (stationId !== undefined) {
@@ -178,6 +185,11 @@ class CloudManager {
 	onLocalConnected(ctx: DeviceContext): void {
 		if (this.cloudPoller && ctx.cloudSendTimeMin > 0) {
 			this.cloudPoller.setServerSendTime(ctx.cloudSendTimeMin);
+		}
+		// Belt-and-braces: also release the burst on (re)connect once the serial is known — the
+		// authoritative release is in matchLocalDeviceToCloud(). releaseDtu() is idempotent.
+		if (ctx.dtuSerial) {
+			this.burstPoller?.releaseDtu(ctx.dtuSerial);
 		}
 		this.cloudPoller?.onLocalConnected();
 	}
@@ -219,9 +231,10 @@ class CloudManager {
 			this.cloudPoller.scheduleCloudPoll();
 		}
 
-		// Fast realtime "burst" channel for cloud-only DTUs — started after the initial cloud
-		// fetch so device/PV states already exist. The poller itself skips any station without
-		// cloud-only inverters, so this is a no-op for pure-local setups.
+		// Fast realtime "burst" channel — started after the initial cloud fetch so device/PV states
+		// already exist. Serves per-inverter data for cloud-only DTUs and, for every station, the
+		// station-level power aggregate that no local link can provide (a pure-local setup therefore
+		// still runs one station loop, not none).
 		if (this.enableRealtimeBurst) {
 			this.burstPoller = new BurstPoller({
 				cloud: this.cloud,

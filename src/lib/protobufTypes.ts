@@ -32,7 +32,6 @@ export interface SgsData {
 	/** Current power limit in %. */
 	powerLimit: number;
 	/** RF modulation index / signal quality. */
-	modulationIndexSignal: number;
 }
 
 /** PV string (port) data from RealData response. */
@@ -75,6 +74,24 @@ export interface MeterData {
 	energyTotalPower: number;
 	/** Total energy consumed in Wh. */
 	energyTotalConsumed: number;
+	/** Phase A exported energy in kWh. */
+	energyPhaseAExport: number;
+	/** Phase B exported energy in kWh. */
+	energyPhaseBExport: number;
+	/** Phase C exported energy in kWh. */
+	energyPhaseCExport: number;
+	/** Phase A imported energy in kWh. */
+	energyPhaseAImport: number;
+	/** Phase B imported energy in kWh. */
+	energyPhaseBImport: number;
+	/** Phase C imported energy in kWh. */
+	energyPhaseCImport: number;
+	/** Phase A power factor. */
+	powerFactorPhaseA: number;
+	/** Phase B power factor. */
+	powerFactorPhaseB: number;
+	/** Phase C power factor. */
+	powerFactorPhaseC: number;
 	/** Meter fault code. */
 	faultCode: number;
 	/** Phase A voltage in V. */
@@ -107,6 +124,20 @@ export interface RealDataResult {
 	pv: PvData[];
 	/** Smart meter data entries. */
 	meter: MeterData[];
+	/**
+	 * Entry counts of the three sub-lists the adapter does not map to states yet
+	 * (`rp_data`, `rsd_data`, `tgs_data`). The firmware reserves buffers for them, but whether
+	 * these devices ever populate them is unproven — the counts make that answerable from a
+	 * real device rather than by assumption.
+	 */
+	extraLists?: {
+		/** Number of `rp_data` entries (RpMO: signature, channel, PV count, link). */
+		rp: number;
+		/** Number of `rsd_data` entries (rapid-shutdown devices). */
+		rsd: number;
+		/** Number of `tgs_data` entries (three-phase grid telemetry). */
+		tgs: number;
+	};
 }
 
 /** DTU hardware/software information from InfoData response. */
@@ -117,7 +148,7 @@ export interface DtuInfo {
 	swVersion: number;
 	/** Hardware version (packed integer). */
 	hwVersion: number;
-	/** WiFi signal strength in dBm. */
+	/** WiFi signal quality, 0-100 — not dBm. Same derived value as {@link ConfigResult.wifiRssi}. */
 	signalStrength: number;
 	/** DTU error code. */
 	errorCode: number;
@@ -135,6 +166,14 @@ export interface DtuInfo {
 	dtuRfSwVersion: number;
 	/** Access model (AP/STA). */
 	accessModel: number;
+	/**
+	 * Network meters the DTU knows about, as lower-case hex MACs.
+	 *
+	 * Comes from `dtuInfo.shls`, which the device fills in every info response. Observed empty
+	 * before a meter was ever bound and carrying the meter's MAC afterwards — so the adapter can
+	 * offer these for selection instead of asking the user to type a MAC.
+	 */
+	knownMeters: string[];
 	/** Communication time in seconds. */
 	communicationTime: number;
 	/** WiFi module firmware version. */
@@ -215,7 +254,7 @@ export interface ConfigResult {
 	meterInterface: string;
 	/** Server send interval in seconds. */
 	serverSendTime: number;
-	/** WiFi RSSI in dBm. */
+	/** WiFi signal quality, `clamp(2 * (95 - |rssi_dBm|), 0, 100)` — not dBm despite the name. */
 	wifiRssi: number;
 	/** Cloud server port. */
 	serverPort: number;
@@ -251,6 +290,10 @@ export interface ConfigResult {
 	macAddress: string;
 	/** WiFi MAC address. */
 	wifiMacAddress: string;
+	/** DNS server the DTU uses (GetConfig `cable_dns_0..3`). */
+	dnsServer: string;
+	/** Inverter lock duration in seconds (GetConfig `lock_time`); 0 when no lock is set. */
+	lockTime: number;
 }
 
 /** Single alarm entry from AlarmData response. */
@@ -297,20 +340,38 @@ export interface ParsedResponse {
 export interface HistPowerResult {
 	/** Inverter serial number (hex). */
 	serialNumber: string;
-	/** Power samples array in W. */
+	/**
+	 * Power samples in W, converted from the device's 0.1 W units.
+	 *
+	 * ⚠ The 0.1 W factor is **empirical, not instruction-level proven**. Field 13 is copied out of
+	 * a CRC8-protected byte group of the flash record with no scaling step anywhere on that path,
+	 * so the firmware does not state the unit. Two independent measurements pin it down instead:
+	 * integrating a full measured day at the reported step yields 4495 Wh against the 4500 Wh the
+	 * device reports as its own daily energy (0.12 % apart), and `relative_power` 40 alongside a
+	 * RealData reading of 4.3 W in the same minute fits 4.0 W. A factor of 1 or 0.01 would be off
+	 * by a power of ten either way. See `_fwanalysis/ADAPTER_FINDINGS.md` §18/§19.
+	 */
 	powerArray: number[];
 	/** Lifetime energy in Wh. */
 	totalEnergy: number;
 	/** Today's energy in Wh. */
 	dailyEnergy: number;
-	/** Sample interval in seconds. */
+	/**
+	 * Seconds between two samples (60 on the 2T, 300 on the 2WB).
+	 *
+	 * A device-wide configuration constant, not computed per request. The firmware confirms the
+	 * unit from a second direction: the task that writes the flash records derives its interval
+	 * from the very same constant, multiplied by 1000 into milliseconds.
+	 */
 	stepTime: number;
-	/** First sample Unix timestamp. */
-	startTime: number;
 	/** Relative power in %. */
 	relativePower: number;
 	/** Active warning code. */
 	warningNumber: number;
+	/** Number of pages the device splits the day into; a page holds at most 200 samples. */
+	pageCount: number;
+	/** Unix timestamp of the first sample **of this page**. */
+	absoluteStart: number;
 }
 
 /** Single warning entry with localized descriptions. */

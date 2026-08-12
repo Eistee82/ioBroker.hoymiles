@@ -6,15 +6,18 @@ import DeviceContext from "./lib/deviceContext.js";
 import { ProtobufHandler } from "./lib/protobufHandler.js";
 import { discoverDtus, probeHost } from "./lib/networkDiscovery.js";
 import { destroyAgent } from "./lib/httpClient.js";
-import { DISCOVERY_CONCURRENCY, DISCOVERY_TIMEOUT_MS, PROBE_TIMEOUT_MS } from "./lib/constants.js";
+import { DISCOVERY_CONCURRENCY, DISCOVERY_TIMEOUT_MS, PROBE_TIMEOUT_MS, POWER_LIMIT_DEADBAND_DEFAULT, POWER_LIMIT_MIN_INTERVAL_SEC_DEFAULT, } from "./lib/constants.js";
 import { anonymize, errorMessage, mapLimit } from "./lib/utils.js";
 import { HoymilesDeviceManagement } from "./lib/deviceManagement.js";
+import BleGatewayManager from "./lib/bleGatewayManager.js";
 class Hoymiles extends utils.Adapter {
     devices;
     localContexts;
     cloudManager;
+    bleGatewayManager;
     sharedProtobuf;
     lastConnectionState;
+    lastBleConnected;
     deviceManagement;
     constructor(options = {}) {
         super({ ...options, name: "hoymiles", useFormatDate: true });
@@ -25,6 +28,7 @@ class Hoymiles extends utils.Adapter {
         this.devices = new Map();
         this.localContexts = [];
         this.cloudManager = null;
+        this.bleGatewayManager = null;
         this.sharedProtobuf = null;
         this.deviceManagement = new HoymilesDeviceManagement(this);
     }
@@ -32,8 +36,9 @@ class Hoymiles extends utils.Adapter {
         const cfg = this.config;
         const enableLocal = cfg.enableLocal !== false;
         const enableCloud = cfg.enableCloud === true;
-        if (!enableLocal && !enableCloud) {
-            this.log.error("Neither local nor cloud connection is enabled. Please enable at least one in the adapter settings.");
+        const enableBleGateway = cfg.enableBleGateway === true;
+        if (!enableLocal && !enableCloud && !enableBleGateway) {
+            this.log.error("No connection method is enabled. Please enable local, cloud, or the BLE gateway in the adapter settings.");
             return;
         }
         await this.migrateConfig(cfg);
@@ -41,6 +46,10 @@ class Hoymiles extends utils.Adapter {
         const dataInterval = Number.isNaN(rawInterval) ? 5 : rawInterval;
         const rawSlowPoll = Number(cfg.slowPollFactor ?? 6);
         const slowPollFactor = Number.isNaN(rawSlowPoll) || rawSlowPoll < 1 ? 6 : rawSlowPoll;
+        const rawDeadband = Number(cfg.powerLimitDeadband ?? POWER_LIMIT_DEADBAND_DEFAULT);
+        const powerLimitDeadband = Number.isNaN(rawDeadband) || rawDeadband < 0 ? POWER_LIMIT_DEADBAND_DEFAULT : rawDeadband;
+        const rawMinInterval = Number(cfg.powerLimitMinIntervalSec ?? POWER_LIMIT_MIN_INTERVAL_SEC_DEFAULT);
+        const powerLimitMinIntervalSec = Number.isNaN(rawMinInterval) || rawMinInterval < 0 ? POWER_LIMIT_MIN_INTERVAL_SEC_DEFAULT : rawMinInterval;
         const enableCloudRelay = cfg.enableCloudRelay !== false;
         const enableRealtimeBurst = cfg.enableRealtimeBurst !== false;
         this.sharedProtobuf = new ProtobufHandler();
@@ -69,6 +78,8 @@ class Hoymiles extends utils.Adapter {
                     enableCloudRelay,
                     dataInterval,
                     slowPollFactor,
+                    powerLimitDeadband,
+                    powerLimitMinIntervalSec,
                 });
                 this.localContexts.push(ctx);
                 try {
@@ -77,6 +88,40 @@ class Hoymiles extends utils.Adapter {
                 catch (err) {
                     this.log.error(`Failed to start connection to ${devCfg.host}: ${errorMessage(err)}`);
                 }
+            }
+        }
+        if (enableBleGateway) {
+            const bleDevices = (cfg.bleDevices || [])
+                .map(d => ({
+                sn: (d.sn || "").toUpperCase().replace(/[^0-9A-Z]/g, ""),
+                mac: (d.mac || "").toUpperCase(),
+                pin: d.pin || "",
+                enabled: d.enabled === true,
+            }))
+                .filter(d => d.enabled && d.mac && d.pin)
+                .map(({ sn, mac, pin }) => ({ sn, mac, pin }));
+            await this.setStateAsync("info.bleLastError", "", true);
+            this.bleGatewayManager = new BleGatewayManager({
+                adapter: this,
+                protobuf: this.sharedProtobuf,
+                devices: bleDevices,
+                dataInterval,
+                slowPollFactor,
+                powerLimitDeadband,
+                powerLimitMinIntervalSec,
+            });
+            try {
+                this.bleGatewayManager.start();
+            }
+            catch (err) {
+                this.log.error(`BLE gateway startup failed: ${errorMessage(err)}`);
+                try {
+                    this.bleGatewayManager.stop();
+                }
+                catch (stopErr) {
+                    this.log.warn(`BLE gateway stop also failed: ${errorMessage(stopErr)}`);
+                }
+                this.bleGatewayManager = null;
             }
         }
         if (enableCloud) {
@@ -147,7 +192,13 @@ class Hoymiles extends utils.Adapter {
     async updateConnectionState() {
         const anyLocalConnected = this.localContexts.some(ctx => ctx.connection?.connected);
         const cloudOk = this.cloudManager?.hasToken;
-        const newState = !!(anyLocalConnected || cloudOk);
+        const anyBleInverter = this.bleGatewayManager?.anyConnected() ?? false;
+        const anyBleGateway = this.bleGatewayManager?.anyGatewayConnected() ?? false;
+        if (anyBleGateway !== this.lastBleConnected) {
+            this.lastBleConnected = anyBleGateway;
+            await this.setStateAsync("info.bleConnected", anyBleGateway, true);
+        }
+        const newState = !!(anyLocalConnected || cloudOk || anyBleInverter);
         if (newState === this.lastConnectionState) {
             return;
         }
@@ -197,6 +248,9 @@ class Hoymiles extends utils.Adapter {
             this.sendTo(obj.from, obj.command, data, obj.callback);
         }
     }
+    tr(en, de) {
+        return this.language === "de" ? de : en;
+    }
     onMessage(obj) {
         if (typeof obj?.command === "string" && obj.command.startsWith("dm:")) {
             return;
@@ -211,6 +265,9 @@ class Hoymiles extends utils.Adapter {
             else if (obj.command === "testCloudLogin") {
                 void this.handleTestCloudLogin(obj).catch(err => this.log.error(`TestCloudLogin failed: ${errorMessage(err)}`));
             }
+            else if (obj.command === "importBleDevices") {
+                void this.handleImportBleDevices(obj).catch(err => this.log.error(`ImportBleDevices failed: ${errorMessage(err)}`));
+            }
             else {
                 this.log.debug(`Unknown message command: ${obj.command}`);
                 this.reply(obj, { error: `Unknown command: ${obj.command}` });
@@ -223,7 +280,7 @@ class Hoymiles extends utils.Adapter {
             const found = await discoverDtus(DISCOVERY_TIMEOUT_MS, DISCOVERY_CONCURRENCY);
             if (found.length === 0) {
                 this.log.info("No DTUs found on the local network");
-                this.reply(obj, { error: { en: "No DTUs found", de: "Keine DTUs gefunden" } });
+                this.reply(obj, { error: this.tr("No DTUs found", "Keine DTUs gefunden") });
                 return;
             }
             const cfg = this.config;
@@ -257,6 +314,47 @@ class Hoymiles extends utils.Adapter {
         }
         catch (err) {
             this.log.error(`Discovery failed: ${errorMessage(err)}`);
+            this.reply(obj, { error: errorMessage(err) });
+        }
+    }
+    async handleImportBleDevices(obj) {
+        try {
+            const st = await this.getStateAsync("info.bleDiscovered");
+            let devices = [];
+            try {
+                const parsed = JSON.parse(st?.val || "{}");
+                devices = Array.isArray(parsed?.devices) ? parsed.devices : [];
+            }
+            catch {
+                devices = [];
+            }
+            const norm = (m) => String(m || "")
+                .replace(/[^0-9a-fA-F]/g, "")
+                .toUpperCase();
+            const found = devices.filter(d => d && d.hoymiles && d.mac);
+            if (found.length === 0) {
+                this.reply(obj, {
+                    error: this.tr("No Hoymiles inverters discovered yet. Make sure an inverter is powered on (producing) and within Bluetooth range of the proxy.", "Noch keine Hoymiles-Wechselrichter erkannt. Stelle sicher, dass ein Wechselrichter eingeschaltet ist (produziert) und in Bluetooth-Reichweite des Proxys liegt."),
+                });
+                return;
+            }
+            const cfg = this.config;
+            const current = (cfg.bleDevices || []).map(d => ({ ...d }));
+            const existing = new Set(current.map(d => norm(d.mac)));
+            let added = 0;
+            for (const d of found) {
+                const key = norm(d.mac);
+                if (key && !existing.has(key)) {
+                    current.push({ sn: d.sn || "", mac: d.mac, pin: "", enabled: false });
+                    existing.add(key);
+                    added++;
+                }
+            }
+            this.log.info(`BLE import: ${added} new device(s) added to the config table (${found.length} discovered)`);
+            this.reply(obj, { native: { bleDevices: current } });
+        }
+        catch (err) {
+            this.log.error(`BLE import failed: ${errorMessage(err)}`);
             this.reply(obj, { error: errorMessage(err) });
         }
     }
@@ -320,7 +418,7 @@ class Hoymiles extends utils.Adapter {
             const password = msg.password ?? cfg.cloudPassword ?? "";
             if (!user || !password) {
                 this.reply(obj, {
-                    error: { en: "Email and password required", de: "E-Mail und Passwort erforderlich" },
+                    error: this.tr("Email and password required", "E-Mail und Passwort erforderlich"),
                 });
                 return;
             }
@@ -420,6 +518,15 @@ class Hoymiles extends utils.Adapter {
             catch (err) {
                 this.log.warn(`CloudManager stop error: ${errorMessage(err)}`);
             }
+            try {
+                if (this.bleGatewayManager) {
+                    this.bleGatewayManager.stop();
+                    this.bleGatewayManager = null;
+                }
+            }
+            catch (err) {
+                this.log.warn(`BleGatewayManager stop error: ${errorMessage(err)}`);
+            }
             for (const ctx of this.devices.values()) {
                 try {
                     ctx.disconnect();
@@ -445,6 +552,7 @@ class Hoymiles extends utils.Adapter {
             try {
                 await this.setStateAsync("info.connection", false, true);
                 await this.setStateAsync("info.cloudConnected", false, true);
+                await this.setStateAsync("info.bleConnected", false, true);
             }
             catch (err) {
                 this.log.debug(`Shutdown state update skipped: ${errorMessage(err)}`);

@@ -397,7 +397,15 @@ class CloudPoller {
 		}, interval);
 	}
 
-	/** Night mode poll: only weather and firmware checks. */
+	/**
+	 * Night mode poll: weather and firmware checks, plus the wake-up check.
+	 *
+	 * A local reconnect is not the only way out of night mode — a BLE-only inverter may fail to pair
+	 * again in the morning while its data still reaches the cloud. So this also asks whether any
+	 * station has resumed uploading and, if so, returns to active polling on its own. Waking up
+	 * requires a *provably* fresh timestamp: no `data_time` means no wake-up, otherwise a cloud
+	 * response without one would keep the adapter permanently out of night mode.
+	 */
 	private async nightPoll(): Promise<void> {
 		try {
 			await this.cloud.ensureToken();
@@ -405,17 +413,47 @@ class CloudPoller {
 			if (this.state !== "NIGHT_MODE") {
 				return;
 			}
+			let anyStationLive = false;
 			await mapLimit([...this.stationDevices], CLOUD_POLL_CONCURRENCY, async stationId => {
 				const deviceId = `station-${stationId}`;
+				if (await this.stationResumedUploading(stationId)) {
+					anyStationLive = true;
+				}
 				await this.pollWeather(stationId, deviceId);
 				if (this.firmwareCheckDue(stationId)) {
 					await this.pollFirmwareStatus(stationId);
 				}
 			});
 			await this.setCloudConnected(true);
+
+			if (anyStationLive && this.state === "NIGHT_MODE") {
+				this.adapter.log.info(
+					"Cloud station is uploading again — resuming active cloud polling (no local connection needed)",
+				);
+				this.state = "POLLING_ACTIVE";
+				await this.poll();
+				this.scheduleCloudPoll();
+			}
 		} catch (err) {
 			this.adapter.log.warn(`Night poll failed: ${errorMessage(err)}`);
 			await this.setCloudConnected(false);
+		}
+	}
+
+	/**
+	 * Whether a station's latest cloud upload is recent enough to count as "the inverter is back".
+	 * Stricter than {@link isStationFresh}: a missing/unparsable `data_time` counts as *not* live.
+	 *
+	 * @param stationId - Station id.
+	 */
+	private async stationResumedUploading(stationId: number): Promise<boolean> {
+		try {
+			const data = await this.cloud.getStationRealtime(stationId);
+			const epoch = stationWallClockToEpoch(data.data_time, this.stationTzOffsetMs.get(stationId) ?? 0);
+			return epoch != null && Date.now() - epoch < CLOUD_STATION_STALE_MS;
+		} catch (err) {
+			this.adapter.log.debug(`Night wake-up check failed for station ${stationId}: ${errorMessage(err)}`);
+			return false;
 		}
 	}
 

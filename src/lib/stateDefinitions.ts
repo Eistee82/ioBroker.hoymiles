@@ -48,6 +48,69 @@ const b = (id: string, en: string, de: string, role: string, extra?: Extra): Sta
 	...extra,
 });
 
+/**
+ * Shelly/ecotracker meter states — **not** part of {@link states}.
+ *
+ * Only a BLE device can take such a meter at all (the 2T has neither a meter input nor an energy
+ * management, firmware-verified), and even there the branch is only worth creating once a meter
+ * actually reports. `DeviceContext` therefore creates these on demand, the same way it handles the
+ * wired meter channel.
+ *
+ * The values ride on the local RealData message; the cloud exposes no equivalent per-inverter flow.
+ * The energy flow itself is firmware-proven (format string at `0x4080b6d8`, cross-checked by
+ * `load = grid + plug - sp` at `0x4080b6b0`).
+ *
+ * `meter.mode` is the switch the user operates. Its numbers are the device types the firmware
+ * itself checks for, so nothing has to be translated on the way down: 0 unbinds, 1 polls the meter
+ * without regulating, 2 makes it the grid device the zero-export regulation works on.
+ */
+export const meterControlStates: StateDefinition[] = [
+	// 0 is the "never bound" starting value, not a command: the device offers no safe way to undo a
+	// binding. `action 90` (Cmd_Clr_All_Networking) would do it but is destructive — it memsets the
+	// whole 0x700-byte network block at 0x71838, which is also where `action 80` keeps the inverter
+	// assignment. Switching to 1 stops the regulation and is the honest "off".
+	n("meter.mode", "Meter mode", "Zählermodus", "level", "", {
+		source: "local",
+		write: true,
+		min: 0,
+		max: 2,
+		states: { 0: "not bound", 1: "meter only", 2: "zero export" },
+	}),
+	s("meter.deviceId", "Meter MAC", "Zähler-MAC", "text", { source: "local", write: true }),
+	s("meter.detected", "Detected meters (JSON)", "Erkannte Zähler (JSON)", "json", { source: "local" }),
+	b("meter.connected", "Meter delivering data", "Zähler liefert Daten", "indicator.connected", {
+		source: "local",
+	}),
+	n("meter.lastData", "Last meter reading", "Letzter Zählerwert", "value.time", "", { source: "local" }),
+];
+
+/**
+ * Measured values. Created only once a meter actually reports, so a device whose meter was never
+ * bound does not grow a branch full of zeros.
+ */
+export const meterMeasurementStates: StateDefinition[] = [
+	// Energy flow as the DTU computes it (RealDataNew field 13), in watts.
+	n("meter.gridPower", "Grid exchange power", "Netzaustauschleistung", "value.power", "W", {
+		source: "local",
+	}),
+	n("meter.pvPower", "PV power (meter view)", "PV-Leistung (Zählersicht)", "value.power", "W", {
+		source: "local",
+	}),
+	n("meter.loadPower", "House load", "Hausverbrauch", "value.power", "W", { source: "local" }),
+	n("meter.storagePower", "Storage power", "Speicherleistung", "value.power", "W", { source: "local" }),
+	n("meter.plugPower", "Plug power", "Steckdosenleistung", "value.power", "W", { source: "local" }),
+
+	// Per-phase readings from the meter itself (RealDataNew field 14). Scales measured against the
+	// meter's own API: voltage in tenths of a volt, current in hundredths of an ampere, power in
+	// tenths of a watt. Frequency comes once per device, unscaled.
+	n("meter.frequency", "Grid frequency", "Netzfrequenz", "value.frequency", "Hz", { source: "local" }),
+	...[1, 2, 3].flatMap(p => [
+		n(`meter.l${p}Voltage`, `Voltage L${p}`, `Spannung L${p}`, "value.voltage", "V", { source: "local" }),
+		n(`meter.l${p}Current`, `Current L${p}`, `Strom L${p}`, "value.current", "A", { source: "local" }),
+		n(`meter.l${p}Power`, `Power L${p}`, `Leistung L${p}`, "value.power", "W", { source: "local" }),
+	]),
+];
+
 // === Per-DTU device channels & states (prefixed with <dtuSerial>.) ===
 
 const channels: ChannelDefinition[] = [
@@ -62,6 +125,8 @@ const channels: ChannelDefinition[] = [
 	// devices, over the cloud (pvm-ctl action 41) — the states are the same either way.
 	{ id: "gridProfile", name: { en: "Grid profile", de: "Netzprofil" } },
 	// meter channel is created dynamically when meter data is first received
+	// shelly channel likewise (see meterMeasurementStates) — only a BLE device can take such a meter at all,
+	// so listing it here would grow an empty branch on every 2T as well
 ];
 
 // Grid-profile states are generated from the shared schema so decode + state list never drift.
@@ -94,7 +159,9 @@ const states: StateDefinition[] = [
 	n("inverter.temperature", "Temperature", "Temperatur", "value.temperature", "\u00b0C"),
 	n("inverter.powerLimit", "Power limit", "Leistungslimit", "level", "%", {
 		write: true,
-		min: 0,
+		// 2, not 0: the command handler rejects anything below POWER_LIMIT_MIN, so a state that
+		// advertised 0 promised a range the adapter refuses to send.
+		min: 2,
 		max: 100,
 		source: "local",
 	}),
@@ -117,8 +184,11 @@ const states: StateDefinition[] = [
 		max: 50,
 		source: "local",
 	}),
-	b("inverter.cleanWarnings", "Clean warnings", "Warnungen löschen", "button", { write: true, source: "local" }),
-	b("inverter.cleanGroundingFault", "Clean grounding fault", "Erdungsfehler löschen", "button", {
+	b("inverter.cleanWarnings", "Acknowledge warnings", "Warnungen quittieren", "button", {
+		write: true,
+		source: "local",
+	}),
+	b("inverter.cleanGroundingFault", "Acknowledge grounding fault", "Erdungsfehler quittieren", "button", {
 		write: true,
 		source: "local",
 	}),
@@ -134,18 +204,14 @@ const states: StateDefinition[] = [
 		{ source: "local" },
 	),
 	n("inverter.linkStatus", "Link status", "Verbindungsstatus", "value", ""),
-	// SGSMO field #20 ("modulation_index_signal"): packed value 0x00XX00YY (two bytes that vary with
-	// operation). Exact decode/scaling not yet firmware-confirmed → expose raw until verified.
-	n(
-		"inverter.modulationIndexSignal",
-		"Modulation index / signal (raw, packed)",
-		"Modulationsindex / Signal (roh, gepackt)",
-		"value",
-		"",
-		{
-			source: "local",
-		},
-	),
+	// SGSMO field #20 used to be exposed here as "modulation index / signal". It is neither:
+	// 0x408136de-0x408136ea loads two adjacent single bytes and packs them as (a << 16) | b. Both
+	// are plain increment counters — a is bumped in `dtu_cmd_dispatch_pending` right after
+	// `hm_nrf3_build_uart_frame_with_payload` (one per command frame sent to the inverter), b in
+	// `hm_nrf3_build_realdata_packet` (one per realtime packet built). They wrap at 256, which is
+	// exactly what the erratic readings showed. On the WB series the encoder writes a constant 0
+	// into the same slot (`movi55 $r0,#0x0` at 0x4080b636). Internal traffic counters with no
+	// meaning for a user — removed rather than published under a name that claims otherwise.
 	s("inverter.model", "Model", "Modell", "text", { source: "cloud" }),
 
 	// === DTU ===
@@ -155,7 +221,15 @@ const states: StateDefinition[] = [
 	s("dtu.serialNumber", "Serial number", "Seriennummer", "text"),
 	s("dtu.hwVersion", "Hardware version", "Hardware-Version", "text"),
 	s("dtu.swVersion", "Software version", "Software-Version", "text"),
-	n("dtu.rssi", "Signal strength", "Signalstärke", "value", "dBm", { source: "local" }),
+	// Not dBm: the value the DTU reports in InfoData is the same derived 0-100 signal quality that
+	// `config.wifiSignalQuality` and `NetworkInfo.csq` carry, `clamp(2 * (95 - |rssi_dBm|), 0, 100)`.
+	// Firmware-verified on both devices: the 0xa201 builder (`hm_build_send_cmd_a201@0x408162f0`)
+	// fills `APPInfoDataReqDTO.dtu_info.signal_strength` — field 8 at offset 0x20, field 9 at 0x20
+	// inside it, so `$r6+0x40` — from the very byte that holds the clamped quality
+	// (2T `4081640a lbsi.gp $r0,[+#-109642]` = 0x6BC9E; 2WB `4080f652 lbsi.gp $r0,[+#-83830]`),
+	// not from the neighbouring byte that holds the raw signed dBm. See _fwanalysis/
+	// ADAPTER_FINDINGS.md §16.
+	n("dtu.signalQuality", "Signal quality", "Signalqualität", "value.signal", "%", { source: "local" }),
 	s("dtu.wifiVersion", "WiFi version", "WLAN-Version", "text", { source: "local" }),
 	// No source restriction: the command handler routes to the local TCP link when connected,
 	// otherwise reboots the DTU over the cloud (ECommandAction.DTU_REBOOT) for cloud-only devices.
@@ -167,13 +241,11 @@ const states: StateDefinition[] = [
 	}),
 	n("dtu.communicationTime", "Last communication", "Letzte Kommunikation", "value.time", "", { source: "local" }),
 	n("dtu.connState", "DTU error code", "DTU Fehlercode", "value", "", { states: { 0: "OK" }, source: "local" }),
-	s(
-		"dtu.searchResult",
-		"AutoSearch result (inverter serials)",
-		"AutoSearch-Ergebnis (Wechselrichter-Seriennummern)",
-		"json",
-		{ source: "local" },
-	),
+	// "dtu.searchResult" used to live here, fed by an AutoSearch (a313) response. That response
+	// never arrives: DISPATCH_2T.md lists no handler for a313 on either device, a live probe left
+	// it unanswered for 15 s while a311 replied in 0.24 s, and `encodeAutoSearch()` was never
+	// called by anything — so the request was not even sent. Removed along with its encoder and
+	// handler rather than kept as a state that can only ever stay empty.
 
 	// === Per-device info ===
 	b("info.connected", "Connected", "Verbunden", "indicator.connected"),
@@ -207,14 +279,23 @@ const states: StateDefinition[] = [
 	// Persistent power limit stored in the DTU (SetConfig limit_power_mypower). Survives a
 	// power cycle because the DTU re-applies it to the inverter on startup. For dynamic
 	// zero-export use inverter.powerLimit (runtime, RAM-only) instead — see README.
-	n("config.limitPowerMyPower", "Persistent power limit", "Persistentes Leistungslimit", "level", "%", {
+	// Deliberately NOT called "persistent": on the HMS-800W-2T the value does not survive a
+	// restart (firmware-verified), and the adapter used to promise the opposite.
+	n("config.limitPowerMyPower", "Power limit (DTU config field)", "Leistungslimit (DTU-Konfigfeld)", "level", "%", {
 		write: true,
 		min: 2,
 		max: 100,
 		source: "local",
 	}),
 	s("config.wifiSsid", "WiFi SSID", "WLAN SSID", "text", { source: "local" }),
-	n("config.wifiRssi", "WiFi RSSI", "WLAN Signalstärke", "value", "dBm", { source: "local" }),
+	// NOT dBm, despite the field name. The firmware derives this from the raw RSSI as
+	// clamp(2 * (95 - |rssi_dBm|), 0, 100) and calls the two values "rssi" and "wifi_rssi" in its
+	// own debug output — this state carries the second one. A live reading of 46 corresponds to
+	// roughly -72 dBm. The raw dBm value stays in the neighbouring byte and is not reachable
+	// through any message the adapter uses. See _fwanalysis/ADAPTER_FINDINGS.md.
+	n("config.wifiSignalQuality", "WiFi signal quality", "WLAN-Signalqualität", "value.signal", "%", {
+		source: "local",
+	}),
 	n("config.netDhcpSwitch", "DHCP enabled", "DHCP aktiviert", "value", "", { source: "local" }),
 	s("config.dtuApSsid", "DTU AP SSID", "DTU AP SSID", "text", { source: "local" }),
 	n("config.netmodeSelect", "Network mode", "Netzwerkmodus", "value", "", {
@@ -224,6 +305,26 @@ const states: StateDefinition[] = [
 	n("config.invType", "Inverter type", "Wechselrichter-Typ", "value", "", { source: "local" }),
 	s("config.wifiIpAddress", "WiFi IP address", "WLAN IP-Adresse", "text", { source: "local" }),
 	s("config.wifiMacAddress", "WiFi MAC address", "WLAN MAC-Adresse", "text", { source: "local" }),
+	// The DTU reports these in every GetConfig; they were decoded but never written anywhere.
+	s("config.ipAddress", "IP address", "IP-Adresse", "text", { source: "local" }),
+	s("config.subnetMask", "Subnet mask", "Subnetzmaske", "text", { source: "local" }),
+	s("config.gateway", "Default gateway", "Standard-Gateway", "text", { source: "local" }),
+	s("config.dnsServer", "DNS server", "DNS-Server", "text", { source: "local" }),
+	s("config.macAddress", "MAC address", "MAC-Adresse", "text", { source: "local" }),
+	// Which meter the DTU is configured for. Empty on a device that cannot take one — the
+	// HMS-800W-2T has no meter input at all (firmware-verified), so an empty value there is
+	// the correct answer, not a missing read.
+	s("config.meterKind", "Meter type", "Zählertyp", "text", { source: "local" }),
+	s("config.meterInterface", "Meter interface", "Zähler-Schnittstelle", "text", { source: "local" }),
+	n("config.zeroExportEnable", "Zero export enabled", "Nulleinspeisung aktiv", "value", "", {
+		source: "local",
+	}),
+	n("config.zeroExport433Addr", "Zero export 433 MHz address", "Nulleinspeisung 433-MHz-Adresse", "value", "", {
+		source: "local",
+	}),
+	n("config.lockTime", "Inverter lock duration", "Wechselrichter-Sperrdauer", "value", "s", {
+		source: "local",
+	}),
 
 	// === Grid profile (from DevConfigFetch, local) ===
 	...gridProfileStates,

@@ -6,33 +6,35 @@
 
 This adapter is designed for **Hoymiles HMS microinverters with an integrated WiFi (or WiFi + Bluetooth) DTU** (DTUBI).
 
-**Local** = direct TCP/Protobuf connection on port 10081. **Cloud** = S-Miles Cloud API — auto-discovery, realtime data (fast burst channel ~1.5–3 s), energy aggregates, grid profile, inverter on/off + reboot, DTU reboot.
+**Local (TCP)** = direct TCP/Protobuf connection on port 10081 (WiFi models). **Local (BLE)** = local Bluetooth through an [ESPHome Bluetooth Proxy](https://esphome.io/projects/?type=bluetooth) (WB series). **Cloud** = S-Miles Cloud API — auto-discovery, realtime data (fast burst channel ~1.5–3 s), energy aggregates, grid profile, inverter on/off + reboot, DTU reboot.
 
-| Model | Strings | Local (TCP) | Cloud | Status |
-|-------|:---:|:---:|:---:|--------|
-| HMS-300W-1T | 1 | ✅ | ✅ | Untested |
-| HMS-350W-1T | 1 | ✅ | ✅ | Untested |
-| HMS-400W-1T | 1 | ✅ | ✅ | Untested |
-| HMS-450W-1T | 1 | ✅ | ✅ | Untested |
-| HMS-500W-1T | 1 | ✅ | ✅ | Untested |
-| HMS-600W-2T | 2 | ✅ | ✅ | Untested |
-| HMS-700W-2T | 2 | ✅ | ✅ | Untested |
-| HMS-800W-2T | 2 | ✅ | ✅ | **Tested** (Local + Cloud) |
-| HMS-900W-2T | 2 | ✅ | ✅ | Untested |
-| HMS-1000W-2T | 2 | ✅ | ✅ | **Tested** (Local) |
-| HMS-1600DW-4T | 4 | ✅ | ✅ | Untested |
-| HMS-1800DW-4T | 4 | ✅ | ✅ | Untested |
-| HMS-2000DW-4T | 4 | ✅ | ✅ | Untested |
-| HMS-600-2WB | 2 | ❌¹ | ✅ | Untested |
-| HMS-700-2WB | 2 | ❌¹ | ✅ | Untested |
-| HMS-800-2WB | 2 | ❌¹ | ✅ | **Tested** (Cloud: realtime burst, grid profile, on/off + reboot, DTU reboot) |
-| HMS-900-2WB | 2 | ❌¹ | ✅ | Untested |
-| HMS-1000-2WB | 2 | ❌¹ | ✅ | Untested |
-| HMS-1600-4WB | 4 | ❌¹ | ✅ | Untested |
-| HMS-1800-4WB | 4 | ❌¹ | ✅ | Untested |
-| HMS-2000-4WB | 4 | ❌¹ | ✅ | Untested |
+| Model | Strings | Local (TCP) | Local (BLE)² | Cloud | Status |
+|-------|:---:|:---:|:---:|:---:|--------|
+| HMS-300W-1T | 1 | ✅ | — | ✅ | Untested |
+| HMS-350W-1T | 1 | ✅ | — | ✅ | Untested |
+| HMS-400W-1T | 1 | ✅ | — | ✅ | Untested |
+| HMS-450W-1T | 1 | ✅ | — | ✅ | Untested |
+| HMS-500W-1T | 1 | ✅ | — | ✅ | Untested |
+| HMS-600W-2T | 2 | ✅ | — | ✅ | Untested |
+| HMS-700W-2T | 2 | ✅ | — | ✅ | Untested |
+| HMS-800W-2T | 2 | ✅ | — | ✅ | **Tested** (Local + Cloud) |
+| HMS-900W-2T | 2 | ✅ | — | ✅ | Untested |
+| HMS-1000W-2T | 2 | ✅ | — | ✅ | **Tested** (Local) |
+| HMS-1600DW-4T | 4 | ✅ | — | ✅ | Untested |
+| HMS-1800DW-4T | 4 | ✅ | — | ✅ | Untested |
+| HMS-2000DW-4T | 4 | ✅ | — | ✅ | Untested |
+| HMS-600-2WB | 2 | ❌¹ | ✅ | ✅ | Untested |
+| HMS-700-2WB | 2 | ❌¹ | ✅ | ✅ | Untested |
+| HMS-800-2WB | 2 | ❌¹ | ✅ | ✅ | **Tested** (Cloud; BLE gateway path in testing) |
+| HMS-900-2WB | 2 | ❌¹ | ✅ | ✅ | Untested |
+| HMS-1000-2WB | 2 | ❌¹ | ✅ | ✅ | Untested |
+| HMS-1600-4WB | 4 | ❌¹ | ✅ | ✅ | Untested |
+| HMS-1800-4WB | 4 | ❌¹ | ✅ | ✅ | Untested |
+| HMS-2000-4WB | 4 | ❌¹ | ✅ | ✅ | Untested |
 
-¹ The **WB series** (sold as **"HiFlow Pro"**) has no local TCP port — its only local channel is Bluetooth LE, and all data goes to the Hoymiles cloud. These inverters therefore work **cloud-only**: enable the cloud connection and the adapter reads them through the S-Miles API (realtime burst, energy, grid profile) and can send the inverter on/off + reboot and DTU reboot commands. All WB models share the same platform; only the HMS-800-2WB has been tested so far.
+¹ The **WB series** (sold as **"HiFlow Pro"**) has no local TCP port — its only local channel is Bluetooth LE. Reach it either **locally over Bluetooth** (column *Local (BLE)*) or via the **cloud**. All WB models share the same platform; only the HMS-800-2WB has been tested so far.
+
+² **Local (BLE)** needs an [ESPHome Bluetooth Proxy](https://esphome.io/projects/?type=bluetooth) (a cheap ESP32) on your network — the adapter then reads and controls the inverter locally over Bluetooth, without the cloud. See [BLE Gateway (ESPHome)](#ble-gateway-esphome). WiFi (T) models don't need this; they use the local TCP path.
 
 **Cloud-only operation:** any supported inverter in your S-Miles account also works without a local connection at all — the adapter discovers it automatically and provides realtime power (burst channel), energy aggregates, grid profile, and the inverter on/off + reboot (`inverter.active` / `inverter.reboot`) plus DTU reboot (`dtu.reboot`) commands over the cloud. The remaining commands (power limit, lock, clean warnings, …) require the local TCP link.
 
@@ -50,6 +52,8 @@ Open the adapter configuration in the ioBroker admin interface.
 | **DTU devices** | (empty) | Table of DTU IP addresses/hostnames. Add one row per DTU. |
 | **Data query interval** | 5s | Seconds between data requests (0-300). Set 0 for fastest possible (~1s per cycle). |
 | **Config/alarm poll factor** | 6 | Config and alarms are queried every Nth data cycle. |
+| **Power limit dead band** | 1 % | Smaller power-limit changes are not sent to the device. Every write erases two flash sectors. 0 = off. |
+| **Power limit minimum interval** | 60 s | Shortest gap between two power-limit writes. 0 = off. |
 | **Cloud Relay** | on | Forward real-time data to Hoymiles Cloud on behalf of the DTU. Without this, the local TCP connection blocks the DTU from uploading to the cloud. |
 
 ### Cloud Connection (S-Miles)
@@ -59,7 +63,7 @@ Open the adapter configuration in the ioBroker admin interface.
 | **Enable cloud** | off | Enable Hoymiles S-Miles Cloud API |
 | **S-Miles Email** | — | Your S-Miles account email |
 | **S-Miles Password** | — | Your S-Miles account password (stored encrypted) |
-| **Fast realtime data (cloud)** | on | For inverters **without** a local connection, poll fast per-second power data from the cloud (the same "burst" channel the S-Miles app's live view uses). Updates `grid.power` and `pvN.power` roughly every 1.5–3 s (server-dictated) instead of only every ~80 s. Only affects cloud-only devices; locally connected inverters keep their direct local realtime data. |
+| **Fast realtime data (cloud)** | on | Poll fast per-second power data from the cloud (the same "burst" channel the S-Miles app's live view uses). For inverters **without** a local connection this updates `grid.power` and `pvN.power` roughly every 1.5–3 s (server-dictated) instead of only every ~80 s; locally connected inverters keep their direct local realtime data. The **station** totals under `station-<id>.grid.*` come from this channel in every setup, including a purely local one — no local link can produce a station-wide aggregate, so with this option off they fall back to the slow cloud poll and visibly lag the sum of the individual inverters. |
 
 All inverters in your cloud account are automatically discovered. No manual serial number configuration needed.
 
@@ -86,31 +90,100 @@ Login is a single v3 flow followed by a profile probe (`region_c → pre-insp �
 
 When in doubt, click the **Test cloud login** button next to the password field. It runs the four phases once with your current credentials (`region_c`, `pre-insp`, `login`, `probe`) and reports `v` and salt presence from pre-insp, whether the login produced a token, and which profile the probe assigned (`installer` / `home`). The result is logged so you can paste it into a forum bug report. The test does not store a token or change adapter state.
 
-## Device Manager
+### BLE Gateway (ESPHome)
 
-The adapter integrates with the ioBroker **Device Manager**, so every inverter and cloud station appears as a card on the *Device Manager* tab in the admin UI — with live status, controls and a settings dialog, without building your own VIS view.
+Some inverters — the **WB series** (e.g. HMS-800-2WB) — can only be reached over **Bluetooth**, not over your normal network. To use them without the cloud, you add a small, cheap Bluetooth bridge to your network (an **ESPHome Bluetooth Proxy**). The adapter then reaches your inverter through it.
+
+**1. Set up the Bluetooth bridge.** Flash a supported ESP32 with the ready-made firmware — use the **Flash a Bluetooth Proxy** link in the settings, or <https://esphome.io/projects/?type=bluetooth>. Plug it in within a few metres of your inverter. Nothing to configure.
+
+**2. Add your inverter.** In the adapter settings open the **BLE** tab and turn on **Enable BLE gateway**, then save. While the inverter is switched on, click **Add discovered inverters** — your inverter appears in the table with its serial number and address already filled in. Enter its **PIN** (the one you set on the inverter), tick **Active**, and save. Done — the adapter connects.
+
+**Good to know**
+
+- You don't choose a bridge. If you have several, the adapter automatically uses the one with the best signal.
+- If **Add discovered inverters** finds nothing, no inverter is within Bluetooth range of a bridge.
+- A wrong PIN switches the device off again; the reason is shown in the state `info.bleLastError`. Correct the PIN and save to try again.
+- When the inverter shuts down for the night the Bluetooth link ends and the states are flagged as stale (`info.connected` = `false`). The adapter reconnects on its own in the morning. If Bluetooth does not come back, the cloud supplies the values until it does — provided the cloud connection is enabled.
+
+### Connecting an energy meter (Shelly / ecotracker)
+
+An inverter connected over Bluetooth (the WB series) can share an **energy meter**. That shows you
+not just what you produce but what is flowing to or from the grid — and on request the inverter
+throttles itself so that **nothing is fed into the grid** (zero export).
+
+**Requirement:** the meter must be on the same network and announce itself there. The inverter
+looks for it on its own; whatever it finds appears in the selection.
+
+**How to:** in the *Config Manager*, click the meter icon on your inverter. The inverter looks for
+meters on the network itself — you pick one from the list and choose a mode:
+
+| Mode | Effect |
+| --- | --- |
+| **Off** | Nothing is sent; an existing connection is left as it is. |
+| **Meter only** | The inverter reads the meter. Values appear under `<serial>.meter.*`, nothing is regulated. |
+| **Zero export** | The inverter additionally treats the meter as its grid meter and throttles its own output as soon as surplus would go to the grid. |
+
+The regulation runs **inside the inverter** — the adapter only sets it up and watches. It does not
+need to be running for it to work.
+
+> **Important:** the meter has to announce itself on the network **via mDNS**. If the inverter
+> cannot find it there, it accepts the setting but never fetches any data. A genuine Shelly does
+> this out of the box; with an emulator (e.g. uni-meter) its mDNS service has to be running.
+
+**Good to know**
+
+- `meter.gridPower` is the grid exchange: positive = import, negative = export. Alongside it are
+  `pvPower`, `loadPower`, `storagePower` and `plugPower` — the split is computed by the inverter.
+- Per phase you get `meter.l1Voltage`/`l1Current`/`l1Power` (likewise for L2 and L3) plus
+  `meter.frequency`. Power is signed: negative means that phase is currently exporting.
+- `meter.connected` shows whether the meter is currently delivering. If it reads `false`, the
+  connection to the meter has gone to sleep — just confirm the mode again in the dialog, which
+  restarts it.
+- Only the WB series can do this. The WiFi (T) models have neither a meter input nor a regulation
+  for it, so the icon does not appear there.
+
+## Config Manager
+
+The adapter integrates with the ioBroker **Config Manager**, so every inverter and cloud station appears as a card on the *Config Manager* tab in the admin UI — with live status, controls and a settings dialog, without building your own VIS view.
 
 **What is shown**
 
 - Every **DTU/inverter** (`<dtuSerial>`) and every **cloud station** (`station-<id>`) the adapter has created.
-- A live **connection indicator** (green/red), and for locally connected DTUs the WiFi signal strength. The card title uses the name of the station (plant) the inverter belongs to — the name you gave it in the S-Miles app — plus the DTU serial number (e.g. `Zuhause · 4143A01CEDE4`), which keeps every inverter distinct; without a station it falls back to the model name or the serial number.
-- **Live values right on the card:** current power (W), today's energy (kWh), the power of each PV string the inverter actually has (one line per string), and the inverter temperature — all updated automatically. Stations show the aggregated power and energy.
-- A device **icon** by type — a flat micro-inverter, an upright three-phase inverter (HMT line), or a station. These are original, neutral icons drawn for the adapter, not vendor product images. The same icons are used for the device objects in the object tree.
+- A live **connection indicator** (green/red), and for locally connected DTUs the **WiFi signal quality in percent** (0-100 %). The card title uses the name of the station (plant) the inverter belongs to — the name you gave it in the S-Miles app — plus the DTU serial number (e.g. `Zuhause · 4143A01CEDE4`), which keeps every inverter distinct; without a station it falls back to the model name or the serial number.
+- **Live values right on the card:** current power (W), today's energy (kWh), the power of each PV string the inverter actually has (one line per string) and the inverter temperature — all updated automatically. Stations show the aggregated power, the **PV utilization in percent**, the daily, yearly and total energy, and the daily and total income in the plant's currency (the income lines only appear when an electricity price is configured in the cloud).
+- A device **icon** by type — a flat micro-inverter, an upright three-phase inverter (HMT line), or a station. The same icons are used for the device objects in the object tree.
 - A **firmware-update indicator** when the cloud reports one (from `dtu.fwUpdateAvailable`).
-- A **"More"** button opens a read-only details panel (serial numbers, hardware/software versions, model, signal strength; for stations the capacity, status and address).
+- The **"More"** button opens a read-only details panel, grouped into **Inverter** (model, serial number, hardware/software version), **DTU / firmware** (serial number, firmware versions, WiFi version, update indicator), **Network** (the address in use, signal quality, SSID, IP and MAC addresses, DNS, DHCP) and **Cloud server** (domain, port). The network and server sections only appear for locally connected devices, because those values arrive over the local link alone.
 
-**Controls** (on each inverter card)
+> **Why not every network field shows up there:** the DTU's configuration message covers the **whole Hoymiles DTU family**. Besides the WiFi fields it carries a set for **wired networking** (IP, MAC, subnet mask, gateway, cable DNS) and fields for **cellular** (APN, GPRS) and Sub-1GHz radio. An HMS inverter is WiFi-only, so its wired fields stay at `0.0.0.0` and `00:00:00:00:00:00` forever. The adapter hides any field the device reports no real value for — otherwise the panel would state an address that does not exist. A numeric `0` stays visible: for a flag such as DHCP that is an answer, not an absence. Stations show capacity, status and address.
 
-The card mirrors the writable states, so a click routes through the normal command path (local TCP link preferred, cloud fallback):
+**Controls and settings — split by persistence**
 
-- **Switches:** inverter on/off, lock inverter.
-- **Sliders / numbers:** power limit (runtime), power factor limit, reactive power limit, persistent power limit, cloud send interval.
-- **Buttons (with confirmation):** reboot inverter, reboot DTU, clear warnings, clear grounding fault.
-- **Settings** (button, local devices): a dialog to change the cloud send interval and the persistent power limit at once.
+The card mirrors the writable states, so a click routes through the normal command path (local TCP link preferred, cloud fallback). The two dialogs are split strictly by **what the device keeps**:
+
+> ⚠️ The state names mislead here; the firmware decides otherwise: `inverter.powerLimit` sounds like a runtime knob but is written into the persisted structure and costs two 4 KB flash sectors per change, while `config.limitPowerMyPower` is named "persistent" yet lives in RAM only and is gone after a restart. Both are firmware-verified (`_fwanalysis/ADAPTER_FINDINGS.md` §1, §2, §15).
+
+**Controls** (slider icon) — nothing here survives a DTU restart:
+
+- **Operation (switches):** inverter on/off, lock inverter.
+- **Runtime:** power limit (DTU config field) as a slider, cloud send interval. Both carry a note that the DTU forgets them on restart.
+
+Every slider is preceded by its current value and unit, because the slider itself only reveals it while being dragged.
+
+**Settings** (gear icon, local devices only) — everything the DTU keeps:
+
+- Power limit, power factor limit, reactive power limit.
+- Every field carries the note that frequent changes wear out the device memory. The dialog writes **only the fields you actually changed** — an untouched field is not rewritten.
+
+**Card buttons** (with confirmation): reboot inverter, reboot DTU and — **only when there is something to acknowledge** — acknowledge warnings and acknowledge grounding fault. The warning button appears while `alarms.hasActive` is set; the grounding button only while the alarm list holds an active entry with the grounding alarm code (182). Neither is shown until the alarm list has been read.
+
+> On the **WB series** the grounding button never appears: the firmware accepts the command but provably does not carry it out (empty branch, "no error" reply). A button that reports success and does nothing is misleading. On the T series the command is executed.
+
+> **A note on the Admin version:** the card deliberately uses only display features that older Admin versions support. Admin 7.8.x ships the Device Manager GUI in its `dm-utils 3.0.x` form, which does not yet know custom status symbols (`indicators`) and drops them without a trace — so the WiFi quality and the PV utilization sit where every version renders them, and the acknowledge icons are shipped at the size they should appear in (the Admin does not scale them).
 
 For **cloud-only** inverters (no local connection, e.g. HMS-800-2WB) only the actions the cloud can actuate are shown — inverter on/off, reboot inverter, reboot DTU — because the other commands are local-only. Stations show status and details only (no controls).
 
-**Instance actions** (above the device list): **Scan network** searches the LAN for DTUs and reports what it finds, and **Test cloud login** runs the login diagnostics. (Reloading the list uses the Device Manager's own built-in refresh button.)
+**Instance actions** (above the device list): **Scan network** searches the LAN for DTUs and reports what it finds, and **Test cloud login** runs the login diagnostics. (Reloading the list uses the Config Manager's own built-in refresh button.)
 
 > **Note:** Devices discovered later over the cloud (up to ~60 s after start) appear after pressing **Refresh** or reopening the tab; the live status of already-listed devices updates on its own.
 
@@ -130,6 +203,31 @@ The adapter supports several connection modes depending on the configuration:
 ### Automatic Reconnect
 
 The inverter (DTU) is only reachable when producing power (sun is shining). The adapter automatically reconnects with exponential backoff (1s, 2s, 4s, ... up to 60s max). When the connection succeeds, the backoff resets to 1s.
+
+BLE devices (HMS-800-2WB) use the same principle with slower steps, because every attempt is a full GATT round through the Bluetooth proxy: 5s, 10s, 20s, ... up to 5min max, reset once the pairing succeeds. Failed attempts during the night are logged at `debug`; only the first failure of a series appears as a warning.
+
+### Cloud downlinks (server → adapter)
+
+> **The relay concerns the TCP devices only** (HMS-*-xT). There the DTU serves a single socket
+> on port 10081: while the adapter is connected locally the device cannot reach the cloud
+> itself, so the adapter uploads on its behalf. A BLE device (HMS-800-2WB) has no local TCP
+> port; the adapter never takes its cloud connection away and it keeps uploading by itself. The
+> adapter therefore starts **no** relay for BLE devices — it would create a second data stream
+> under the same serial number.
+
+While the relay runs, the cloud server acknowledges the uploads and occasionally sends
+commands. The adapter maps **every** such message to its firmware name:
+
+| Kind | Examples | Behaviour |
+|------|----------|-----------|
+| Acknowledgements of our uploads | `InfoDataRes`, `HBRes`, `RealRes`, `HistoryRes` | server time and timezone offset are read; if the server rejects an upload (`error_code ≠ 0`) a warning is logged |
+| Commands | `CommandRes` (action) | handed to the device over the local connection; the server receives acknowledgement and status |
+| Data requests | grid profile (action 41), version (action 4) | answered from data read locally |
+| Not executed | OTA download (action 2/15), configuration writes (action 52–54 and 56/57) | **deliberately refused** and logged — a firmware update or a server redirect is never carried out unattended |
+
+Messages whose behaviour is not yet established are logged with their name and length instead
+of being discarded. An unimplemented downlink is therefore visible in the log and no longer
+indistinguishable from no downlink at all.
 
 ### Night Mode
 
@@ -216,7 +314,6 @@ The adapter determines how many there are, in this order:
 | `pvX.current` | number | A | Panel current |
 | `pvX.dailyEnergy` | number | kWh | Daily energy (local only) |
 | `pvX.totalEnergy` | number | kWh | Total energy (local only) |
-| `pvX.errorCode` | number | | Per-string error code, 0 in normal operation (local only) |
 
 ### `<dtuSerial>.inverter.*` — Inverter Status & Control (per DTU)
 
@@ -227,19 +324,18 @@ The adapter determines how many there are, in this order:
 | `inverter.hwVersion` | string | — | no | Hardware version |
 | `inverter.swVersion` | string | — | no | Software version |
 | `inverter.temperature` | number | °C | no | Inverter temperature |
-| `inverter.powerLimit` | number | % | **yes** | **Runtime** power limit (RAM-only, **no flash/NVM wear — safe to write every second**). **Use this state to realize zero-export (Nulleinspeisung)** / dynamic curtailment. 2-100%, local |
+| `inverter.powerLimit` | number | % | **yes** | Power limit, 2–100 %, local. **Use this state to realize zero-export / dynamic curtailment.** ⚠️ Every write programs flash inside the device (see the warning below) — the adapter therefore throttles it with a dead band and a minimum interval |
 | `inverter.activePowerLimit` | number | % | no | Active power limit (live, local) |
 | `inverter.active` | boolean | — | **yes** | Turn inverter on/off (local; via the cloud for cloud-only devices) |
 | `inverter.reboot` | boolean | — | **yes** | Reboot inverter (button, local; via the cloud for cloud-only devices) |
-| `inverter.powerFactorLimit` | number | — | **yes** | Power factor limit (-1 to 1, local) |
-| `inverter.reactivePowerLimit` | number | ° | **yes** | Reactive power limit (-50 to 50, local) |
-| `inverter.cleanWarnings` | boolean | — | **yes** | Clean warnings (button, local) |
-| `inverter.cleanGroundingFault` | boolean | — | **yes** | Clean grounding fault (button, local) |
+| `inverter.powerFactorLimit` | number | — | **yes** | Power factor limit (-1 to 1, local). ⚠️ Programs flash just like the power limit (action 47, same success path) — throttled |
+| `inverter.reactivePowerLimit` | number | ° | **yes** | Reactive power limit (-50 to 50, local). ⚠️ Programs flash just like the power limit (action 48, same success path) — throttled |
+| `inverter.cleanWarnings` | boolean | — | **yes** | Acknowledge warnings (button, local). Works on both device series |
+| `inverter.cleanGroundingFault` | boolean | — | **yes** | Acknowledge grounding fault (button, local). ⚠️ **No effect on the WB series** — its firmware accepts the command, does not carry it out, and still reports success (firmware-verified). The T series executes it |
 | `inverter.lock` | boolean | — | **yes** | Lock/unlock inverter (local) |
 | `inverter.warnCount` | number | — | no | SGSMO `warning_number` field, raw value (local) — not a documented warn code |
 | `inverter.warnMessage` | string | — | no | Active warning message from the WCode alarm list (local) |
 | `inverter.linkStatus` | number | — | no | Link status |
-| `inverter.modulationIndexSignal` | number | — | no | SGSMO #20, raw packed value (modulation index + signal; exact decode not yet confirmed, local) |
 
 ### `<dtuSerial>.dtu.*` — DTU Information (per DTU, local only except `dtu.reboot`)
 
@@ -248,7 +344,7 @@ The adapter determines how many there are, in this order:
 | `dtu.serialNumber` | string | — | DTU serial number |
 | `dtu.swVersion` | string | — | Software version |
 | `dtu.hwVersion` | string | — | Hardware version |
-| `dtu.rssi` | number | dBm | Signal strength |
+| `dtu.signalQuality` | number | % | WiFi signal quality (0–100, **not dBm** — the DTU reports the same derived quality as `config.wifiSignalQuality`) |
 | `dtu.reboot` | boolean | — | Reboot DTU (**writable**, button). Sent over the local TCP link when connected, otherwise over the cloud for cloud-only devices (e.g. HMS-800-2WB) |
 | `dtu.wifiVersion` | string | — | WiFi version |
 | `dtu.fwUpdateAvailable` | boolean | — | Firmware update available (checked once daily via cloud) |
@@ -256,13 +352,12 @@ The adapter determines how many there are, in this order:
 | `dtu.accessModel` | number | — | Network access mode (0=GPRS, 1=WiFi, 2=Ethernet) |
 | `dtu.communicationTime` | number | — | Last communication (Unix timestamp) |
 | `dtu.connState` | number | — | DTU error code (0=OK) |
-| `dtu.searchResult` | string | — | AutoSearch result (inverter serials, JSON) |
 
 ### `station-<id>.grid.*` — Station Aggregates (cloud)
 
 | State | Type | Unit | Description |
 |-------|------|------|-------------|
-| `grid.power` | number | W | Total station power (live in ~1.5–3 s via the burst channel when it is active, else ~80 s) |
+| `grid.power` | number | W | Total station power (live in ~1.5–3 s via the burst channel — also in a purely local setup; only ~80 s when the burst is switched off) |
 | `grid.gridPower` | number | W | Grid exchange power (realtime, +import/−export) — non-zero only on metered systems |
 | `grid.loadPower` | number | W | Load/consumption power (realtime) |
 | `grid.batteryPower` | number | W | Battery power (realtime, +charge/−discharge) — battery systems only |
@@ -322,6 +417,33 @@ Grid- and meter-level warning flags from the cloud's `station/find` record. All 
 | `warn.meterFault` | boolean | Meter fault / meter warning |
 | `warn.powerLimited` | boolean | Power output limited (curtailment / power limit active). **Installer accounts only** — not delivered on home accounts |
 
+### `<dtuSerial>.history.*` — Day Power Curve (per DTU, local)
+
+The inverter keeps its own power curve for the day in flash. The adapter fetches it in the
+slow-poll rotation (`0xa315`) — **without the cloud**, on the TCP path as well as over BLE.
+
+The device splits the day into pages of at most 200 samples and reports how many there are. The
+adapter collects every page and publishes the curve only once the whole day is together — page 0
+alone ends at mid-morning.
+
+Measured on an HMS-800W-2T: 903 samples at one per minute across 15 h, peaking at 602 W at 14:06.
+The HMS-800-2WB delivers the same curve at a 300 s step starting at midnight.
+
+> **About the unit:** the firmware does not state it — the field is copied out of the flash record
+> without any conversion. The 0.1 W factor is therefore **measured, not read off the code**:
+> integrating the curve over the day yields **4495 Wh** against the **4500 Wh** the device reports
+> itself, a 0.12 % difference. A factor of 1 or 0.01 would be off by a power of ten.
+
+| State | Type | Unit | Writable | Description |
+|-------|------|------|----------|-------------|
+| `history.powerJson` | string | W | no | Day power curve as a JSON array, one value per step |
+| `history.startTime` | number | ms | no | Timestamp of the **first** sample of the curve |
+| `history.stepTime` | number | s | no | Seconds between two samples (2T: 60, 2WB: 300) |
+| `history.dailyEnergy` | number | Wh | no | Daily energy as reported by the device |
+| `history.totalEnergy` | number | kWh | no | Total energy as reported by the device |
+
+Timestamp of a sample: `history.startTime + index * history.stepTime * 1000`.
+
 ### `<dtuSerial>.alarms.*` — Alarm Data (per DTU, local)
 
 | State | Type | Description |
@@ -339,23 +461,71 @@ Grid- and meter-level warning flags from the cloud's `station/find` record. All 
 
 ### `<dtuSerial>.config.*` — DTU Configuration (per DTU, local)
 
-> ⚠️ **WARNING — never write `config.*` states (especially `config.limitPowerMyPower`) frequently or in an automated loop.** Each write programs the **internal flash of the integrated DTU** (the WiFi module inside the HMS-xT). Flash endurance is finite (≈ tens of thousands of cycles); repeated high-frequency writes — e.g. a per-second zero-export loop — wear it out and can **permanently brick the device**. Use these states only for occasional, permanent settings.
-> **For dynamic / frequent power limiting (zero-export), use `inverter.powerLimit` instead** — a runtime, RAM-only command with **no flash write and no wear**, safe to update every second.
+> ⚠️ **WARNING — every power-limit write programs flash inside the device.**
+>
+> It affects **`inverter.powerLimit`, `inverter.powerFactorLimit` and
+> `inverter.reactivePowerLimit`** — all three run through the same success path (actions 8, 47
+> and 48). It does **not** affect `config.limitPowerMyPower`: that configuration field only
+> reaches RAM. Earlier versions of this documentation had the two the wrong way round —
+> `inverter.powerLimit` was described as a RAM-only runtime command and
+> `config.limitPowerMyPower` as the flash writer. Both were wrong. At the end of a successful command the firmware calls the configuration
+> serializer, which **erases and rewrites two 4 KB flash sectors** (HMS-800W-2T: `0x4080d642` →
+> erase + write for region 3 and region 0xe; HMS-800-2WB: `sys_cfg_write` runs
+> `nv_erase`+`nv_write` twice). Flash endurance is finite — tens of thousands of cycles — so a
+> per-second zero-export loop wears it out and can **permanently brick the device**.
+>
+> **The adapter guards against this:** the settings (*Local* tab) offer a **dead band**
+> (default 1 %) and a **minimum interval** (default 60 s). A change below the dead band, or one
+> that comes too soon after the last write, is not sent; the state is still acknowledged and the
+> log says why. Both values can be adjusted or switched off with 0 — anyone who deliberately wants
+> to regulate faster can, and accepts the wear.
+>
+> For zero-export, `inverter.powerLimit` remains the right state: it takes effect immediately.
+> It is **not** a flash-free path, however — which is exactly why the dead band and the minimum
+> interval exist. `config.limitPowerMyPower` costs no flash but does not survive a restart on
+> the HMS-800W-2T and issues no command to the inverter.
+
+> ⚠️ **Writing configuration — the adapter always reads first.**
+>
+> The DTU adopts **every** field of a configuration message, including the ones the protocol does
+> not even transmit because they hold their default value. Sending only the field you want to
+> change therefore clears all the others. Firmware-verified for the HMS-800W-2T:
+> `server_domain_name`, `serverport`, `limit_power_mypower`, `server_send_time`, `lock_password`
+> and `lock_time` are overwritten unguarded. On the 2WB exactly that destroyed the server address,
+> the port and the power limit in a live test.
+>
+> The adapter therefore **never writes a partial set**: it takes the configuration last read from
+> the device, changes only the requested field in it, and sends everything back. If no
+> configuration has been read in the current session, the write is **refused** and the reason is
+> logged — better not to write than to write incompletely.
+>
+> WiFi credentials are left alone: the device only adopts them when an additional field is set,
+> which the adapter deliberately leaves empty.
 
 | State | Type | Unit | Writable | Description |
 |-------|------|------|----------|-------------|
 | `config.serverDomain` | string | — | no | Cloud server domain |
 | `config.serverPort` | number | — | no | Cloud server port |
-| `config.serverSendTime` | number | min | **yes** | Cloud send interval (minutes). ⚠️ Persistent (DTU flash) — do not write frequently, see warning above |
-| `config.limitPowerMyPower` | number | % | **yes** | **Persistent** power limit (stored in DTU flash, survives a reboot; 2-100%, local). ⚠️ **Permanent cap only — never write in a loop (wears DTU flash). For dynamic zero-export use `inverter.powerLimit`** (see warning above) |
+| `config.serverSendTime` | number | min | **yes** | Cloud send interval (minutes). ⚠️ **Neither persistent nor a flash write** (firmware-verified): SetConfig field 10 only lands in RAM (`gp-110188`); the SetConfig path writes flash solely in the WiFi/AP password branch. Earlier versions of this documentation called it "persistent (DTU flash)" — that was wrong. Set it again after a device restart |
+| `config.limitPowerMyPower` | number | % | **yes** | Power limit via the DTU's **configuration field** (2–100 %, local). ⚠️ **On the HMS-800W-2T this value does NOT survive a reboot** (firmware-verified) — earlier versions of this documentation claimed the opposite. Set it again after a device restart. **Contrary to earlier claims it writes no flash either** — its target `gp-108260` (`0x6c204`) lies outside the persisted structure `0x6b8dc` |
 | `config.wifiSsid` | string | — | no | WiFi SSID |
-| `config.wifiRssi` | number | dBm | no | WiFi signal strength (real dBm, e.g. −65) |
+| `config.wifiSignalQuality` | number | % | no | WiFi **signal quality 0–100**, **not dBm** despite the field name. The firmware derives it from the raw RSSI as `clamp(2*(95 - |rssi|), 0, 100)` and names the two values `rssi` (raw) and `wifi_rssi` (this one) in its own debug output. A reading of 46 corresponds to roughly −72 dBm. Earlier versions of this documentation called it “real dBm, e.g. −65” — that was wrong. The raw dBm value stays in the neighbouring byte and is not reachable through any message the adapter uses. The device reports the same quantity as `csq` in its NetworkInfo message — the same byte, so a separate state would be a duplicate |
 | `config.invType` | number | — | no | Inverter type |
 | `config.netmodeSelect` | number | — | no | Network mode (0=GPRS, 1=WiFi, 2=Ethernet) |
 | `config.netDhcpSwitch` | number | — | no | DHCP enabled |
 | `config.wifiIpAddress` | string | — | no | WiFi IP address |
 | `config.wifiMacAddress` | string | — | no | WiFi MAC address |
 | `config.dtuApSsid` | string | — | no | DTU access point SSID |
+| `config.ipAddress` | string | — | no | IP address (Ethernet/primary interface) |
+| `config.subnetMask` | string | — | no | Subnet mask |
+| `config.gateway` | string | — | no | Default gateway |
+| `config.dnsServer` | string | — | no | DNS server |
+| `config.macAddress` | string | — | no | MAC address |
+| `config.meterKind` | string | — | no | Configured meter type. Empty on devices without a meter input — the HMS-800W-2T has none (firmware-verified), so an empty value is the correct answer there |
+| `config.meterInterface` | string | — | no | Interface the meter is attached to |
+| `config.zeroExportEnable` | number | — | no | Zero-export flag as reported by the DTU |
+| `config.zeroExport433Addr` | number | — | no | Zero-export 433 MHz address |
+| `config.lockTime` | number | s | no | Inverter lock duration (0 = no lock) |
 
 ### `<dtuSerial>.gridProfile.*` — Grid Profile (per DTU, local — read via the cloud for cloud-only devices)
 
@@ -410,9 +580,9 @@ The inverter's grid-connection profile (safety/grid-code parameters), read local
 | `gridProfile.reactivePowerControlActive` | boolean | — | no | Reactive power control active |
 | `gridProfile.reactivePower` | number | %Sn | no | Reactive power (VAR) |
 
-### `<dtuSerial>.meter.*` — Energy Meter (per DTU, local, dynamic)
+### `<dtuSerial>.meter.*` — Wired Energy Meter (per DTU, local, dynamic)
 
-Meter states are created automatically when meter data is first received from the DTU. Only available if a compatible energy meter is connected.
+Meter states are created automatically when meter data is first received from the DTU. Only available if a compatible wired energy meter (DTU-Pro style, Modbus) is connected.
 
 | State | Type | Unit | Description |
 |-------|------|------|-------------|
@@ -429,7 +599,45 @@ Meter states are created automatically when meter data is first received from th
 | `meter.currentPhaseA` | number | A | Current phase A |
 | `meter.currentPhaseB` | number | A | Current phase B |
 | `meter.currentPhaseC` | number | A | Current phase C |
+| `meter.energyPhaseAExport` | number | kWh | Phase A energy export |
+| `meter.energyPhaseBExport` | number | kWh | Phase B energy export |
+| `meter.energyPhaseCExport` | number | kWh | Phase C energy export |
+| `meter.energyPhaseAImport` | number | kWh | Phase A energy import |
+| `meter.energyPhaseBImport` | number | kWh | Phase B energy import |
+| `meter.energyPhaseCImport` | number | kWh | Phase C energy import |
+| `meter.powerFactorPhaseA` | number | — | Power factor phase A |
+| `meter.powerFactorPhaseB` | number | — | Power factor phase B |
+| `meter.powerFactorPhaseC` | number | — | Power factor phase C |
 | `meter.faultCode` | number | — | Meter fault code |
+
+### `<dtuSerial>.meter.*` — Network Energy Meter (Shelly / ecotracker, BLE series, local, dynamic)
+
+Created on demand for an inverter of the WB series once a meter has been paired from the *Config
+Manager* — see [Connecting an energy meter](#connecting-an-energy-meter-shelly--ecotracker). The T
+series has neither a meter input nor a regulation for it, so these states never appear there.
+
+| State | Type | Unit | Writable | Description |
+|-------|------|------|----------|-------------|
+| `meter.mode` | number | — | **yes** | Operating mode: `0` = unbound (starting value, not a command), `1` = meter only, `2` = grid meter for zero export |
+| `meter.deviceId` | string | — | **yes** | MAC of the meter to bind, bare hex or with separators |
+| `meter.detected` | string | — | no | Meters the inverter found on the network (JSON list) |
+| `meter.connected` | boolean | — | no | Whether the meter is currently delivering data |
+| `meter.lastData` | number | — | no | Timestamp of the last meter reading |
+| `meter.gridPower` | number | W | no | Grid exchange: positive = import, negative = export |
+| `meter.pvPower` | number | W | no | PV share computed by the inverter |
+| `meter.loadPower` | number | W | no | House load computed by the inverter |
+| `meter.storagePower` | number | W | no | Battery share computed by the inverter |
+| `meter.plugPower` | number | W | no | Plug/aux share computed by the inverter |
+| `meter.frequency` | number | Hz | no | Grid frequency at the meter |
+| `meter.l1Voltage` | number | V | no | Voltage L1 |
+| `meter.l1Current` | number | A | no | Current L1 |
+| `meter.l1Power` | number | W | no | Power L1 (signed: negative = exporting) |
+| `meter.l2Voltage` | number | V | no | Voltage L2 |
+| `meter.l2Current` | number | A | no | Current L2 |
+| `meter.l2Power` | number | W | no | Power L2 (signed) |
+| `meter.l3Voltage` | number | V | no | Voltage L3 |
+| `meter.l3Current` | number | A | no | Current L3 |
+| `meter.l3Power` | number | W | no | Power L3 (signed) |
 
 ### Adapter-level States
 
