@@ -267,12 +267,51 @@ export const hybridStates: StateDefinition[] = [
 	),
 	s("inverter.powerFaultCode", "Power fault code", "Fehlercode Leistungsteil", "text", { source: "cloud" }),
 	s("inverter.safetyFaultCode", "Safety fault code", "Fehlercode Sicherheitsteil", "text", { source: "cloud" }),
-	n("battery.chargeToday", "Charged today", "Heute geladen", "value.energy", "kWh", { source: "cloud" }),
-	n("battery.dischargeToday", "Discharged today", "Heute entladen", "value.energy", "kWh", { source: "cloud" }),
 	n("battery.cycles", "Charge cycles", "Ladezyklen", "value", "", { source: "cloud" }),
 	n("battery.heating", "Heating status", "Heizstatus", "value", "", { source: "cloud" }),
 	s("battery.heatingText", "Heating status (text)", "Heizstatus (Text)", "text", { source: "cloud" }),
 ];
+
+/**
+ * Battery working mode and settings of a storage plant. Part of the hybrid states (they live below
+ * the inverter's device, where everything else about the battery is), listed separately because
+ * they come from the plant, not from the battery's own indicator set.
+ *
+ * `battery.readSettings` is the only writable one, and it only reads.
+ */
+export const batterySettingStates: StateDefinition[] = [
+	// 1-6 are the S-Miles app's own mode table; 7 and 8 follow the order of the portal's mode dialog,
+	// whose per-mode parameters match (a meter power target for peak shaving, charge/discharge time
+	// windows for time of use). The app knows a mode 9 that is not identified.
+	n("battery.workMode", "Working mode", "Betriebsmodus", "value", "", {
+		source: "cloud",
+		states: {
+			1: "Self-consumption",
+			2: "Economy",
+			3: "Backup",
+			4: "Off-grid",
+			5: "Forced charging",
+			6: "Forced discharging",
+			7: "Peak shaving",
+			8: "Time of use",
+		},
+	}),
+	// Filled by reading the battery settings from the device (`battery.readSettings`).
+	n("battery.reserveSoc", "Reserved state of charge", "Reservierter Ladezustand", "value", "%", {
+		source: "cloud",
+	}),
+	s("battery.settingsJson", "Battery settings (JSON)", "Batterie-Einstellungen (JSON)", "json", {
+		source: "cloud",
+	}),
+	n("battery.settingsUpdated", "Settings last read", "Einstellungen zuletzt gelesen", "value.time", "", {
+		source: "cloud",
+	}),
+	b("battery.readSettings", "Read battery settings", "Batterie-Einstellungen lesen", "button", {
+		source: "cloud",
+		write: true,
+	}),
+];
+hybridStates.push(...batterySettingStates);
 
 /** Lookup map (suffix → definition) for the on-demand hybrid states. */
 export const hybridStateMap: Map<string, StateDefinition> = new Map(hybridStates.map(d => [d.id, d]));
@@ -286,7 +325,6 @@ export const hybridStateMap: Map<string, StateDefinition> = new Map(hybridStates
  * template full of zeros, which must not turn into states.
  */
 export const stationIndicatorChannels: ChannelDefinition[] = [
-	{ id: "battery", name: { en: "Battery", de: "Batterie" }, source: "cloud" },
 	{ id: "gridMeter", name: { en: "Grid meter", de: "Netzzähler" }, source: "cloud" },
 	{ id: "load", name: { en: "Loads", de: "Verbraucher" }, source: "cloud" },
 	{
@@ -341,43 +379,6 @@ const acStates = (ch: string, withCurrent: boolean): StateDefinition[] => [
 
 /** States of the station-level measuring points, created on demand. */
 export const stationIndicatorStates: StateDefinition[] = [
-	// The plant's battery as a whole. (The live battery power stays where earlier versions put it,
-	// in `grid.batteryPower`, next to the rest of the power flow.) `e2b_total` = "charged" and
-	// `efb_total` = "discharged" were checked against the portal's dashboard.
-	n("battery.soc", "State of charge", "Ladezustand", "value.battery", "%", { source: "cloud" }),
-	n("battery.capacity", "Installed capacity", "Installierte Kapazität", "value", "kWh", { source: "cloud" }),
-	n("battery.chargeToday", "Charged today", "Heute geladen", "value.energy", "kWh", { source: "cloud" }),
-	n("battery.dischargeToday", "Discharged today", "Heute entladen", "value.energy", "kWh", { source: "cloud" }),
-	// 1-6 are the S-Miles app's own mode table; 7 and 8 follow the order of the portal's mode dialog,
-	// whose per-mode parameters match (a meter power target for peak shaving, charge/discharge time
-	// windows for time of use). The app knows a mode 9 that is not identified.
-	n("battery.workMode", "Working mode", "Betriebsmodus", "value", "", {
-		source: "cloud",
-		states: {
-			1: "Self-consumption",
-			2: "Economy",
-			3: "Backup",
-			4: "Off-grid",
-			5: "Forced charging",
-			6: "Forced discharging",
-			7: "Peak shaving",
-			8: "Time of use",
-		},
-	}),
-	// Filled by reading the battery settings from the device (`battery.readSettings`).
-	n("battery.reserveSoc", "Reserved state of charge", "Reservierter Ladezustand", "value", "%", {
-		source: "cloud",
-	}),
-	s("battery.settingsJson", "Battery settings (JSON)", "Batterie-Einstellungen (JSON)", "json", {
-		source: "cloud",
-	}),
-	n("battery.settingsUpdated", "Settings last read", "Einstellungen zuletzt gelesen", "value.time", "", {
-		source: "cloud",
-	}),
-	b("battery.readSettings", "Read battery settings", "Batterie-Einstellungen lesen", "button", {
-		source: "cloud",
-		write: true,
-	}),
 	// Grid meter at the point of connection
 	b("gridMeter.connected", "Grid meter online", "Netzzähler online", "indicator.connected", { source: "cloud" }),
 	...acStates("gridMeter", true),
@@ -673,10 +674,13 @@ const stationStates: StateDefinition[] = [
 	n("grid.pvUtilization", "PV utilization", "PV-Auslastung", "value", "%"),
 	// Plants with a battery or a grid meter only (created on demand): the day's energy balance as
 	// the S-Miles dashboard shows it. Checked against the portal: `efg_total` = "from grid",
-	// `e2g_total` = "to grid". The battery's share lives in the station's `battery` channel.
+	// `e2g_total` = "to grid", `e2b_total` = "charged", `efb_total` = "discharged". Everything else
+	// about the battery lives in one place only — below the inverter's device.
 	n("grid.consumptionToday", "Consumption today", "Verbrauch heute", "value.energy", "kWh"),
 	n("grid.gridImportToday", "Grid import today", "Netzbezug heute", "value.energy", "kWh"),
 	n("grid.gridExportToday", "Grid export today", "Netzeinspeisung heute", "value.energy", "kWh"),
+	n("grid.batteryChargeToday", "Battery charged today", "Batterieladung heute", "value.energy", "kWh"),
+	n("grid.batteryDischargeToday", "Battery discharged today", "Batterieentladung heute", "value.energy", "kWh"),
 	n("grid.dailyEnergy", "Daily energy", "Tagesenergie", "value.energy", "kWh"),
 	n("grid.monthEnergy", "Month energy", "Monatsenergie", "value.energy", "kWh"),
 	n("grid.yearEnergy", "Year energy", "Jahresenergie", "value.energy", "kWh"),

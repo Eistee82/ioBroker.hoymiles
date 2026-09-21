@@ -9,12 +9,7 @@ import {
 	BURST_MAX_FAILURES,
 	CLOUD_POLL_CONCURRENCY,
 } from "./constants.js";
-import {
-	stationStateMap,
-	stationIndicatorStateMap,
-	stationIndicatorChannels,
-	buildStateCommon,
-} from "./stateDefinitions.js";
+import { stationStateMap, hybridStateMap, hybridChannels, buildStateCommon } from "./stateDefinitions.js";
 import { anonymize, errorMessage, mapLimit } from "./utils.js";
 
 // The burst endpoint types its power fields as numbers, but the main cloud API is known to
@@ -392,8 +387,13 @@ class BurstPoller {
 
 	/**
 	 * Write the realtime power flow of a storage system (burst m:0, `es` block) to the same
-	 * `station-<id>.grid.*` states {@link writeStation} fills, plus the battery's state of charge.
-	 * Signs are passed through as the cloud delivers them.
+	 * `station-<id>.grid.*` states {@link writeStation} fills. Signs are passed through as the
+	 * cloud delivers them.
+	 *
+	 * The state of charge that rides along is the battery's, so it goes where the battery is:
+	 * `<dtuSerial>.battery.soc` of the station's hybrid devices. A storage plant has no per-device
+	 * burst mode (every `m` returns this same block or nothing), so this is the one fast value a
+	 * device gets.
 	 *
 	 * @param stationId - Cloud station id.
 	 * @param es - The `es` object from a burst m:0 response.
@@ -416,9 +416,47 @@ class BurstPoller {
 			ws("grid.batteryPower", num(es.bp)),
 		];
 		if (soc !== undefined && soc !== null) {
-			writes.push(ws("battery.soc", num(soc)));
+			for (const dev of this.devices.values()) {
+				if (dev.cloudStationId === stationId && dev.hybridInverter && dev.dtuSerial) {
+					writes.push(this.writeBatterySoc(dev.dtuSerial, num(soc), quality));
+				}
+			}
 		}
 		await Promise.allSettled(writes);
+	}
+
+	/**
+	 * Set `<dtuSerial>.battery.soc`, creating channel and state on first use — the burst may well
+	 * be the first to deliver a battery value, ahead of the slow poller.
+	 *
+	 * @param sn - DTU serial = state id prefix.
+	 * @param val - State of charge (%).
+	 * @param quality - ioBroker state quality.
+	 */
+	private async writeBatterySoc(
+		sn: string,
+		val: number,
+		quality: ioBroker.STATE_QUALITY[keyof ioBroker.STATE_QUALITY],
+	): Promise<void> {
+		const fullId = `${sn}.battery.soc`;
+		if (!this.stationStateObjects.has(fullId)) {
+			this.stationStateObjects.add(fullId);
+			const channel = hybridChannels.find(c => c.id === "battery");
+			const def = hybridStateMap.get("battery.soc");
+			if (channel && def) {
+				await this.adapter.setObjectNotExistsAsync(`${sn}.battery`, {
+					type: "channel",
+					common: { name: channel.name },
+					native: {},
+				});
+				await this.adapter.extendObjectAsync(fullId, {
+					type: "state",
+					common: buildStateCommon(def),
+					native: {},
+				});
+			}
+		}
+		await this.adapter.setStateAsync(fullId, { val, ack: true, q: quality });
 	}
 
 	/**
@@ -438,18 +476,7 @@ class BurstPoller {
 	): Promise<void> {
 		const fullId = `${deviceId}.${suffix}`;
 		if (!this.stationStateObjects.has(fullId)) {
-			const def = stationStateMap.get(suffix) ?? stationIndicatorStateMap.get(suffix);
-			// The on-demand channels (e.g. `battery`) are not created with the station device.
-			const channelId = suffix.slice(0, suffix.indexOf("."));
-			const channel = stationIndicatorChannels.find(c => c.id === channelId);
-			if (channel && !this.stationStateObjects.has(`${deviceId}.${channelId}`)) {
-				this.stationStateObjects.add(`${deviceId}.${channelId}`);
-				await this.adapter.setObjectNotExistsAsync(`${deviceId}.${channelId}`, {
-					type: "channel",
-					common: { name: channel.name },
-					native: {},
-				});
-			}
+			const def = stationStateMap.get(suffix);
 			if (def) {
 				await this.adapter.extendObjectAsync(fullId, {
 					type: "state",

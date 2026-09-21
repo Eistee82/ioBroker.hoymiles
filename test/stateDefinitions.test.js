@@ -10,6 +10,7 @@ import {
 	hybridChannels,
 	hybridStates,
 	hybridStateMap,
+	batterySettingStates,
 	stationIndicatorChannels,
 	stationIndicatorStates,
 	stationIndicatorStateMap,
@@ -187,22 +188,22 @@ describe("stateDefinitions – station", function () {
 		assert.strictEqual(def.max, 100, "max must be 100");
 	});
 
-	it("station states are all read-only (the only writable station state, battery.readSettings, is an on-demand indicator state)", function () {
+	it("station states are all read-only — there is no writable station state at all", function () {
 		for (const s of stationStates) {
 			assert.ok(!s.write, `Station state ${s.id} should not be writable`);
 		}
 	});
 
-	it("no longer contains the battery states that moved to the station's battery channel", function () {
+	it("carries the battery's day energy balance again (grid.batteryChargeToday/DischargeToday)", function () {
 		const ids = stationStates.map(s => s.id);
-		for (const removed of [
-			"grid.batterySoc",
-			"grid.batteryChargeToday",
-			"grid.batteryDischargeToday",
-			"info.batteryCapacity",
-			"info.workMode",
-		]) {
-			assert.ok(!ids.includes(removed), `${removed} should have moved out of stationStates`);
+		assert.ok(ids.includes("grid.batteryChargeToday"), "Missing grid.batteryChargeToday");
+		assert.ok(ids.includes("grid.batteryDischargeToday"), "Missing grid.batteryDischargeToday");
+	});
+
+	it("does not contain any other battery state — there is exactly one battery place, below the device", function () {
+		const ids = stationStates.map(s => s.id);
+		for (const removed of ["grid.batterySoc", "info.batteryCapacity", "info.workMode"]) {
+			assert.ok(!ids.includes(removed), `${removed} must not exist in stationStates`);
 		}
 	});
 });
@@ -318,6 +319,44 @@ describe("stateDefinitions – hybrid inverter states", function () {
 	it("hybridChannels is only eps + battery — the grid meter moved to the station", function () {
 		assert.deepStrictEqual(hybridChannels.map(c => c.id).sort(), ["battery", "eps"]);
 	});
+
+	it("no longer contains battery.chargeToday / battery.dischargeToday (they live in stationStates now)", function () {
+		const ids = hybridStates.map(s => s.id);
+		assert.ok(!ids.includes("battery.chargeToday"));
+		assert.ok(!ids.includes("battery.dischargeToday"));
+	});
+
+	it("contains every batterySettingStates entry (they are pushed into hybridStates)", function () {
+		const ids = new Set(hybridStates.map(s => s.id));
+		for (const def of batterySettingStates) {
+			assert.ok(ids.has(def.id), `${def.id} missing from hybridStates`);
+			assert.strictEqual(hybridStateMap.get(def.id), def);
+		}
+	});
+
+	it("battery.readSettings is the ONLY writable hybrid state", function () {
+		const writable = hybridStates.filter(s => s.write).map(s => s.id);
+		assert.deepStrictEqual(writable, ["battery.readSettings"]);
+	});
+
+	it("battery.readSettings is a button", function () {
+		const def = hybridStates.find(s => s.id === "battery.readSettings");
+		assert.ok(def, "battery.readSettings must exist");
+		assert.strictEqual(def.type, "boolean");
+		assert.strictEqual(def.role, "button");
+	});
+
+	it("battery.workMode has a states map covering the app's mode table (1-8)", function () {
+		const def = hybridStates.find(s => s.id === "battery.workMode");
+		assert.ok(def, "battery.workMode must exist in hybridStates");
+		assert.strictEqual(def.type, "number", "type must be number");
+		assert.deepStrictEqual(
+			Object.keys(def.states)
+				.map(Number)
+				.sort((a, b) => a - b),
+			[1, 2, 3, 4, 5, 6, 7, 8],
+		);
+	});
 });
 
 // ============================================================
@@ -388,9 +427,8 @@ describe("stateDefinitions – station indicator states", function () {
 		assert.strictEqual(stationIndicatorStateMap.size, stationIndicatorStates.length);
 	});
 
-	it("contains the five expected channels: battery, gridMeter, load, pvMeter, generator", function () {
+	it("contains the four expected channels: gridMeter, load, pvMeter, generator — no battery here", function () {
 		assert.deepStrictEqual(stationIndicatorChannels.map(c => c.id).sort(), [
-			"battery",
 			"generator",
 			"gridMeter",
 			"load",
@@ -398,27 +436,16 @@ describe("stateDefinitions – station indicator states", function () {
 		]);
 	});
 
-	it("battery.readSettings is the only writable station indicator state", function () {
+	it("has no writable state at all — there is exactly one battery place, and it is not here", function () {
 		const writable = stationIndicatorStates.filter(s => s.write).map(s => s.id);
-		assert.deepStrictEqual(writable, ["battery.readSettings"]);
+		assert.deepStrictEqual(writable, []);
 	});
 
-	it("battery.readSettings is a button", function () {
-		const def = stationIndicatorStates.find(s => s.id === "battery.readSettings");
-		assert.ok(def, "battery.readSettings must exist");
-		assert.strictEqual(def.type, "boolean");
-		assert.strictEqual(def.role, "button");
-	});
-
-	it("battery.workMode has a states map covering the app's mode table (1-8)", function () {
-		const def = stationIndicatorStates.find(s => s.id === "battery.workMode");
-		assert.ok(def, "battery.workMode must exist in stationIndicatorStates");
-		assert.strictEqual(def.type, "number", "type must be number");
+	it("no longer contains any battery.* state (moved below the device — see hybridStates)", function () {
+		const ids = stationIndicatorStates.map(s => s.id);
 		assert.deepStrictEqual(
-			Object.keys(def.states)
-				.map(Number)
-				.sort((a, b) => a - b),
-			[1, 2, 3, 4, 5, 6, 7, 8],
+			ids.filter(id => id.startsWith("battery.")),
+			[],
 		);
 	});
 });

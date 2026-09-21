@@ -255,7 +255,7 @@ describe("hybridCloud – mapRealIndicators", function () {
 		assert.ok(!mapped.values.some(v => v.id.includes("role")));
 	});
 
-	it("maps the battery set, including the new energy/cycle/heating keys", function () {
+	it("maps the battery set, including the cycle/heating keys", function () {
 		const mapped = mapRealIndicators(BATTERY);
 		assert.strictEqual(valueOf(mapped, "battery.type"), "Li-Ion");
 		assert.strictEqual(valueOf(mapped, "battery.soc"), 24);
@@ -266,11 +266,16 @@ describe("hybridCloud – mapRealIndicators", function () {
 		assert.strictEqual(valueOf(mapped, "battery.power"), 613);
 		assert.strictEqual(valueOf(mapped, "battery.maxChargeCurrent"), 25);
 		assert.strictEqual(valueOf(mapped, "battery.cellVoltageMin"), 3.199);
-		assert.strictEqual(valueOf(mapped, "battery.chargeToday"), 3.2);
-		assert.strictEqual(valueOf(mapped, "battery.dischargeToday"), 1.5);
 		assert.strictEqual(valueOf(mapped, "battery.cycles"), 42);
 		assert.strictEqual(valueOf(mapped, "battery.heating"), 1);
 		assert.strictEqual(valueOf(mapped, "battery.heatingText"), "Heating");
+	});
+
+	it("drops bms_echg/bms_edchg (charged/discharged today lives in the station's day balance, not twice)", function () {
+		const mapped = mapRealIndicators(BATTERY);
+		assert.ok(!mapped.values.some(v => v.id === "battery.chargeToday" || v.id === "battery.dischargeToday"));
+		assert.ok(!mapped.unknownKeys.includes("bms_echg"));
+		assert.ok(!mapped.unknownKeys.includes("bms_edchg"));
 	});
 
 	it("maps the grid meter set, the same keys landing on gridMeter.* instead of grid.*", function () {
@@ -438,9 +443,9 @@ describe("hybridCloud – mapRealIndicators", function () {
 		assert.strictEqual(valueOf(mapped, "battery.cellTempMin"), 26);
 		assert.strictEqual(valueOf(mapped, "battery.chargeCutoffVoltage"), 350);
 		assert.strictEqual(valueOf(mapped, "battery.dischargeCutoffVoltage"), 280);
-		assert.strictEqual(valueOf(mapped, "battery.chargeToday"), 3.2);
-		assert.strictEqual(valueOf(mapped, "battery.dischargeToday"), 1.5);
 		assert.strictEqual(valueOf(mapped, "battery.cycles"), 12);
+		assert.ok(!mapped.values.some(v => v.id === "battery.chargeToday" || v.id === "battery.dischargeToday"));
+		assert.deepStrictEqual(mapped.unknownKeys, []);
 	});
 
 	it("collects keys it has no state for", function () {
@@ -554,9 +559,20 @@ describe("hybridCloud – energy kind (Wh/kWh/MWh → kWh)", function () {
 		assert.deepStrictEqual(mapped.unknownKeys, []);
 	});
 
-	it("matches the documented example: bms_echg without a unit", function () {
-		const mapped = mapRealIndicators({ title: "IND_BMS", list: [{ key: "bms_echg", val: "10" }] });
-		assert.deepStrictEqual(mapped.unknownKeys, ["bms_echg[unit=]"]);
+	it("bms_echg/bms_edchg/bps_echg/bps_edchg are known-but-dropped, not reported as unknown, regardless of unit", function () {
+		for (const [title, key] of [
+			["IND_BMS", "bms_echg"],
+			["IND_BMS", "bms_edchg"],
+			["IND_BPS", "bps_echg"],
+			["IND_BPS", "bps_edchg"],
+		]) {
+			const withUnit = mapRealIndicators({ title, list: [{ key, val: "10", unit: "Wh" }] });
+			const withoutUnit = mapRealIndicators({ title, list: [{ key, val: "10" }] });
+			assert.deepStrictEqual(withUnit.unknownKeys, [], `${key} with unit`);
+			assert.deepStrictEqual(withUnit.values, [], `${key} with unit`);
+			assert.deepStrictEqual(withoutUnit.unknownKeys, [], `${key} without unit`);
+			assert.deepStrictEqual(withoutUnit.values, [], `${key} without unit`);
+		}
 	});
 });
 
@@ -616,23 +632,34 @@ describe("hybridCloud – mapStorageStationData", function () {
 	};
 	const toObject = list => Object.fromEntries(list.map(e => [e.suffix, e.val]));
 
-	it("converts the day's energy balance from Wh to kWh", function () {
+	it("converts the day's energy balance from Wh to kWh (battery charge/discharge included again)", function () {
 		assert.deepStrictEqual(toObject(mapStorageStationData(BLOCK).energy), {
 			"grid.consumptionToday": 14.3,
 			"grid.gridImportToday": 6.5,
 			"grid.gridExportToday": 3,
-			"battery.chargeToday": 7.8,
-			"battery.dischargeToday": 5.4,
+			"grid.batteryChargeToday": 7.8,
+			"grid.batteryDischargeToday": 5.4,
 		});
 	});
 
-	it("delivers the live flow in watts and the state of charge in percent", function () {
+	it("delivers the live flow in watts — no state-of-charge entry (that is device-only now)", function () {
 		assert.deepStrictEqual(toObject(mapStorageStationData(BLOCK).flow), {
 			"grid.gridPower": 0,
 			"grid.loadPower": 567,
 			"grid.batteryPower": 567,
-			"battery.soc": 25,
 		});
+		assert.ok(!mapStorageStationData(BLOCK).flow.some(f => f.suffix.endsWith(".soc")));
+	});
+
+	// Measured on a storage plant with an empty battery at night: load 386 W, PV 0, battery 0 — the
+	// 386 W came from the grid, and this block said -386 while the burst says +gp for import.
+	it("turns the grid power round so that import is positive, like the burst that shares the state", function () {
+		const gridPowerOf = raw =>
+			toObject(mapStorageStationData({ ...BLOCK, grid_power: raw }).flow)["grid.gridPower"];
+		assert.strictEqual(gridPowerOf("-386.0"), 386, "import arrives negative and must become positive");
+		assert.strictEqual(gridPowerOf("120"), -120, "export arrives positive and must become negative");
+		assert.ok(Object.is(gridPowerOf("0.0"), 0), "zero must stay +0, not become -0");
+		assert.strictEqual(gridPowerOf("x"), undefined, "a non-numeric value is skipped");
 	});
 
 	it("leaves the battery values out on a station with a meter but no battery", function () {
@@ -643,7 +670,7 @@ describe("hybridCloud – mapStorageStationData", function () {
 			"grid.gridImportToday",
 			"grid.gridExportToday",
 		]);
-		assert.deepStrictEqual(mapped.info, []);
+		assert.deepStrictEqual(mapped.battery, []);
 	});
 
 	it("returns null for a plain PV station, whose block is present but meaningless", function () {
@@ -658,36 +685,36 @@ describe("hybridCloud – mapStorageStationData", function () {
 	});
 
 	it("skips values the cloud did not deliver", function () {
-		const mapped = mapStorageStationData({ icon_bms: 1, bms_soc: "80" });
-		assert.deepStrictEqual(mapped.flow, [{ suffix: "battery.soc", val: 80 }]);
+		const mapped = mapStorageStationData({ icon_bms: 1, bms_power: "80" });
+		assert.deepStrictEqual(mapped.flow, [{ suffix: "grid.batteryPower", val: 80 }]);
 		assert.deepStrictEqual(mapped.energy, []);
-		assert.deepStrictEqual(mapped.info, []);
+		assert.deepStrictEqual(mapped.battery, []);
 	});
 
-	it("converts work_mode into battery.workMode by dividing by 1000 (app sample: 1000 → 1)", function () {
-		assert.deepStrictEqual(mapStorageStationData({ ...BLOCK, work_mode: 1000 }).info, [
+	it("converts work_mode into a device-level battery.workMode suffix by dividing by 1000 (app sample: 1000 → 1)", function () {
+		assert.deepStrictEqual(mapStorageStationData({ ...BLOCK, work_mode: 1000 }).battery, [
 			{ suffix: "battery.workMode", val: 1 },
 		]);
-		assert.deepStrictEqual(mapStorageStationData({ ...BLOCK, work_mode: 2000 }).info, [
+		assert.deepStrictEqual(mapStorageStationData({ ...BLOCK, work_mode: 2000 }).battery, [
 			{ suffix: "battery.workMode", val: 2 },
 		]);
 	});
 
 	it("floors a work_mode that isn't an exact multiple of 1000", function () {
-		assert.deepStrictEqual(mapStorageStationData({ ...BLOCK, work_mode: 2999 }).info, [
+		assert.deepStrictEqual(mapStorageStationData({ ...BLOCK, work_mode: 2999 }).battery, [
 			{ suffix: "battery.workMode", val: 2 },
 		]);
 	});
 
-	it("leaves info empty when work_mode is 0, missing, non-numeric, or below 1000", function () {
+	it("leaves battery empty when work_mode is 0, missing, non-numeric, or below 1000", function () {
 		for (const work_mode of [0, undefined, "x", 500]) {
 			const block = work_mode === undefined ? { ...BLOCK } : { ...BLOCK, work_mode };
-			assert.deepStrictEqual(mapStorageStationData(block).info, [], `work_mode=${work_mode}`);
+			assert.deepStrictEqual(mapStorageStationData(block).battery, [], `work_mode=${work_mode}`);
 		}
 	});
 
-	it("leaves info empty on a station with a grid meter but no battery, even with a work_mode", function () {
-		assert.deepStrictEqual(mapStorageStationData({ ...BLOCK, icon_bms: 0, work_mode: 1000 }).info, []);
+	it("leaves battery empty on a station with a grid meter but no battery, even with a work_mode", function () {
+		assert.deepStrictEqual(mapStorageStationData({ ...BLOCK, icon_bms: 0, work_mode: 1000 }).battery, []);
 	});
 });
 

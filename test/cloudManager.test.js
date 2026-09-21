@@ -271,7 +271,7 @@ describe("CloudManager – event delegation", function () {
 		assert.doesNotThrow(() => manager.onRelayDataSent());
 	});
 
-	it("handleStationStateChange does not throw when no poller exists yet", async function () {
+	it("readBatterySettings does not throw when no poller exists yet", async function () {
 		const manager = new CloudManager({
 			adapter: makeMockAdapter(),
 			protobuf: makeMockProtobuf(),
@@ -283,10 +283,10 @@ describe("CloudManager – event delegation", function () {
 			slowPollFactor: 6,
 			localContexts: [],
 		});
-		await assert.doesNotReject(() => manager.handleStationStateChange(1, "battery.readSettings", { val: true }));
+		await assert.doesNotReject(() => manager.readBatterySettings(1));
 	});
 
-	it("handleStationStateChange delegates to the cloud poller with the same arguments", async function () {
+	it("readBatterySettings delegates to the cloud poller with the same station id", async function () {
 		const manager = new CloudManager({
 			adapter: makeMockAdapter(),
 			protobuf: makeMockProtobuf(),
@@ -301,13 +301,27 @@ describe("CloudManager – event delegation", function () {
 		const calls = [];
 		// Overwrite the private field — same trick the other tests use for `manager.cloud`.
 		manager.cloudPoller = {
-			handleStationStateChange: async (stationId, stateId, state) => {
-				calls.push({ stationId, stateId, state });
+			readBatterySettings: async stationId => {
+				calls.push(stationId);
 			},
 		};
-		const state = { val: true };
-		await manager.handleStationStateChange(42, "battery.readSettings", state);
-		assert.deepStrictEqual(calls, [{ stationId: 42, stateId: "battery.readSettings", state }]);
+		await manager.readBatterySettings(42);
+		assert.deepStrictEqual(calls, [42]);
+	});
+
+	it("no longer exposes handleStationStateChange (removed — main.ts routes battery.readSettings through DeviceContext)", function () {
+		const manager = new CloudManager({
+			adapter: makeMockAdapter(),
+			protobuf: makeMockProtobuf(),
+			cloudUser: "test@example.com",
+			cloudPassword: "password123",
+			enableLocal: false,
+			enableCloudRelay: false,
+			dataInterval: 5,
+			slowPollFactor: 6,
+			localContexts: [],
+		});
+		assert.strictEqual(typeof manager.handleStationStateChange, "undefined");
 	});
 
 	it("onLocalDisconnected does not throw on fresh manager", function () {

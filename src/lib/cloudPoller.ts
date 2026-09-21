@@ -533,14 +533,6 @@ class CloudPoller {
 		}
 		await this.setStationRealtimeStates(stationId, deviceId, data, online);
 		await this.pollStationIndicators(stationId, deviceId, data.reflux_station_data, online);
-		// Battery settings: once per adapter run, in the background (the device takes seconds to
-		// answer). After that only when the user presses `battery.readSettings`.
-		if (online && mapStorageStationData(data.reflux_station_data)?.info.length) {
-			await this.ensureBatteryControls(deviceId);
-			if (!this.batterySettingsRead.has(stationId)) {
-				void this.readBatterySettings(stationId);
-			}
-		}
 
 		// Weather (slow poll ~30min), firmware (once per day)
 		if (slowPoll) {
@@ -552,6 +544,16 @@ class CloudPoller {
 
 		// Device tree + per-inverter data
 		await this.pollDevicesAndInverters(stationId, slowPoll, online);
+
+		// Battery settings: once per adapter run, in the background (the device takes seconds to
+		// answer). After that only when the user presses `<dtuSerial>.battery.readSettings`.
+		if (online && mapStorageStationData(data.reflux_station_data)?.battery.length) {
+			const hybrids = this.hybridDevicesOf(stationId);
+			await this.ensureBatteryControls(hybrids);
+			if (hybrids.length > 0 && !this.batterySettingsRead.has(stationId)) {
+				void this.readBatterySettings(stationId);
+			}
+		}
 
 		this.adapter.log.debug(
 			`Cloud data (station ${stationId}): ${data.real_power}W, today=${toKwh(data.today_eq).toFixed(2)}kWh, total=${toKwh(data.total_eq).toFixed(2)}kWh, online=${online}`,
@@ -628,8 +630,19 @@ class CloudPoller {
 				w(suffix, value).catch(err => {
 					this.adapter.log.warn(`Cloud state write failed: ${errorMessage(err)}`);
 				});
-			for (const e of [...storage.energy, ...storage.info]) {
+			for (const e of storage.energy) {
 				writes.push(ws(e.suffix, e.val));
+			}
+			// What the station knows about the battery goes to the battery, i.e. below the device
+			// of every hybrid inverter of this station — not into a second battery branch here.
+			for (const sn of this.hybridDevicesOf(stationId)) {
+				for (const b of storage.battery) {
+					writes.push(
+						this.writeHybridState(sn, b.suffix, b.val, q).catch(err => {
+							this.adapter.log.warn(`Cloud state write failed: ${errorMessage(err)}`);
+						}),
+					);
+				}
 			}
 			if (!burstOwnsFlow) {
 				for (const f of storage.flow) {
@@ -717,7 +730,6 @@ class CloudPoller {
 				w("info.stationId", stationId),
 				w("info.systemCapacity", details.capacitor != null ? num(details.capacitor) : null),
 				// Storage stations only; a plain PV station must not grow the state.
-				w("battery.capacity", num(details.bms_capacitor) || null),
 				w("info.address", address || null),
 				w("info.latitude", lat),
 				w("info.longitude", lon),
@@ -1223,6 +1235,11 @@ class CloudPoller {
 			const batMapped = mapRealIndicators(batData);
 			this.reportUnknownKeys(batData?.title, batMapped.unknownKeys);
 			for (const v of batMapped.values) {
+				// The burst delivers the state of charge every few seconds; while it streams this
+				// station, the five-minute value would only make the state jump back and forth.
+				if (v.id === "battery.soc" && this.burstActiveStations.has(stationId)) {
+					continue;
+				}
 				writes.push(this.writeHybridState(sn, v.id, v.val, bq));
 			}
 		}
@@ -1271,63 +1288,69 @@ class CloudPoller {
 	}
 
 	/**
-	 * Make sure the `battery.readSettings` button of a storage station exists and is subscribed, so
-	 * that pressing it reaches {@link handleStationStateChange}.
+	 * DTU serials of this station's devices that carry a hybrid inverter — the devices whose
+	 * `battery` channel takes everything the station knows about the battery.
 	 *
-	 * @param deviceId - `station-<id>`.
+	 * @param stationId - Cloud station id.
 	 */
-	private async ensureBatteryControls(deviceId: string): Promise<void> {
-		const fullId = `${deviceId}.battery.readSettings`;
-		if (this.stationStateObjects.has(fullId)) {
-			return;
+	private hybridDevicesOf(stationId: number): string[] {
+		const serials: string[] = [];
+		for (const dev of this.devices.values()) {
+			if (dev.cloudStationId === stationId && dev.hybridInverter && dev.dtuSerial) {
+				serials.push(dev.dtuSerial);
+			}
 		}
-		await this.writeStationState(deviceId, "battery.readSettings", false);
-		this.adapter.subscribeStates(fullId);
+		return serials;
+	}
+
+	/**
+	 * Make sure the `battery.readSettings` button exists and is subscribed on each hybrid device,
+	 * so that pressing it reaches the device's state-change handler.
+	 *
+	 * @param serials - DTU serials of the station's hybrid devices.
+	 */
+	private async ensureBatteryControls(serials: string[]): Promise<void> {
+		for (const sn of serials) {
+			const fullId = `${sn}.battery.readSettings`;
+			if (this.hybridObjects.has(fullId)) {
+				continue;
+			}
+			await this.writeHybridState(sn, "battery.readSettings", false, 0x00);
+			this.adapter.subscribeStates(fullId);
+		}
 	}
 
 	/**
 	 * Read the battery working mode and its parameters from the device and write them to
-	 * `station-<id>.battery.*`. A read-only request, but one that travels down to the device —
-	 * hence once per adapter run plus on demand, never per poll.
+	 * `<dtuSerial>.battery.*` of the station's hybrid devices. A read-only request, but one that
+	 * travels down to the device — hence once per adapter run plus on demand, never per poll.
+	 * The button that asked for it is released afterwards, whatever the outcome.
 	 *
 	 * @param stationId - Cloud station id.
 	 */
 	async readBatterySettings(stationId: number): Promise<void> {
 		this.batterySettingsRead.add(stationId);
-		const deviceId = `station-${stationId}`;
+		const serials = this.hybridDevicesOf(stationId);
 		try {
 			const values = mapBatterySettings(await this.cloud.readBatterySettings(stationId));
 			if (values.length === 0) {
 				this.adapter.log.debug(`Battery settings of station ${stationId}: the device returned no mode`);
 				return;
 			}
-			for (const v of values) {
-				await this.writeStationState(deviceId, v.suffix, v.val);
+			for (const sn of serials) {
+				for (const v of values) {
+					await this.writeHybridState(sn, v.suffix, v.val, 0x00);
+				}
+				await this.writeHybridState(sn, "battery.settingsUpdated", Date.now(), 0x00);
 			}
-			await this.writeStationState(deviceId, "battery.settingsUpdated", Date.now());
 			this.adapter.log.debug(`Battery settings of station ${stationId} read`);
 		} catch (err) {
 			this.adapter.log.warn(`Reading the battery settings of station ${stationId} failed: ${errorMessage(err)}`);
+		} finally {
+			for (const sn of serials) {
+				await this.boundSetState(`${sn}.battery.readSettings`, false, true).catch(() => {});
+			}
 		}
-	}
-
-	/**
-	 * Handle a user write to a station state. The only writable one is the `battery.readSettings`
-	 * button, which triggers a read — nothing on a station can be controlled.
-	 *
-	 * @param stationId - Cloud station id.
-	 * @param stateId - State id below the station device.
-	 * @param state - The written state.
-	 */
-	async handleStationStateChange(stationId: number, stateId: string, state: ioBroker.State): Promise<void> {
-		if (stateId !== "battery.readSettings") {
-			this.adapter.log.warn(`station-${stationId}: "${stateId}" is read-only`);
-			return;
-		}
-		if (state.val) {
-			await this.readBatterySettings(stationId);
-		}
-		await this.boundSetState(`station-${stationId}.${stateId}`, false, true);
 	}
 
 	/**

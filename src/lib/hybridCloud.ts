@@ -188,8 +188,10 @@ const BATTERY_KEYS: Record<string, Mapping> = {
 	bms_vcl: num("battery.cellVoltageMin"),
 	bms_vmh: num("battery.moduleVoltageMax"),
 	bms_vml: num("battery.moduleVoltageMin"),
-	bms_echg: energy("battery.chargeToday"),
-	bms_edchg: energy("battery.dischargeToday"),
+	// Charged / discharged today: the plant's daily balance carries these (`grid.battery*Today`),
+	// and no value is kept twice.
+	bms_echg: [],
+	bms_edchg: [],
 	bms_cc: num("battery.cycles"),
 	bms_hs: [num("battery.heating"), { id: "battery.heatingText", kind: "fmtText" }],
 };
@@ -212,8 +214,8 @@ const BATTERY_PACK_KEYS: Record<string, Mapping> = {
 	bps_tcl: num("battery.cellTempMin"),
 	bps_vc: num("battery.chargeCutoffVoltage"),
 	bps_vd: num("battery.dischargeCutoffVoltage"),
-	bps_echg: energy("battery.chargeToday"),
-	bps_edchg: energy("battery.dischargeToday"),
+	bps_echg: [],
+	bps_edchg: [],
 	bps_cc: num("battery.cycles"),
 };
 
@@ -425,8 +427,6 @@ export interface StorageStationData {
 	load_power?: string | number;
 	/** Battery power, W. */
 	bms_power?: string | number;
-	/** Battery state of charge, %. */
-	bms_soc?: string | number;
 	/** 1 when the station has a battery. */
 	icon_bms?: number;
 	/** 1 when the station has a grid meter. */
@@ -452,8 +452,11 @@ export interface MappedStorageStation {
 	flow: Array<{ suffix: string; val: number }>;
 	/** Today's energy balance in kWh. */
 	energy: Array<{ suffix: string; val: number }>;
-	/** Slow-changing facts such as the battery working mode. */
-	info: Array<{ suffix: string; val: number }>;
+	/**
+	 * Facts about the battery that arrive with the station but belong to the battery — written
+	 * below the inverter's device (`<dtuSerial>.battery.*`), not below the station.
+	 */
+	battery: Array<{ suffix: string; val: number }>;
 }
 
 /**
@@ -472,30 +475,38 @@ export function mapStorageStationData(block: unknown): MappedStorageStation | nu
 	if (!hasBattery && rf.icon_grid !== 1) {
 		return null;
 	}
-	const result: MappedStorageStation = { flow: [], energy: [], info: [] };
+	const result: MappedStorageStation = { flow: [], energy: [], battery: [] };
 	const add = (list: MappedStorageStation["flow"], suffix: string, raw: unknown, scale = 1): void => {
 		const val = toNumber(raw as RealIndicator["val"]);
 		if (val !== null) {
 			list.push({ suffix, val: Math.round((val / scale) * 1000) / 1000 });
 		}
 	};
-	add(result.flow, "grid.gridPower", rf.grid_power);
+	// This block reports grid import as a NEGATIVE number, the realtime burst — which owns the same
+	// state while it streams — as a positive one. Measured on a storage plant with an empty battery
+	// at night (load 386 W, PV 0, battery 0, so 386 W had to come from the grid): `grid_power` was
+	// -386 here while the burst's `gp` read +326…+363 minutes earlier in the same situation. The state
+	// is documented as +import/−export, which is the burst's convention, so this value is turned
+	// round — otherwise its sign would flip whenever the writer changes.
+	const gridPower = toNumber(rf.grid_power);
+	if (gridPower !== null) {
+		result.flow.push({ suffix: "grid.gridPower", val: gridPower === 0 ? 0 : -gridPower });
+	}
 	add(result.flow, "grid.loadPower", rf.load_power);
 	if (hasBattery) {
 		add(result.flow, "grid.batteryPower", rf.bms_power);
-		add(result.flow, "battery.soc", rf.bms_soc);
 	}
 	add(result.energy, "grid.consumptionToday", rf.use_eq_total, 1000);
 	add(result.energy, "grid.gridImportToday", rf.efg_total, 1000);
 	add(result.energy, "grid.gridExportToday", rf.e2g_total, 1000);
 	if (hasBattery) {
-		add(result.energy, "battery.chargeToday", rf.e2b_total, 1000);
-		add(result.energy, "battery.dischargeToday", rf.efb_total, 1000);
+		add(result.energy, "grid.batteryChargeToday", rf.e2b_total, 1000);
+		add(result.energy, "grid.batteryDischargeToday", rf.efb_total, 1000);
 		// Delivered passively with every station poll — reading the mode this way sends nothing to
 		// the device, unlike the portal's settings dialog.
 		const workMode = toNumber(rf.work_mode);
 		if (workMode !== null && workMode >= 1000) {
-			result.info.push({ suffix: "battery.workMode", val: Math.floor(workMode / 1000) });
+			result.battery.push({ suffix: "battery.workMode", val: Math.floor(workMode / 1000) });
 		}
 	}
 	return result;
@@ -513,7 +524,7 @@ export interface BatterySettingsResult {
 }
 
 /**
- * Translate a battery settings read into station states. Only what is unambiguous becomes a state
+ * Translate a battery settings read into `<dtuSerial>.battery.*` states. Only what is unambiguous becomes a state
  * of its own: the active mode and its reserved state of charge (the portal labels it "Reserved SOC,
  * %"). The other per-mode parameters (`max_power`, `max_soc`, time windows, tariffs) carry no unit
  * and differ by mode, so they are passed on untouched as JSON rather than given a guessed meaning.

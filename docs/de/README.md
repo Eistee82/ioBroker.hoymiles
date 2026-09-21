@@ -42,10 +42,10 @@ Dieser Adapter ist für **Hoymiles HMS Mikrowechselrichter mit integrierter WiFi
 
 Ein Hoymiles-**Hybrid-Wechselrichter** im S-Miles-Konto — Referenzanlage: **HAT-6.0HV-EUG1** mit Batterie **HB-(10-23)S-G2**, dreiphasigem Netzzähler und DTS-WIFI-G1 — wird **über die Cloud** ausgelesen: dreiphasige AC-Werte, Notstrom-Ausgang (EPS), PV-Eingänge, die Batterie im Detail (Lade- und Gesundheitszustand, Zell- und Modul-Extremwerte), dazu Energiefluss und Tages-Energiebilanz der Anlage. Die States stehen unter [Hybrid-Wechselrichter](#dtuserial--hybrid-wechselrichter-mit-batterie-hat-serie-cloud-dynamisch). Auch die **Messpunkte** der Anlage — Netzzähler, Verbraucher, ein PV-Zähler an einem Fremd-Wechselrichter, ein Generator — werden gelesen und erscheinen unterhalb der Station; siehe [Messpunkte der Anlage](#station-id--messpunkte-netzzähler-verbraucher-pv-zähler-generator-cloud-dynamisch). Das funktioniert für jede Anlage, für die die Cloud sie meldet, nicht nur für Hybrid-Wechselrichter.
 
-- **Lesen, nicht steuern.** Betriebsmodus und Batterie-Einstellungen werden angezeigt (`station-<id>.battery.*`), lassen sich aber nicht ändern — der Adapter hat keinen Datenpunkt, der die Arbeitsweise des Speichersystems verändert. Das Auslesen des Netzprofils, ein für Mikro-Wechselrichter gebauter Befehl, wird an einen Hybrid-Wechselrichter nicht gesendet.
+- **Lesen, nicht steuern.** Betriebsmodus und Batterie-Einstellungen werden angezeigt (`<dtuSerial>.battery.*`), lassen sich aber nicht ändern — der Adapter hat keinen Datenpunkt, der die Arbeitsweise des Speichersystems verändert. Das Auslesen des Netzprofils, ein für Mikro-Wechselrichter gebauter Befehl, wird an einen Hybrid-Wechselrichter nicht gesendet.
 - **Die drei bestehenden Befehle arbeiten so, wie das S-Miles-Portal sie sendet.** Die Gerätewartung des Portals bietet für einen HAT-Wechselrichter genau *Einschalten*, *Abschaltung* und *Neustart* an, für seine DTU einen *Neustart* — das sind `inverter.active`, `inverter.reboot` und `dtu.reboot` des Adapters. Bei einer Speicheranlage gehen sie mit dem Gerätetyp des Wechselrichters und der Speicher-Variante des DTU-Neustarts hinaus, genau wie im Portal. Sie wurden gegen den Code des Portals geprüft, aber **nicht an echter Hardware ausgeführt** — das Abschalten eines Speicher-Wechselrichters nimmt auch den Notstrom-Ausgang vom Netz, also bewusst einsetzen.
 - **Benötigt ein Installateur-Konto** (eines, das sich auf global.hoymiles.com anmelden kann). Für die S-Miles-Home-API ist der zugehörige Endpunkt nicht bekannt.
-- **Aktualisierungsrate:** Die Gerätewerte folgen dem Upload des Wechselrichters in die Cloud (etwa alle 5 Minuten); der Energiefluss der Anlage kommt über den schnellen Echtzeitkanal (an der Referenzanlage etwa alle 10 s).
+- **Aktualisierungsrate:** Der schnelle Echtzeitkanal funktioniert auch bei einer Speicheranlage, auch im reinen Cloud-Betrieb: PV-, Netz-, Last- und Batterieleistung (`station-<id>.grid.*`) sowie der Ladezustand der Batterie (`<dtuSerial>.battery.soc`) kommen etwa alle 10 s — an der Referenzanlage gemessen liefert das Gerät wirklich in diesem Takt, schnelleres Abfragen bringt nichts Neueres. Anders als bei Mikro-Wechselrichtern hat der Kanal für eine Speicheranlage keinen Geräte-Modus; alles Übrige (Phasen, EPS, PV-Eingänge, Batterie-Details, Zähler) folgt deshalb dem normalen Upload des Geräts in die Cloud, etwa alle 5 Minuten.
 - **Vorzeichen werden so durchgereicht, wie die Cloud sie liefert.** An der Referenzanlage war die Batterieleistung positiv, während die Batterie entladen wurde.
 - Gebaut anhand einer einzigen Anlage und ohne Zugriff auf die Hardware — Rückmeldungen sind willkommen.
 
@@ -380,6 +380,8 @@ Die Anzahl ermittelt der Adapter in dieser Reihenfolge:
 | `grid.consumptionToday` | number | kWh | Verbrauch heute — nur bei Anlagen mit Batterie oder Netzzähler |
 | `grid.gridImportToday` | number | kWh | Heute aus dem Netz bezogene Energie — nur bei Anlagen mit Batterie oder Netzzähler |
 | `grid.gridExportToday` | number | kWh | Heute ins Netz eingespeiste Energie — nur bei Anlagen mit Batterie oder Netzzähler |
+| `grid.batteryChargeToday` | number | kWh | Heute in die Batterie geladene Energie — nur bei Batteriesystemen |
+| `grid.batteryDischargeToday` | number | kWh | Heute aus der Batterie entladene Energie — nur bei Batteriesystemen |
 | `grid.monthEnergy` | number | kWh | Monatsenergie |
 | `grid.yearEnergy` | number | kWh | Jahresenergie |
 | `grid.totalEnergy` | number | kWh | Gesamtenergie |
@@ -660,7 +662,7 @@ Datenpunkte nie.
 
 ### `<dtuSerial>.*` — Hybrid-Wechselrichter mit Batterie (HAT-Serie, Cloud, dynamisch)
 
-Wird nur angelegt, wenn die Cloud unter der DTU einen Hybrid-Wechselrichter meldet; alle States sind nur lesbar und kommen aus der Cloud. Die Summenwerte des Wechselrichters nutzen die States, die jedes Gerät hat: `grid.power` (kombinierte Wirkleistung), `grid.frequency`, `inverter.temperature` (interne Umgebungstemperatur), `inverter.model` / `serialNumber` / `swVersion` sowie `pv0.*` / `pv1.*` (`power`, `voltage`, `current` und `dailyEnergy`, wenn die Cloud es liefert) für die PV-Eingänge. `battery.*` entsteht, sobald unter dem Wechselrichter eine Batterie hängt. Mit ⁺ markierte Zeilen gehören zum Wortschatz der Cloud für diese Geräte, wurden von der Referenzanlage aber nicht geliefert — sie erscheinen nur, wenn das eigene Gerät sie meldet.
+Wird nur angelegt, wenn die Cloud unter der DTU einen Hybrid-Wechselrichter meldet; alle States sind nur lesbar und kommen aus der Cloud. Die Summenwerte des Wechselrichters nutzen die States, die jedes Gerät hat: `grid.power` (kombinierte Wirkleistung), `grid.frequency`, `inverter.temperature` (interne Umgebungstemperatur), `inverter.model` / `serialNumber` / `swVersion` sowie `pv0.*` / `pv1.*` (`power`, `voltage`, `current` und `dailyEnergy`, wenn die Cloud es liefert) für die PV-Eingänge. `battery.*` entsteht, sobald unter dem Wechselrichter eine Batterie hängt — es ist der eine Ort für alles zur Batterie; bei der Station stehen nur Energiefluss und Tagesbilanz der Anlage (`grid.batteryPower`, `grid.batteryChargeToday`, `grid.batteryDischargeToday`). Mit ⁺ markierte Zeilen gehören zum Wortschatz der Cloud für diese Geräte, wurden von der Referenzanlage aber nicht geliefert — sie erscheinen nur, wenn das eigene Gerät sie meldet.
 
 | Datenpunkt | Typ | Einheit | Beschreibung |
 |------------|-----|---------|--------------|
@@ -683,15 +685,19 @@ Wird nur angelegt, wenn die Cloud unter der DTU einen Hybrid-Wechselrichter meld
 | `battery.capacity` | number | kWh | Installierte Batteriekapazität |
 | `battery.connected` | boolean | — | Batterie laut Cloud online |
 | `battery.type` | string | — | Batterietyp im Wortlaut der Cloud (z. B. `Li-Ion`) |
-| `battery.soc` | number | % | Ladezustand |
+| `battery.soc` | number | % | Ladezustand — etwa alle 10 s über den schnellen Echtzeitkanal, sonst zusammen mit den übrigen Batteriewerten |
 | `battery.soh` | number | % | Gesundheitszustand |
 | `battery.state` | number | — | Batteriestatus als Zahl (beobachtet: 2 = Entladen) |
 | `battery.stateText` | string | — | Batteriestatus im Wortlaut der Cloud |
 | `battery.faultCode` | string | — | Fehlercode der Batterie (`0` = keiner) |
 | `battery.voltage` / `current` / `power` | number | V / A / W | Messwerte aus dem Batteriemanagementsystem |
-| `battery.chargeToday` / `dischargeToday` ⁺ | number | kWh | Heute geladene / entladene Energie |
 | `battery.cycles` ⁺ | number | — | Ladezyklen |
 | `battery.heating` / `heatingText` ⁺ | number / string | — | Heizstatus der Batterie, als Zahl und im Wortlaut der Cloud |
+| `battery.workMode` | number | — | Betriebsmodus: 1 = Selbstverbrauch, 2 = Sparmodus, 3 = Backup, 4 = netzunabhängig, 5 = erzwungenes Laden, 6 = erzwungenes Entladen, 7 = Spitzendeckung, 8 = Nutzungszeit. Kommt mit der normalen Stationsabfrage — dafür wird nichts an das Gerät gesendet |
+| `battery.readSettings` | boolean (Button) | — | Liest die Batterie-Einstellungen vom Gerät. **Liest nur** — die Anfrage geht aber bis zum Gerät hinunter und dauert einige Sekunden; sie läuft deshalb einmal pro Adapterstart und danach nur auf Knopfdruck |
+| `battery.reserveSoc` | number | % | Reservierter Ladezustand des aktiven Betriebsmodus (aus dem Einstellungs-Abruf) |
+| `battery.settingsJson` | string (JSON) | — | Die kompletten Einstellungen, wie das Gerät sie meldet: aktiver Modus plus die Parameter aller Modi (`k_1`…`k_8`: Reserve-SoC, Leistungsgrenzen, Zeitfenster, Tarife). Unverändert durchgereicht — die Parameter tragen keine Einheiten und unterscheiden sich je Modus |
+| `battery.settingsUpdated` | number | — | Zeitpunkt des letzten Einstellungs-Abrufs |
 | `battery.maxChargeCurrent` / `maxDischargeCurrent` | number | A | Stromgrenzen, die die Batterie zulässt |
 | `battery.chargeCutoffVoltage` / `dischargeCutoffVoltage` | number | V | Spannungsgrenzen der Batterie |
 | `battery.cellTempMax` / `cellTempMin` | number | °C | Wärmste / kälteste Zelle |
@@ -699,21 +705,6 @@ Wird nur angelegt, wenn die Cloud unter der DTU einen Hybrid-Wechselrichter meld
 | `battery.cellVoltageMax` / `cellVoltageMin` | number | V | Höchste / niedrigste Zellspannung |
 | `battery.moduleVoltageMax` / `moduleVoltageMin` | number | V | Höchste / niedrigste Modulspannung |
 | `battery.inverterVoltage` / `inverterCurrent` / `inverterPower` | number | V / A / W | Dieselbe Batterie, wie der Wechselrichter sie an seinen Klemmen misst |
-
-### `station-<id>.battery.*` — Anlagenbatterie (Cloud, dynamisch)
-
-Existiert nur bei Anlagen mit Batterie. Das ist die Sicht der Anlage auf ihren Speicher — Ladezustand, Tagesbilanz, Betriebsmodus und Einstellungen. (Die aktuelle Batterie*leistung* steht beim übrigen Energiefluss in `grid.batteryPower`; die Messwerte der Batterie selbst — Zellspannungen, Temperaturen, Gesundheitszustand — stehen unter dem Gerät des Wechselrichters, siehe [Hybrid-Wechselrichter](#dtuserial--hybrid-wechselrichter-mit-batterie-hat-serie-cloud-dynamisch).) Benötigt ein Installateur-Konto.
-
-| Datenpunkt | Typ | Einheit | Beschreibung |
-|------------|-----|---------|--------------|
-| `battery.soc` | number | % | Ladezustand der Anlagenbatterie (live, zusammen mit dem Energiefluss) |
-| `battery.capacity` | number | kWh | Installierte Batteriekapazität |
-| `battery.chargeToday` / `dischargeToday` | number | kWh | Heute in die Batterie geladene / aus ihr entladene Energie |
-| `battery.workMode` | number | — | Betriebsmodus: 1 = Selbstverbrauch, 2 = Sparmodus, 3 = Backup, 4 = netzunabhängig, 5 = erzwungenes Laden, 6 = erzwungenes Entladen, 7 = Spitzendeckung, 8 = Nutzungszeit. Kommt mit der normalen Stationsabfrage — dafür wird nichts an das Gerät gesendet |
-| `battery.readSettings` | boolean (Button) | — | Liest die Batterie-Einstellungen vom Gerät. **Liest nur** — die Anfrage geht aber bis zum Gerät hinunter und dauert einige Sekunden; sie läuft deshalb einmal pro Adapterstart und danach nur auf Knopfdruck |
-| `battery.reserveSoc` | number | % | Reservierter Ladezustand des aktiven Betriebsmodus (aus dem Einstellungs-Abruf) |
-| `battery.settingsJson` | string (JSON) | — | Die kompletten Einstellungen, wie das Gerät sie meldet: aktiver Modus plus die Parameter aller Modi (`k_1`…`k_8`: Reserve-SoC, Leistungsgrenzen, Zeitfenster, Tarife). Unverändert durchgereicht — die Parameter tragen keine Einheiten und unterscheiden sich je Modus |
-| `battery.settingsUpdated` | number | — | Zeitpunkt des letzten Einstellungs-Abrufs |
 
 ### `station-<id>.*` — Messpunkte: Netzzähler, Verbraucher, PV-Zähler, Generator (Cloud, dynamisch)
 

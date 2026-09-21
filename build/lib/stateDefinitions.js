@@ -144,15 +144,41 @@ export const hybridStates = [
     n("inverter.batteryHeatsinkTemperature", "Battery-stage heatsink temperature", "Kühlkörpertemperatur der Batteriestufe", "value.temperature", "°C", { source: "cloud" }),
     s("inverter.powerFaultCode", "Power fault code", "Fehlercode Leistungsteil", "text", { source: "cloud" }),
     s("inverter.safetyFaultCode", "Safety fault code", "Fehlercode Sicherheitsteil", "text", { source: "cloud" }),
-    n("battery.chargeToday", "Charged today", "Heute geladen", "value.energy", "kWh", { source: "cloud" }),
-    n("battery.dischargeToday", "Discharged today", "Heute entladen", "value.energy", "kWh", { source: "cloud" }),
     n("battery.cycles", "Charge cycles", "Ladezyklen", "value", "", { source: "cloud" }),
     n("battery.heating", "Heating status", "Heizstatus", "value", "", { source: "cloud" }),
     s("battery.heatingText", "Heating status (text)", "Heizstatus (Text)", "text", { source: "cloud" }),
 ];
+export const batterySettingStates = [
+    n("battery.workMode", "Working mode", "Betriebsmodus", "value", "", {
+        source: "cloud",
+        states: {
+            1: "Self-consumption",
+            2: "Economy",
+            3: "Backup",
+            4: "Off-grid",
+            5: "Forced charging",
+            6: "Forced discharging",
+            7: "Peak shaving",
+            8: "Time of use",
+        },
+    }),
+    n("battery.reserveSoc", "Reserved state of charge", "Reservierter Ladezustand", "value", "%", {
+        source: "cloud",
+    }),
+    s("battery.settingsJson", "Battery settings (JSON)", "Batterie-Einstellungen (JSON)", "json", {
+        source: "cloud",
+    }),
+    n("battery.settingsUpdated", "Settings last read", "Einstellungen zuletzt gelesen", "value.time", "", {
+        source: "cloud",
+    }),
+    b("battery.readSettings", "Read battery settings", "Batterie-Einstellungen lesen", "button", {
+        source: "cloud",
+        write: true,
+    }),
+];
+hybridStates.push(...batterySettingStates);
 export const hybridStateMap = new Map(hybridStates.map(d => [d.id, d]));
 export const stationIndicatorChannels = [
-    { id: "battery", name: { en: "Battery", de: "Batterie" }, source: "cloud" },
     { id: "gridMeter", name: { en: "Grid meter", de: "Netzzähler" }, source: "cloud" },
     { id: "load", name: { en: "Loads", de: "Verbraucher" }, source: "cloud" },
     {
@@ -184,36 +210,6 @@ const acStates = (ch, withCurrent) => [
     ]),
 ];
 export const stationIndicatorStates = [
-    n("battery.soc", "State of charge", "Ladezustand", "value.battery", "%", { source: "cloud" }),
-    n("battery.capacity", "Installed capacity", "Installierte Kapazität", "value", "kWh", { source: "cloud" }),
-    n("battery.chargeToday", "Charged today", "Heute geladen", "value.energy", "kWh", { source: "cloud" }),
-    n("battery.dischargeToday", "Discharged today", "Heute entladen", "value.energy", "kWh", { source: "cloud" }),
-    n("battery.workMode", "Working mode", "Betriebsmodus", "value", "", {
-        source: "cloud",
-        states: {
-            1: "Self-consumption",
-            2: "Economy",
-            3: "Backup",
-            4: "Off-grid",
-            5: "Forced charging",
-            6: "Forced discharging",
-            7: "Peak shaving",
-            8: "Time of use",
-        },
-    }),
-    n("battery.reserveSoc", "Reserved state of charge", "Reservierter Ladezustand", "value", "%", {
-        source: "cloud",
-    }),
-    s("battery.settingsJson", "Battery settings (JSON)", "Batterie-Einstellungen (JSON)", "json", {
-        source: "cloud",
-    }),
-    n("battery.settingsUpdated", "Settings last read", "Einstellungen zuletzt gelesen", "value.time", "", {
-        source: "cloud",
-    }),
-    b("battery.readSettings", "Read battery settings", "Batterie-Einstellungen lesen", "button", {
-        source: "cloud",
-        write: true,
-    }),
     b("gridMeter.connected", "Grid meter online", "Netzzähler online", "indicator.connected", { source: "cloud" }),
     ...acStates("gridMeter", true),
     n("gridMeter.powerFactor", "Total power factor", "Gesamt-Leistungsfaktor", "value", "", { source: "cloud" }),
@@ -409,6 +405,8 @@ const stationStates = [
     n("grid.consumptionToday", "Consumption today", "Verbrauch heute", "value.energy", "kWh"),
     n("grid.gridImportToday", "Grid import today", "Netzbezug heute", "value.energy", "kWh"),
     n("grid.gridExportToday", "Grid export today", "Netzeinspeisung heute", "value.energy", "kWh"),
+    n("grid.batteryChargeToday", "Battery charged today", "Batterieladung heute", "value.energy", "kWh"),
+    n("grid.batteryDischargeToday", "Battery discharged today", "Batterieentladung heute", "value.energy", "kWh"),
     n("grid.dailyEnergy", "Daily energy", "Tagesenergie", "value.energy", "kWh"),
     n("grid.monthEnergy", "Month energy", "Monatsenergie", "value.energy", "kWh"),
     n("grid.yearEnergy", "Year energy", "Jahresenergie", "value.energy", "kWh"),

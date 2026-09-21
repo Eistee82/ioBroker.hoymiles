@@ -42,10 +42,10 @@ This adapter is designed for **Hoymiles HMS microinverters with an integrated Wi
 
 A Hoymiles **hybrid inverter** in your S-Miles account — reference system: **HAT-6.0HV-EUG1** with a **HB-(10-23)S-G2** battery, a three-phase grid meter and a DTS-WIFI-G1 — is read out **through the cloud**: three-phase AC values, backup (EPS) output, PV inputs, the battery in detail (state of charge and health, cell and module extremes), plus the plant's power flow and daily energy balance. See [Hybrid Inverter](#dtuserial--hybrid-inverter-with-battery-hat-series-cloud-dynamic) for the states. The plant's **measuring points** — grid meter, loads, a PV meter on a third-party inverter, a generator — are read as well and appear below the station; see [Station Measuring Points](#station-id--measuring-points-grid-meter-loads-pv-meter-generator-cloud-dynamic). These work for any plant the cloud reports them for, not just for hybrid inverters.
 
-- **Reading, not controlling.** Working mode and battery settings are shown (`station-<id>.battery.*`), but cannot be changed — the adapter has no state that would alter how the storage system operates. The grid-profile read, a command built for microinverters, is not sent to a hybrid inverter.
+- **Reading, not controlling.** Working mode and battery settings are shown (`<dtuSerial>.battery.*`), but cannot be changed — the adapter has no state that would alter how the storage system operates. The grid-profile read, a command built for microinverters, is not sent to a hybrid inverter.
 - **The three existing commands work the way the S-Miles portal sends them.** The portal's device maintenance offers exactly *power on*, *shut down* and *reboot* for a HAT inverter, and a *reboot* for its DTU — these are the adapter's `inverter.active`, `inverter.reboot` and `dtu.reboot`. For a storage plant they go out with the inverter's own device type and the storage variant of the DTU reboot, as the portal does. They were verified against the portal's code, **not executed on real hardware** — shutting down a storage inverter also takes its backup output offline, so use them deliberately.
 - **Needs an installer-type account** (one that can log in at global.hoymiles.com). The endpoint behind it is not known for the S-Miles Home API.
-- **Update rate:** the per-device values follow the inverter's upload to the cloud (about every 5 minutes); the plant's power flow comes from the fast realtime channel (about every 10 s on the reference system).
+- **Update rate:** the fast realtime channel works for a storage plant as well, also in a cloud-only setup: PV, grid, load and battery power (`station-<id>.grid.*`) and the battery's state of charge (`<dtuSerial>.battery.soc`) arrive about every 10 s — measured on the reference system, that is how often the device really delivers, polling faster brings nothing newer. Unlike for microinverters the channel has no per-device mode for a storage plant, so everything else (phases, EPS, PV inputs, battery details, meters) follows the device's regular upload to the cloud, about every 5 minutes.
 - **Signs are passed through as the cloud delivers them.** On the reference system the battery power was positive while the battery discharged.
 - Built against a single system without access to the hardware — please report what you see.
 
@@ -377,6 +377,8 @@ The adapter determines how many there are, in this order:
 | `grid.consumptionToday` | number | kWh | Today's consumption — plants with battery or grid meter only |
 | `grid.gridImportToday` | number | kWh | Energy drawn from the grid today — plants with battery or grid meter only |
 | `grid.gridExportToday` | number | kWh | Energy fed into the grid today — plants with battery or grid meter only |
+| `grid.batteryChargeToday` | number | kWh | Energy charged into the battery today — battery systems only |
+| `grid.batteryDischargeToday` | number | kWh | Energy discharged from the battery today — battery systems only |
 | `grid.monthEnergy` | number | kWh | Monthly energy |
 | `grid.yearEnergy` | number | kWh | Yearly energy |
 | `grid.totalEnergy` | number | kWh | Total lifetime energy |
@@ -655,7 +657,7 @@ series has neither a meter input nor a regulation for it, so these states never 
 
 ### `<dtuSerial>.*` — Hybrid Inverter with Battery (HAT series, cloud, dynamic)
 
-Created only when the cloud reports a hybrid inverter below the DTU; all of them are read-only and come from the cloud. The inverter's totals use the states every device has: `grid.power` (combined active power), `grid.frequency`, `inverter.temperature` (internal ambient temperature), `inverter.model` / `serialNumber` / `swVersion`, and `pv0.*` / `pv1.*` (`power`, `voltage`, `current`, and `dailyEnergy` when the cloud delivers it) for the PV inputs. `battery.*` exists once a battery hangs below the inverter. Rows marked ⁺ are part of the cloud's vocabulary for these devices but were not delivered by the reference system — they appear only if your device reports them.
+Created only when the cloud reports a hybrid inverter below the DTU; all of them are read-only and come from the cloud. The inverter's totals use the states every device has: `grid.power` (combined active power), `grid.frequency`, `inverter.temperature` (internal ambient temperature), `inverter.model` / `serialNumber` / `swVersion`, and `pv0.*` / `pv1.*` (`power`, `voltage`, `current`, and `dailyEnergy` when the cloud delivers it) for the PV inputs. `battery.*` exists once a battery hangs below the inverter — it is the one place for everything about the battery; the station only carries the plant's power flow and daily balance (`grid.batteryPower`, `grid.batteryChargeToday`, `grid.batteryDischargeToday`). Rows marked ⁺ are part of the cloud's vocabulary for these devices but were not delivered by the reference system — they appear only if your device reports them.
 
 | State | Type | Unit | Description |
 |-------|------|------|-------------|
@@ -678,15 +680,19 @@ Created only when the cloud reports a hybrid inverter below the DTU; all of them
 | `battery.capacity` | number | kWh | Installed battery capacity |
 | `battery.connected` | boolean | — | Battery reported online by the cloud |
 | `battery.type` | string | — | Battery chemistry as the cloud words it (e.g. `Li-Ion`) |
-| `battery.soc` | number | % | State of charge |
+| `battery.soc` | number | % | State of charge — about every 10 s through the fast realtime channel, otherwise with the battery's regular values |
 | `battery.soh` | number | % | State of health |
 | `battery.state` | number | — | Battery state as a number (2 = discharging was observed) |
 | `battery.stateText` | string | — | Battery state as the cloud words it |
 | `battery.faultCode` | string | — | Battery fault code (`0` = none) |
 | `battery.voltage` / `current` / `power` | number | V / A / W | Battery measurements from the battery management system |
-| `battery.chargeToday` / `dischargeToday` ⁺ | number | kWh | Energy charged / discharged today |
 | `battery.cycles` ⁺ | number | — | Charge cycles |
 | `battery.heating` / `heatingText` ⁺ | number / string | — | Battery heating status, as a number and as the cloud words it |
+| `battery.workMode` | number | — | Working mode: 1 = self-consumption, 2 = economy, 3 = backup, 4 = off-grid, 5 = forced charging, 6 = forced discharging, 7 = peak shaving, 8 = time of use. Arrives with the regular station poll — nothing is sent to the device for it |
+| `battery.readSettings` | boolean (button) | — | Reads the battery settings from the device. **Reads only** — but the request travels down to the device and takes a few seconds, so it runs once per adapter start and then only when you press this button |
+| `battery.reserveSoc` | number | % | Reserved state of charge of the active working mode (from the settings read) |
+| `battery.settingsJson` | string (JSON) | — | The complete settings as the device reports them: active mode plus the parameters of every mode (`k_1`…`k_8`: reserve SoC, power limits, time windows, tariffs). Passed on untouched — the parameters carry no units and differ by mode |
+| `battery.settingsUpdated` | number | — | When the settings were last read |
 | `battery.maxChargeCurrent` / `maxDischargeCurrent` | number | A | Current limits the battery allows |
 | `battery.chargeCutoffVoltage` / `dischargeCutoffVoltage` | number | V | Voltage limits of the battery |
 | `battery.cellTempMax` / `cellTempMin` | number | °C | Hottest / coldest cell |
@@ -694,21 +700,6 @@ Created only when the cloud reports a hybrid inverter below the DTU; all of them
 | `battery.cellVoltageMax` / `cellVoltageMin` | number | V | Highest / lowest cell voltage |
 | `battery.moduleVoltageMax` / `moduleVoltageMin` | number | V | Highest / lowest module voltage |
 | `battery.inverterVoltage` / `inverterCurrent` / `inverterPower` | number | V / A / W | The same battery as the inverter measures it at its own terminals |
-
-### `station-<id>.battery.*` — Plant Battery (cloud, dynamic)
-
-Exists only for plants with a battery. This is the plant's view of its storage — state of charge, the day's balance, working mode and settings. (The live battery *power* sits with the rest of the power flow in `grid.batteryPower`; the battery's own measurements — cell voltages, temperatures, state of health — are below the inverter's device, see [Hybrid Inverter](#dtuserial--hybrid-inverter-with-battery-hat-series-cloud-dynamic).) Needs an installer-type account.
-
-| State | Type | Unit | Description |
-|-------|------|------|-------------|
-| `battery.soc` | number | % | State of charge of the plant's battery (live, with the power flow) |
-| `battery.capacity` | number | kWh | Installed battery capacity |
-| `battery.chargeToday` / `dischargeToday` | number | kWh | Energy charged into / discharged from the battery today |
-| `battery.workMode` | number | — | Working mode: 1 = self-consumption, 2 = economy, 3 = backup, 4 = off-grid, 5 = forced charging, 6 = forced discharging, 7 = peak shaving, 8 = time of use. Arrives with the regular station poll — nothing is sent to the device for it |
-| `battery.readSettings` | boolean (button) | — | Reads the battery settings from the device. **Reads only** — but the request travels down to the device and takes a few seconds, so it runs once per adapter start and then only when you press this button |
-| `battery.reserveSoc` | number | % | Reserved state of charge of the active working mode (from the settings read) |
-| `battery.settingsJson` | string (JSON) | — | The complete settings as the device reports them: active mode plus the parameters of every mode (`k_1`…`k_8`: reserve SoC, power limits, time windows, tariffs). Passed on untouched — the parameters carry no units and differ by mode |
-| `battery.settingsUpdated` | number | — | When the settings were last read |
 
 ### `station-<id>.*` — Measuring Points: Grid Meter, Loads, PV Meter, Generator (cloud, dynamic)
 

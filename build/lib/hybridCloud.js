@@ -87,8 +87,8 @@ const BATTERY_KEYS = {
     bms_vcl: num("battery.cellVoltageMin"),
     bms_vmh: num("battery.moduleVoltageMax"),
     bms_vml: num("battery.moduleVoltageMin"),
-    bms_echg: energy("battery.chargeToday"),
-    bms_edchg: energy("battery.dischargeToday"),
+    bms_echg: [],
+    bms_edchg: [],
     bms_cc: num("battery.cycles"),
     bms_hs: [num("battery.heating"), { id: "battery.heatingText", kind: "fmtText" }],
 };
@@ -109,8 +109,8 @@ const BATTERY_PACK_KEYS = {
     bps_tcl: num("battery.cellTempMin"),
     bps_vc: num("battery.chargeCutoffVoltage"),
     bps_vd: num("battery.dischargeCutoffVoltage"),
-    bps_echg: energy("battery.chargeToday"),
-    bps_edchg: energy("battery.dischargeToday"),
+    bps_echg: [],
+    bps_edchg: [],
     bps_cc: num("battery.cycles"),
 };
 const meteredSource = (ch, stateKey, stateMapping) => {
@@ -276,28 +276,30 @@ export function mapStorageStationData(block) {
     if (!hasBattery && rf.icon_grid !== 1) {
         return null;
     }
-    const result = { flow: [], energy: [], info: [] };
+    const result = { flow: [], energy: [], battery: [] };
     const add = (list, suffix, raw, scale = 1) => {
         const val = toNumber(raw);
         if (val !== null) {
             list.push({ suffix, val: Math.round((val / scale) * 1000) / 1000 });
         }
     };
-    add(result.flow, "grid.gridPower", rf.grid_power);
+    const gridPower = toNumber(rf.grid_power);
+    if (gridPower !== null) {
+        result.flow.push({ suffix: "grid.gridPower", val: gridPower === 0 ? 0 : -gridPower });
+    }
     add(result.flow, "grid.loadPower", rf.load_power);
     if (hasBattery) {
         add(result.flow, "grid.batteryPower", rf.bms_power);
-        add(result.flow, "battery.soc", rf.bms_soc);
     }
     add(result.energy, "grid.consumptionToday", rf.use_eq_total, 1000);
     add(result.energy, "grid.gridImportToday", rf.efg_total, 1000);
     add(result.energy, "grid.gridExportToday", rf.e2g_total, 1000);
     if (hasBattery) {
-        add(result.energy, "battery.chargeToday", rf.e2b_total, 1000);
-        add(result.energy, "battery.dischargeToday", rf.efb_total, 1000);
+        add(result.energy, "grid.batteryChargeToday", rf.e2b_total, 1000);
+        add(result.energy, "grid.batteryDischargeToday", rf.efb_total, 1000);
         const workMode = toNumber(rf.work_mode);
         if (workMode !== null && workMode >= 1000) {
-            result.info.push({ suffix: "battery.workMode", val: Math.floor(workMode / 1000) });
+            result.battery.push({ suffix: "battery.workMode", val: Math.floor(workMode / 1000) });
         }
     }
     return result;

@@ -92,8 +92,8 @@ class CloudManager {
     get hasToken() {
         return !!this.cloud.token;
     }
-    async handleStationStateChange(stationId, stateId, state) {
-        await this.cloudPoller?.handleStationStateChange(stationId, stateId, state);
+    async readBatterySettings(stationId) {
+        await this.cloudPoller?.readBatterySettings(stationId);
     }
     async sendDeviceCommand(devSn, dtuSn, action, devType) {
         await this.cloud.sendDeviceCommand(action, devSn, dtuSn, devType);

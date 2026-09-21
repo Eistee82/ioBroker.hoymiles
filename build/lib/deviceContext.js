@@ -1566,6 +1566,15 @@ class DeviceContext {
             await this.handleShellyStateChange(stateId, state);
             return;
         }
+        if (stateId === "battery.readSettings") {
+            if (state.val && this.cloudStationId != null) {
+                await this.adapter.readBatterySettings(this.cloudStationId);
+            }
+            else {
+                await this.setState(stateId, false, true);
+            }
+            return;
+        }
         if (this.connection?.connected) {
             await executeCommand(stateId, state, {
                 connection: this.connection,

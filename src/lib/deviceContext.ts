@@ -80,6 +80,8 @@ export interface HoymilesAdapter extends ioBroker.Adapter {
 	updateConnectionState(): Promise<void>;
 	/** Steuerbefehl über die Cloud senden (für Geräte ohne lokale Verbindung). */
 	sendCloudDeviceCommand(devSn: string, dtuSn: string, action: number, devType?: number): Promise<void>;
+	/** Batterie-Einstellungen einer Speicheranlage vom Gerät lesen (nur lesend). */
+	readBatterySettings(stationId: number): Promise<void>;
 }
 
 interface DeviceContextOptions {
@@ -2521,6 +2523,16 @@ class DeviceContext {
 		// meter the DTU should talk to — so they are handled before the command table.
 		if (stateId === "meter.mode" || stateId === "meter.deviceId") {
 			await this.handleShellyStateChange(stateId, state);
+			return;
+		}
+		// Not a command either: the button asks the cloud to read the battery settings. It changes
+		// nothing on the device, and the poller releases it again once the read is through.
+		if (stateId === "battery.readSettings") {
+			if (state.val && this.cloudStationId != null) {
+				await this.adapter.readBatterySettings(this.cloudStationId);
+			} else {
+				await this.setState(stateId, false, true);
+			}
 			return;
 		}
 		// Local link takes precedence: a locally-connected DTU is actuated directly over TCP.

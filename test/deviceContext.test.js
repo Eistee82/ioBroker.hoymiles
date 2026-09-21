@@ -3164,13 +3164,20 @@ describe("deviceContext – handleStateChange", function () {
 		assert.ok(warnMsg.includes("not connected"), "Should warn when connection.connected is false");
 	});
 
-	/** Cloud-fallback fixture: no local link, cloud enabled, records sendCloudDeviceCommand args. */
-	function makeCloudFallbackCtx() {
+	/**
+	 * Cloud-fallback fixture: no local link, cloud enabled, records sendCloudDeviceCommand args.
+	 *
+	 * @param overrides - Adapter fields to override (e.g. `readBatterySettings`).
+	 */
+	function makeCloudFallbackCtx(overrides = {}) {
 		const cloudCalls = [];
+		const stateWrites = [];
 		let warnMsg = "";
 		const adapter = {
 			log: { info: () => {}, warn: msg => (warnMsg = msg), debug: () => {}, error: () => {} },
-			setStateAsync: async () => {},
+			setStateAsync: async (id, val, ack) => {
+				stateWrites.push([id, val, ack]);
+			},
 			extendObjectAsync: async () => {},
 			setObjectNotExistsAsync: async () => {},
 			getStateAsync: async () => null,
@@ -3190,6 +3197,8 @@ describe("deviceContext – handleStateChange", function () {
 			sendCloudDeviceCommand: async (devSn, dtuSn, action, devType) => {
 				cloudCalls.push({ devSn, dtuSn, action, devType });
 			},
+			readBatterySettings: async () => {},
+			...overrides,
 		};
 		const ctx = new DeviceContext({
 			adapter,
@@ -3201,7 +3210,7 @@ describe("deviceContext – handleStateChange", function () {
 			dataInterval: 15,
 			slowPollFactor: 6,
 		});
-		return { ctx, cloudCalls, getWarn: () => warnMsg };
+		return { ctx, adapter, cloudCalls, stateWrites, getWarn: () => warnMsg };
 	}
 
 	const button = val => ({ val, ack: false, ts: Date.now(), lc: Date.now(), from: "" });
@@ -3283,6 +3292,62 @@ describe("deviceContext – handleStateChange", function () {
 		await ctx.handleStateChange("dtu.reboot", button(true));
 
 		assert.deepStrictEqual(cloudCalls, [{ devSn: "DTU9999", dtuSn: "DTU9999", action: 1, devType: 1 }]);
+	});
+
+	it("battery.readSettings with a truthy value and a known station calls adapter.readBatterySettings(cloudStationId), never a command path", async function () {
+		const readCalls = [];
+		const { ctx, cloudCalls, stateWrites } = makeCloudFallbackCtx({
+			readBatterySettings: async stationId => {
+				readCalls.push(stationId);
+			},
+		});
+		await ctx.initFromSerial("DTU9999");
+		ctx.cloudStationId = 42;
+
+		await ctx.handleStateChange("battery.readSettings", button(true));
+
+		assert.deepStrictEqual(readCalls, [42]);
+		assert.strictEqual(cloudCalls.length, 0, "must never reach sendCloudDeviceCommand");
+		// The poller (via readBatterySettings) releases the button, not handleStateChange itself.
+		assert.deepStrictEqual(
+			stateWrites.filter(([id]) => id.endsWith(".battery.readSettings")),
+			[],
+		);
+	});
+
+	it("battery.readSettings with a falsy value just acks false, no read", async function () {
+		const readCalls = [];
+		const { ctx, cloudCalls, stateWrites } = makeCloudFallbackCtx({
+			readBatterySettings: async stationId => {
+				readCalls.push(stationId);
+			},
+		});
+		await ctx.initFromSerial("DTU9999");
+		ctx.cloudStationId = 42;
+		stateWrites.length = 0; // discard the initFromSerial noise (gridProfile defaults etc.)
+
+		await ctx.handleStateChange("battery.readSettings", button(false));
+
+		assert.deepStrictEqual(readCalls, []);
+		assert.strictEqual(cloudCalls.length, 0);
+		assert.deepStrictEqual(stateWrites, [["DTU9999.battery.readSettings", false, true]]);
+	});
+
+	it("battery.readSettings with a truthy value but no known cloudStationId just acks false, no read, no command", async function () {
+		const readCalls = [];
+		const { ctx, cloudCalls, stateWrites } = makeCloudFallbackCtx({
+			readBatterySettings: async stationId => {
+				readCalls.push(stationId);
+			},
+		});
+		await ctx.initFromSerial("DTU9999"); // cloudStationId stays null
+		stateWrites.length = 0;
+
+		await ctx.handleStateChange("battery.readSettings", button(true));
+
+		assert.deepStrictEqual(readCalls, []);
+		assert.strictEqual(cloudCalls.length, 0);
+		assert.deepStrictEqual(stateWrites, [["DTU9999.battery.readSettings", false, true]]);
 	});
 });
 

@@ -300,12 +300,6 @@ class CloudPoller {
         }
         await this.setStationRealtimeStates(stationId, deviceId, data, online);
         await this.pollStationIndicators(stationId, deviceId, data.reflux_station_data, online);
-        if (online && mapStorageStationData(data.reflux_station_data)?.info.length) {
-            await this.ensureBatteryControls(deviceId);
-            if (!this.batterySettingsRead.has(stationId)) {
-                void this.readBatterySettings(stationId);
-            }
-        }
         if (slowPoll) {
             await this.pollWeather(stationId, deviceId);
             if (this.firmwareCheckDue(stationId)) {
@@ -313,6 +307,13 @@ class CloudPoller {
             }
         }
         await this.pollDevicesAndInverters(stationId, slowPoll, online);
+        if (online && mapStorageStationData(data.reflux_station_data)?.battery.length) {
+            const hybrids = this.hybridDevicesOf(stationId);
+            await this.ensureBatteryControls(hybrids);
+            if (hybrids.length > 0 && !this.batterySettingsRead.has(stationId)) {
+                void this.readBatterySettings(stationId);
+            }
+        }
         this.adapter.log.debug(`Cloud data (station ${stationId}): ${data.real_power}W, today=${toKwh(data.today_eq).toFixed(2)}kWh, total=${toKwh(data.total_eq).toFixed(2)}kWh, online=${online}`);
     }
     isStationFresh(stationId, dataTime) {
@@ -351,8 +352,15 @@ class CloudPoller {
             const ws = (suffix, value) => w(suffix, value).catch(err => {
                 this.adapter.log.warn(`Cloud state write failed: ${errorMessage(err)}`);
             });
-            for (const e of [...storage.energy, ...storage.info]) {
+            for (const e of storage.energy) {
                 writes.push(ws(e.suffix, e.val));
+            }
+            for (const sn of this.hybridDevicesOf(stationId)) {
+                for (const b of storage.battery) {
+                    writes.push(this.writeHybridState(sn, b.suffix, b.val, q).catch(err => {
+                        this.adapter.log.warn(`Cloud state write failed: ${errorMessage(err)}`);
+                    }));
+                }
             }
             if (!burstOwnsFlow) {
                 for (const f of storage.flow) {
@@ -409,7 +417,6 @@ class CloudPoller {
                 w("info.stationName", details.name || null),
                 w("info.stationId", stationId),
                 w("info.systemCapacity", details.capacitor != null ? num(details.capacitor) : null),
-                w("battery.capacity", num(details.bms_capacitor) || null),
                 w("info.address", address || null),
                 w("info.latitude", lat),
                 w("info.longitude", lon),
@@ -762,6 +769,9 @@ class CloudPoller {
             const batMapped = mapRealIndicators(batData);
             this.reportUnknownKeys(batData?.title, batMapped.unknownKeys);
             for (const v of batMapped.values) {
+                if (v.id === "battery.soc" && this.burstActiveStations.has(stationId)) {
+                    continue;
+                }
                 writes.push(this.writeHybridState(sn, v.id, v.val, bq));
             }
         }
@@ -787,42 +797,50 @@ class CloudPoller {
             }
         }
     }
-    async ensureBatteryControls(deviceId) {
-        const fullId = `${deviceId}.battery.readSettings`;
-        if (this.stationStateObjects.has(fullId)) {
-            return;
+    hybridDevicesOf(stationId) {
+        const serials = [];
+        for (const dev of this.devices.values()) {
+            if (dev.cloudStationId === stationId && dev.hybridInverter && dev.dtuSerial) {
+                serials.push(dev.dtuSerial);
+            }
         }
-        await this.writeStationState(deviceId, "battery.readSettings", false);
-        this.adapter.subscribeStates(fullId);
+        return serials;
+    }
+    async ensureBatteryControls(serials) {
+        for (const sn of serials) {
+            const fullId = `${sn}.battery.readSettings`;
+            if (this.hybridObjects.has(fullId)) {
+                continue;
+            }
+            await this.writeHybridState(sn, "battery.readSettings", false, 0x00);
+            this.adapter.subscribeStates(fullId);
+        }
     }
     async readBatterySettings(stationId) {
         this.batterySettingsRead.add(stationId);
-        const deviceId = `station-${stationId}`;
+        const serials = this.hybridDevicesOf(stationId);
         try {
             const values = mapBatterySettings(await this.cloud.readBatterySettings(stationId));
             if (values.length === 0) {
                 this.adapter.log.debug(`Battery settings of station ${stationId}: the device returned no mode`);
                 return;
             }
-            for (const v of values) {
-                await this.writeStationState(deviceId, v.suffix, v.val);
+            for (const sn of serials) {
+                for (const v of values) {
+                    await this.writeHybridState(sn, v.suffix, v.val, 0x00);
+                }
+                await this.writeHybridState(sn, "battery.settingsUpdated", Date.now(), 0x00);
             }
-            await this.writeStationState(deviceId, "battery.settingsUpdated", Date.now());
             this.adapter.log.debug(`Battery settings of station ${stationId} read`);
         }
         catch (err) {
             this.adapter.log.warn(`Reading the battery settings of station ${stationId} failed: ${errorMessage(err)}`);
         }
-    }
-    async handleStationStateChange(stationId, stateId, state) {
-        if (stateId !== "battery.readSettings") {
-            this.adapter.log.warn(`station-${stationId}: "${stateId}" is read-only`);
-            return;
+        finally {
+            for (const sn of serials) {
+                await this.boundSetState(`${sn}.battery.readSettings`, false, true).catch(() => { });
+            }
         }
-        if (state.val) {
-            await this.readBatterySettings(stationId);
-        }
-        await this.boundSetState(`station-${stationId}.${stateId}`, false, true);
     }
     async writeHybridState(sn, suffix, val, quality) {
         const fullId = `${sn}.${suffix}`;

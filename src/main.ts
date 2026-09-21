@@ -368,6 +368,18 @@ class Hoymiles extends utils.Adapter {
 		await this.cloudManager.sendDeviceCommand(devSn, dtuSn, action, devType);
 	}
 
+	/**
+	 * Read the battery settings of a storage plant from the device (read-only).
+	 *
+	 * @param stationId - Cloud station id the requesting device belongs to.
+	 */
+	async readBatterySettings(stationId: number): Promise<void> {
+		if (!this.cloudManager) {
+			throw new Error("Cloud is not enabled");
+		}
+		await this.cloudManager.readBatterySettings(stationId);
+	}
+
 	// --- State change routing ---
 
 	private async onStateChange(id: string, state: ioBroker.State | null | undefined): Promise<void> {
@@ -382,13 +394,6 @@ class Hoymiles extends utils.Adapter {
 		}
 		const deviceId = parts[2];
 		const stateId = parts.slice(3).join(".");
-
-		// Station devices are no DeviceContexts; their states belong to the cloud poller.
-		const stationMatch = /^station-(\d+)$/.exec(deviceId);
-		if (stationMatch) {
-			await this.cloudManager?.handleStationStateChange(Number(stationMatch[1]), stateId, state);
-			return;
-		}
 
 		const device = this.devices.get(deviceId);
 		if (!device) {

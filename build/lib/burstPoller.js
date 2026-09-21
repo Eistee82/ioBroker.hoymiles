@@ -1,6 +1,6 @@
 import { CLOUD_DEV_TYPE_HYBRID_INVERTER } from "./hybridCloud.js";
 import { BURST_MIN_INTERVAL_MS, BURST_MAX_INTERVAL_MS, BURST_URI_REFRESH_MS, BURST_MAX_FAILURES, CLOUD_POLL_CONCURRENCY, } from "./constants.js";
-import { stationStateMap, stationIndicatorStateMap, stationIndicatorChannels, buildStateCommon, } from "./stateDefinitions.js";
+import { stationStateMap, hybridStateMap, hybridChannels, buildStateCommon } from "./stateDefinitions.js";
 import { anonymize, errorMessage, mapLimit } from "./utils.js";
 const num = (v) => (typeof v === "number" ? v : parseFloat(String(v)) || 0);
 class BurstPoller {
@@ -213,24 +213,39 @@ class BurstPoller {
             ws("grid.batteryPower", num(es.bp)),
         ];
         if (soc !== undefined && soc !== null) {
-            writes.push(ws("battery.soc", num(soc)));
+            for (const dev of this.devices.values()) {
+                if (dev.cloudStationId === stationId && dev.hybridInverter && dev.dtuSerial) {
+                    writes.push(this.writeBatterySoc(dev.dtuSerial, num(soc), quality));
+                }
+            }
         }
         await Promise.allSettled(writes);
     }
-    async writeStationState(deviceId, suffix, val, quality) {
-        const fullId = `${deviceId}.${suffix}`;
+    async writeBatterySoc(sn, val, quality) {
+        const fullId = `${sn}.battery.soc`;
         if (!this.stationStateObjects.has(fullId)) {
-            const def = stationStateMap.get(suffix) ?? stationIndicatorStateMap.get(suffix);
-            const channelId = suffix.slice(0, suffix.indexOf("."));
-            const channel = stationIndicatorChannels.find(c => c.id === channelId);
-            if (channel && !this.stationStateObjects.has(`${deviceId}.${channelId}`)) {
-                this.stationStateObjects.add(`${deviceId}.${channelId}`);
-                await this.adapter.setObjectNotExistsAsync(`${deviceId}.${channelId}`, {
+            this.stationStateObjects.add(fullId);
+            const channel = hybridChannels.find(c => c.id === "battery");
+            const def = hybridStateMap.get("battery.soc");
+            if (channel && def) {
+                await this.adapter.setObjectNotExistsAsync(`${sn}.battery`, {
                     type: "channel",
                     common: { name: channel.name },
                     native: {},
                 });
+                await this.adapter.extendObjectAsync(fullId, {
+                    type: "state",
+                    common: buildStateCommon(def),
+                    native: {},
+                });
             }
+        }
+        await this.adapter.setStateAsync(fullId, { val, ack: true, q: quality });
+    }
+    async writeStationState(deviceId, suffix, val, quality) {
+        const fullId = `${deviceId}.${suffix}`;
+        if (!this.stationStateObjects.has(fullId)) {
+            const def = stationStateMap.get(suffix);
             if (def) {
                 await this.adapter.extendObjectAsync(fullId, {
                     type: "state",

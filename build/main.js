@@ -226,6 +226,12 @@ class Hoymiles extends utils.Adapter {
         }
         await this.cloudManager.sendDeviceCommand(devSn, dtuSn, action, devType);
     }
+    async readBatterySettings(stationId) {
+        if (!this.cloudManager) {
+            throw new Error("Cloud is not enabled");
+        }
+        await this.cloudManager.readBatterySettings(stationId);
+    }
     async onStateChange(id, state) {
         if (!state || state.ack) {
             return;
@@ -236,11 +242,6 @@ class Hoymiles extends utils.Adapter {
         }
         const deviceId = parts[2];
         const stateId = parts.slice(3).join(".");
-        const stationMatch = /^station-(\d+)$/.exec(deviceId);
-        if (stationMatch) {
-            await this.cloudManager?.handleStationStateChange(Number(stationMatch[1]), stateId, state);
-            return;
-        }
         const device = this.devices.get(deviceId);
         if (!device) {
             this.log.warn(`State change for unknown device: ${deviceId}`);
