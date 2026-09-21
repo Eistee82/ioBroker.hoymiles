@@ -212,8 +212,12 @@ describe("commandHandler – executeCommand", function () {
 // commandHandler — cloud command fallback
 // ============================================================
 describe("commandHandler – executeCloudCommand", function () {
-	/** Build a cloud command context that records sent actions and reset buttons. */
-	function createCloudCtx() {
+	/**
+	 * Build a cloud command context that records sent actions and reset buttons.
+	 *
+	 * @param options - `storageSystem: true` builds the context for a hybrid (storage) inverter.
+	 */
+	function createCloudCtx(options = {}) {
 		const sent = [];
 		const calls = [];
 		const acks = [];
@@ -229,6 +233,7 @@ describe("commandHandler – executeCloudCommand", function () {
 				acks.push({ id, val, ack });
 			},
 			resetButton: id => resets.push(id),
+			...(options.storageSystem !== undefined ? { storageSystem: options.storageSystem } : {}),
 		};
 		return { ctx, sent, calls, acks, resets };
 	}
@@ -290,6 +295,45 @@ describe("commandHandler – executeCloudCommand", function () {
 		const handled = await executeCloudCommand("inverter.reboot", st(true), ctx);
 		assert.strictEqual(handled, true);
 		assert.deepStrictEqual(resets, ["inverter.reboot"]); // button still reset in finally
+	});
+
+	// A storage (hybrid) inverter is addressed with its own device type (6) instead of the
+	// microinverter's (3); the DTU reboot additionally carries a different action code (27 vs 1).
+	// Reboot / power-on / power-off keep their action codes — only the dev_type changes.
+	describe("storage plant (storageSystem: true)", function () {
+		it("maps inverter.reboot to action 3 with dev_type 6 (storage inverter)", async function () {
+			const { ctx, calls } = createCloudCtx({ storageSystem: true });
+			const handled = await executeCloudCommand("inverter.reboot", st(true), ctx);
+			assert.strictEqual(handled, true);
+			assert.deepStrictEqual(calls, [{ action: 3, devType: 6 }]);
+		});
+
+		it("maps inverter.active on/off to action 6/7 with dev_type 6 (storage inverter)", async function () {
+			const on = createCloudCtx({ storageSystem: true });
+			await executeCloudCommand("inverter.active", st(true), on.ctx);
+			assert.deepStrictEqual(on.calls, [{ action: 6, devType: 6 }]);
+
+			const off = createCloudCtx({ storageSystem: true });
+			await executeCloudCommand("inverter.active", st(false), off.ctx);
+			assert.deepStrictEqual(off.calls, [{ action: 7, devType: 6 }]);
+		});
+
+		it("maps dtu.reboot to action 27 with dev_type 1 (DTU) for a storage plant", async function () {
+			const { ctx, calls } = createCloudCtx({ storageSystem: true });
+			const handled = await executeCloudCommand("dtu.reboot", st(true), ctx);
+			assert.strictEqual(handled, true);
+			assert.deepStrictEqual(calls, [{ action: 27, devType: 1 }]);
+		});
+
+		it("a microinverter (storageSystem: false or omitted) is byte-for-byte the pre-existing behavior", async function () {
+			const explicit = createCloudCtx({ storageSystem: false });
+			await executeCloudCommand("inverter.reboot", st(true), explicit.ctx);
+			assert.deepStrictEqual(explicit.calls, [{ action: 3, devType: 3 }]);
+
+			const implicit = createCloudCtx();
+			await executeCloudCommand("dtu.reboot", st(true), implicit.ctx);
+			assert.deepStrictEqual(implicit.calls, [{ action: 1, devType: 1 }]);
+		});
 	});
 });
 

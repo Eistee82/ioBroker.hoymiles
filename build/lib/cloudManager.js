@@ -5,6 +5,7 @@ import DeviceContext from "./deviceContext.js";
 import { stationChannels } from "./stateDefinitions.js";
 import { CLOUD_DISCOVER_CONCURRENCY, CLOUD_RETRY_INITIAL_MS, CLOUD_RETRY_MAX_MS } from "./constants.js";
 import { errorMessage, mapLimit } from "./utils.js";
+import { CLOUD_DEV_TYPE_HYBRID_INVERTER } from "./hybridCloud.js";
 import { STATION_ICON } from "./deviceIcons.js";
 class CloudManager {
     adapter;
@@ -90,6 +91,9 @@ class CloudManager {
     }
     get hasToken() {
         return !!this.cloud.token;
+    }
+    async handleStationStateChange(stationId, stateId, state) {
+        await this.cloudPoller?.handleStationStateChange(stationId, stateId, state);
     }
     async sendDeviceCommand(devSn, dtuSn, action, devType) {
         await this.cloud.sendDeviceCommand(action, devSn, dtuSn, devType);
@@ -254,6 +258,8 @@ class CloudManager {
                                 slowPollFactor: this.slowPollFactor,
                             });
                             ctx.cloudStationId = station.id;
+                            const children = dtu.children ?? [];
+                            ctx.hybridInverter = children.some(c => c.type === CLOUD_DEV_TYPE_HYBRID_INVERTER);
                             await ctx.initFromSerial(dtuSerial);
                             this.adapter.devices.set(dtuSerial, ctx);
                             this.adapter.log.info(`Created cloud-only device for DTU ${dtuSerial}`);

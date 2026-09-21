@@ -383,6 +383,13 @@ class Hoymiles extends utils.Adapter {
 		const deviceId = parts[2];
 		const stateId = parts.slice(3).join(".");
 
+		// Station devices are no DeviceContexts; their states belong to the cloud poller.
+		const stationMatch = /^station-(\d+)$/.exec(deviceId);
+		if (stationMatch) {
+			await this.cloudManager?.handleStationStateChange(Number(stationMatch[1]), stateId, state);
+			return;
+		}
+
 		const device = this.devices.get(deviceId);
 		if (!device) {
 			this.log.warn(`State change for unknown device: ${deviceId}`);

@@ -1,10 +1,22 @@
 export const CLOUD_DEV_TYPE_HYBRID_INVERTER = 6;
 export const CLOUD_DEV_TYPE_BATTERY = 10;
+export const CLOUD_DEV_TYPE_BATTERY_PACK = 22;
 export const REAL_INDICATOR_TYPE_GRID_METER = 2;
+export const REAL_INDICATOR_TYPE_PV = 4;
+export const REAL_INDICATOR_TYPE_LOAD = 1;
+export const REAL_INDICATOR_TYPE_PV_METER = 30;
+export const REAL_INDICATOR_TYPE_GENERATOR = 20;
 export const INDICATOR_SET_INVERTER = "IND_INV";
 export const INDICATOR_SET_GRID_METER = "IND_GRID";
 export const INDICATOR_SET_BATTERY = "IND_BMS";
+export const INDICATOR_SET_PV = "IND_PV";
+export const INDICATOR_SET_LOAD = "IND_LOAD";
+export const INDICATOR_SET_BATTERY_PACK = "IND_BPS";
+export const INDICATOR_SET_PV_METER = "IND_PVI";
+export const INDICATOR_SET_GENERATOR = "IND_GEN";
 const num = (id) => ({ id, kind: "number" });
+const energy = (id) => ({ id, kind: "energy" });
+const text = (id) => ({ id, kind: "text" });
 const PHASES = [
     ["a", 1],
     ["b", 2],
@@ -21,7 +33,11 @@ const INVERTER_KEYS = {
     inv_ibat: num("battery.inverterCurrent"),
     inv_pbat: num("battery.inverterPower"),
     role: [],
-    pv_p_total: [],
+    inv_tpv: num("inverter.pvHeatsinkTemperature"),
+    inv_tinv: num("inverter.heatsinkTemperature"),
+    inv_tbat: num("inverter.batteryHeatsinkTemperature"),
+    inv_mf: text("inverter.powerFaultCode"),
+    inv_sf: text("inverter.safetyFaultCode"),
 };
 for (const [letter, p] of PHASES) {
     INVERTER_KEYS[`v_${letter}`] = num(`grid.l${p}Voltage`);
@@ -38,6 +54,8 @@ const GRID_METER_KEYS = {
     q_total: num("gridMeter.reactivePower"),
     grid_pfd: num("gridMeter.powerFactor"),
     grid_f: num("gridMeter.frequency"),
+    grid_ecd: energy("gridMeter.importToday"),
+    grid_efd: energy("gridMeter.exportToday"),
 };
 for (const [letter, p] of PHASES) {
     GRID_METER_KEYS[`v_${letter}`] = num(`gridMeter.l${p}Voltage`);
@@ -45,6 +63,8 @@ for (const [letter, p] of PHASES) {
     GRID_METER_KEYS[`p_${letter}`] = num(`gridMeter.l${p}Power`);
     GRID_METER_KEYS[`q_${letter}`] = num(`gridMeter.l${p}ReactivePower`);
     GRID_METER_KEYS[`pf_${letter}`] = num(`gridMeter.l${p}PowerFactor`);
+    GRID_METER_KEYS[`grid_ec_${letter}`] = energy(`gridMeter.l${p}ImportToday`);
+    GRID_METER_KEYS[`grid_ef_${letter}`] = energy(`gridMeter.l${p}ExportToday`);
 }
 const BATTERY_KEYS = {
     bms_type: { id: "battery.type", kind: "fmtText" },
@@ -67,14 +87,94 @@ const BATTERY_KEYS = {
     bms_vcl: num("battery.cellVoltageMin"),
     bms_vmh: num("battery.moduleVoltageMax"),
     bms_vml: num("battery.moduleVoltageMin"),
+    bms_echg: energy("battery.chargeToday"),
+    bms_edchg: energy("battery.dischargeToday"),
+    bms_cc: num("battery.cycles"),
+    bms_hs: [num("battery.heating"), { id: "battery.heatingText", kind: "fmtText" }],
 };
+const BATTERY_PACK_KEYS = {
+    bps_sts: [num("battery.state"), { id: "battery.stateText", kind: "fmtText" }],
+    bps_hs: [num("battery.heating"), { id: "battery.heatingText", kind: "fmtText" }],
+    bps_fc: text("battery.faultCode"),
+    bps_soc: num("battery.soc"),
+    bps_soh: num("battery.soh"),
+    bps_v: num("battery.voltage"),
+    bps_i: num("battery.current"),
+    bps_p: num("battery.power"),
+    bps_icm: num("battery.maxChargeCurrent"),
+    bps_idm: num("battery.maxDischargeCurrent"),
+    bps_vch: num("battery.cellVoltageMax"),
+    bps_vcl: num("battery.cellVoltageMin"),
+    bps_tch: num("battery.cellTempMax"),
+    bps_tcl: num("battery.cellTempMin"),
+    bps_vc: num("battery.chargeCutoffVoltage"),
+    bps_vd: num("battery.dischargeCutoffVoltage"),
+    bps_echg: energy("battery.chargeToday"),
+    bps_edchg: energy("battery.dischargeToday"),
+    bps_cc: num("battery.cycles"),
+};
+const meteredSource = (ch, stateKey, stateMapping) => {
+    const table = {
+        [stateKey]: stateMapping,
+        frequency: num(`${ch}.frequency`),
+        p_total: num(`${ch}.power`),
+        q_total: num(`${ch}.reactivePower`),
+        e_total: energy(`${ch}.energyToday`),
+    };
+    for (const [letter, p] of PHASES) {
+        table[`v_${letter}`] = num(`${ch}.l${p}Voltage`);
+        table[`i_${letter}`] = num(`${ch}.l${p}Current`);
+        table[`p_${letter}`] = num(`${ch}.l${p}Power`);
+        table[`q_${letter}`] = num(`${ch}.l${p}ReactivePower`);
+        table[`e_${letter}`] = energy(`${ch}.l${p}EnergyToday`);
+    }
+    return table;
+};
+const PV_METER_KEYS = meteredSource("pvMeter", "pvi_state", { id: "pvMeter.connected", kind: "isOne" });
+const GENERATOR_KEYS = meteredSource("generator", "gen_state", [
+    num("generator.state"),
+    { id: "generator.stateText", kind: "fmtText" },
+]);
+const PV_KEYS = {
+    pv_p_total: num("inverter.pvPower"),
+    pv_e_total: energy("inverter.pvEnergyToday"),
+};
+const LOAD_KEYS = {
+    frequency: [],
+    load_state: [num("load.mode"), { id: "load.modeText", kind: "fmtText" }],
+    load_ecd: energy("load.energyToday"),
+};
+for (const [letter, p] of PHASES) {
+    LOAD_KEYS[`v_${letter}`] = num(`load.l${p}Voltage`);
+    LOAD_KEYS[`p_${letter}`] = num(`load.l${p}Power`);
+    LOAD_KEYS[`load_ec_${letter}`] = energy(`load.l${p}EnergyToday`);
+}
 const KEY_TABLES = {
     [INDICATOR_SET_INVERTER]: INVERTER_KEYS,
     [INDICATOR_SET_GRID_METER]: GRID_METER_KEYS,
     [INDICATOR_SET_BATTERY]: BATTERY_KEYS,
+    [INDICATOR_SET_PV]: PV_KEYS,
+    [INDICATOR_SET_LOAD]: LOAD_KEYS,
+    [INDICATOR_SET_BATTERY_PACK]: BATTERY_PACK_KEYS,
+    [INDICATOR_SET_PV_METER]: PV_METER_KEYS,
+    [INDICATOR_SET_GENERATOR]: GENERATOR_KEYS,
 };
-const PV_KEY_RE = /^pv_([pvi])_(\d+)$/;
-const PV_FIELDS = { p: "power", v: "voltage", i: "current" };
+const PV_KEY_RE = /^(\d+)_pv_([pvie])$/;
+const PV_FIELDS = {
+    p: "power",
+    v: "voltage",
+    i: "current",
+    e: "dailyEnergy",
+};
+const ENERGY_TO_KWH = { wh: 0.001, kwh: 1, mwh: 1000 };
+function toKwh(entry) {
+    const val = toNumber(entry.val);
+    const factor = ENERGY_TO_KWH[(entry.unit ?? "").trim().toLowerCase()];
+    if (val === null || factor === undefined) {
+        return null;
+    }
+    return Math.round(val * factor * 1000) / 1000;
+}
 function toNumber(v) {
     if (typeof v === "number") {
         return Number.isFinite(v) ? v : null;
@@ -91,16 +191,20 @@ export function mapRealIndicators(data) {
     if (!table || !Array.isArray(data?.list)) {
         return result;
     }
-    const pvEntries = [];
     for (const entry of data.list) {
         if (!entry || typeof entry.key !== "string") {
             continue;
         }
-        const pvMatch = data.title === INDICATOR_SET_INVERTER ? PV_KEY_RE.exec(entry.key) : null;
+        const pvMatch = data.title === INDICATOR_SET_PV ? PV_KEY_RE.exec(entry.key) : null;
         if (pvMatch) {
-            const val = toNumber(entry.val);
-            if (val !== null) {
-                pvEntries.push({ index: Number(pvMatch[2]), field: PV_FIELDS[pvMatch[1]], val });
+            const field = PV_FIELDS[pvMatch[2]];
+            const val = field === "dailyEnergy" ? toKwh(entry) : toNumber(entry.val);
+            const port = Number(pvMatch[1]) - 1;
+            if (val !== null && port >= 0) {
+                result.pv.push({ port, field, val });
+            }
+            else if (val === null && field === "dailyEnergy" && toNumber(entry.val) !== null) {
+                result.unknownKeys.push(`${entry.key}[unit=${entry.unit ?? ""}]`);
             }
             continue;
         }
@@ -114,6 +218,15 @@ export function mapRealIndicators(data) {
                 const val = toNumber(entry.val);
                 if (val !== null) {
                     result.values.push({ id: target.id, val });
+                }
+            }
+            else if (target.kind === "energy") {
+                const val = toKwh(entry);
+                if (val !== null) {
+                    result.values.push({ id: target.id, val });
+                }
+                else if (toNumber(entry.val) !== null) {
+                    result.unknownKeys.push(`${entry.key}[unit=${entry.unit ?? ""}]`);
                 }
             }
             else if (target.kind === "isOne") {
@@ -132,11 +245,27 @@ export function mapRealIndicators(data) {
             }
         }
     }
-    const zeroBased = pvEntries.some(e => e.index === 0);
-    for (const e of pvEntries) {
-        result.pv.push({ port: zeroBased ? e.index : e.index - 1, field: e.field, val: e.val });
-    }
     return result;
+}
+export function stationIndicatorTypes(block) {
+    if (!block || typeof block !== "object") {
+        return [];
+    }
+    const flags = block;
+    const types = [];
+    if (flags.icon_grid === 1) {
+        types.push(REAL_INDICATOR_TYPE_GRID_METER);
+    }
+    if (flags.icon_load === 1) {
+        types.push(REAL_INDICATOR_TYPE_LOAD);
+    }
+    if (flags.icon_pvi === 1) {
+        types.push(REAL_INDICATOR_TYPE_PV_METER);
+    }
+    if (flags.icon_gen === 1) {
+        types.push(REAL_INDICATOR_TYPE_GENERATOR);
+    }
+    return types;
 }
 export function mapStorageStationData(block) {
     if (!block || typeof block !== "object") {
@@ -147,7 +276,7 @@ export function mapStorageStationData(block) {
     if (!hasBattery && rf.icon_grid !== 1) {
         return null;
     }
-    const result = { flow: [], energy: [] };
+    const result = { flow: [], energy: [], info: [] };
     const add = (list, suffix, raw, scale = 1) => {
         const val = toNumber(raw);
         if (val !== null) {
@@ -158,15 +287,33 @@ export function mapStorageStationData(block) {
     add(result.flow, "grid.loadPower", rf.load_power);
     if (hasBattery) {
         add(result.flow, "grid.batteryPower", rf.bms_power);
-        add(result.flow, "grid.batterySoc", rf.bms_soc);
+        add(result.flow, "battery.soc", rf.bms_soc);
     }
     add(result.energy, "grid.consumptionToday", rf.use_eq_total, 1000);
     add(result.energy, "grid.gridImportToday", rf.efg_total, 1000);
     add(result.energy, "grid.gridExportToday", rf.e2g_total, 1000);
     if (hasBattery) {
-        add(result.energy, "grid.batteryChargeToday", rf.e2b_total, 1000);
-        add(result.energy, "grid.batteryDischargeToday", rf.efb_total, 1000);
+        add(result.energy, "battery.chargeToday", rf.e2b_total, 1000);
+        add(result.energy, "battery.dischargeToday", rf.efb_total, 1000);
+        const workMode = toNumber(rf.work_mode);
+        if (workMode !== null && workMode >= 1000) {
+            result.info.push({ suffix: "battery.workMode", val: Math.floor(workMode / 1000) });
+        }
     }
     return result;
+}
+export const SETTING_ACTION_BATTERY_MODE_READ = 1013;
+export function mapBatterySettings(result) {
+    const mode = toNumber(result?.mode);
+    if (!result || mode === null || mode < 1) {
+        return [];
+    }
+    const values = [{ suffix: "battery.workMode", val: mode }];
+    const reserve = toNumber(result.data?.[`k_${mode}`]?.reserve_soc);
+    if (reserve !== null) {
+        values.push({ suffix: "battery.reserveSoc", val: reserve });
+    }
+    values.push({ suffix: "battery.settingsJson", val: JSON.stringify({ mode, data: result.data ?? {} }) });
+    return values;
 }
 //# sourceMappingURL=hybridCloud.js.map

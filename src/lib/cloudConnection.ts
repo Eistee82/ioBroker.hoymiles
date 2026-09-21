@@ -23,7 +23,8 @@ import {
 	APP_TID,
 } from "./constants.js";
 import type { CloudGridProfileParam } from "./gridProfile.js";
-import type { RealIndicatorData } from "./hybridCloud.js";
+import { SETTING_ACTION_BATTERY_MODE_READ } from "./hybridCloud.js";
+import type { BatterySettingsResult, RealIndicatorData } from "./hybridCloud.js";
 import {
 	errorMessage,
 	withTimeout,
@@ -1173,6 +1174,24 @@ class CloudConnection {
 			this.log(`[diag] Real indicators (type ${String(selector.type)}) error: ${errorMessage(err)}`);
 			return null;
 		}
+	}
+
+	/**
+	 * Read the battery working mode and its parameters from a storage plant. Unlike the indicator
+	 * reads this is a request that travels down to the device (the portal issues the same one when
+	 * its battery settings page is opened) — it only reads, but it is not free, so it is made on
+	 * demand and not on every poll.
+	 *
+	 * @param stationId - Cloud station ID.
+	 */
+	async readBatterySettings(stationId: number): Promise<BatterySettingsResult> {
+		this.assertStationId(stationId);
+		const result = await this.runDeviceTask<{ code?: number; data?: BatterySettingsResult }>(
+			PVM_CTL_SETTING_READ_PATH,
+			{ action: SETTING_ACTION_BATTERY_MODE_READ, data: { sid: stationId } },
+			PVM_CTL_SETTING_STATUS_PATH,
+		);
+		return result.data ?? {};
 	}
 
 	/**

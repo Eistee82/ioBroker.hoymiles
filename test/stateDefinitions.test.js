@@ -10,6 +10,9 @@ import {
 	hybridChannels,
 	hybridStates,
 	hybridStateMap,
+	stationIndicatorChannels,
+	stationIndicatorStates,
+	stationIndicatorStateMap,
 } from "../build/lib/stateDefinitions.js";
 
 // ============================================================
@@ -184,9 +187,22 @@ describe("stateDefinitions – station", function () {
 		assert.strictEqual(def.max, 100, "max must be 100");
 	});
 
-	it("station states are all read-only", function () {
+	it("station states are all read-only (the only writable station state, battery.readSettings, is an on-demand indicator state)", function () {
 		for (const s of stationStates) {
 			assert.ok(!s.write, `Station state ${s.id} should not be writable`);
+		}
+	});
+
+	it("no longer contains the battery states that moved to the station's battery channel", function () {
+		const ids = stationStates.map(s => s.id);
+		for (const removed of [
+			"grid.batterySoc",
+			"grid.batteryChargeToday",
+			"grid.batteryDischargeToday",
+			"info.batteryCapacity",
+			"info.workMode",
+		]) {
+			assert.ok(!ids.includes(removed), `${removed} should have moved out of stationStates`);
 		}
 	});
 });
@@ -204,7 +220,14 @@ describe("stateDefinitions – state value translations", function () {
 	/** Collect every `states` value used anywhere in the definitions. */
 	function allStateValues() {
 		const values = new Set();
-		for (const def of [...states, ...stationStates, ...meterMeasurementStates, ...meterControlStates]) {
+		for (const def of [
+			...states,
+			...stationStates,
+			...meterMeasurementStates,
+			...meterControlStates,
+			...hybridStates,
+			...stationIndicatorStates,
+		]) {
 			for (const text of Object.values(def.states ?? {})) {
 				values.add(text);
 			}
@@ -290,5 +313,112 @@ describe("stateDefinitions – hybrid inverter states", function () {
 
 	it("hybridStateMap indexes every hybrid state exactly once", function () {
 		assert.strictEqual(hybridStateMap.size, hybridStates.length);
+	});
+
+	it("hybridChannels is only eps + battery — the grid meter moved to the station", function () {
+		assert.deepStrictEqual(hybridChannels.map(c => c.id).sort(), ["battery", "eps"]);
+	});
+});
+
+// ============================================================
+// stateDefinitions – station-level measuring points (gridMeter/load/pvMeter/generator)
+// ============================================================
+describe("stateDefinitions – station indicator states", function () {
+	it("stationIndicatorStates array is not empty", function () {
+		assert.ok(stationIndicatorStates.length > 0);
+	});
+
+	it("no duplicate station indicator state IDs", function () {
+		const ids = stationIndicatorStates.map(s => s.id);
+		assert.strictEqual(ids.length, new Set(ids).size, "Duplicate station indicator state IDs found");
+	});
+
+	it("no station indicator state ID collides with an existing station state ID", function () {
+		const stateIds = new Set(stationStates.map(s => s.id));
+		const collisions = stationIndicatorStates.filter(s => stateIds.has(s.id)).map(s => s.id);
+		assert.deepStrictEqual(
+			collisions,
+			[],
+			`station indicator state(s) collide with existing station states: ${collisions.join(", ")}`,
+		);
+	});
+
+	it("every station indicator state's channel prefix is a known station-indicator channel", function () {
+		const channelIds = new Set(stationIndicatorChannels.map(c => c.id));
+		for (const s of stationIndicatorStates) {
+			const channelId = s.id.split(".")[0];
+			assert.ok(
+				channelIds.has(channelId),
+				`Station indicator state ${s.id} belongs to undefined channel "${channelId}"`,
+			);
+		}
+	});
+
+	it("station indicator channels are not part of stationChannels (they live below the station device too, but are a separate on-demand set)", function () {
+		const stationChannelIds = new Set(stationChannels.map(c => c.id));
+		for (const c of stationIndicatorChannels) {
+			assert.ok(!stationChannelIds.has(c.id), `${c.id} unexpectedly duplicated in stationChannels`);
+		}
+	});
+
+	it("every station indicator state is sourced from the cloud", function () {
+		for (const s of stationIndicatorStates) {
+			assert.strictEqual(s.source, "cloud", `Station indicator state ${s.id} must have source "cloud"`);
+		}
+	});
+
+	it("no station indicator state uses role 'state' (they are all typed measurements/indicators/text)", function () {
+		for (const s of stationIndicatorStates) {
+			assert.notStrictEqual(
+				s.role,
+				"state",
+				`Station indicator state ${s.id} must not use the generic "state" role`,
+			);
+		}
+	});
+
+	it("every station indicator state has en and de translations", function () {
+		for (const s of stationIndicatorStates) {
+			assert.ok(typeof s.name === "object" && s.name.en, `Station indicator state ${s.id} missing English name`);
+			assert.ok(typeof s.name === "object" && s.name.de, `Station indicator state ${s.id} missing German name`);
+		}
+	});
+
+	it("stationIndicatorStateMap indexes every station indicator state exactly once", function () {
+		assert.strictEqual(stationIndicatorStateMap.size, stationIndicatorStates.length);
+	});
+
+	it("contains the five expected channels: battery, gridMeter, load, pvMeter, generator", function () {
+		assert.deepStrictEqual(stationIndicatorChannels.map(c => c.id).sort(), [
+			"battery",
+			"generator",
+			"gridMeter",
+			"load",
+			"pvMeter",
+		]);
+	});
+
+	it("battery.readSettings is the only writable station indicator state", function () {
+		const writable = stationIndicatorStates.filter(s => s.write).map(s => s.id);
+		assert.deepStrictEqual(writable, ["battery.readSettings"]);
+	});
+
+	it("battery.readSettings is a button", function () {
+		const def = stationIndicatorStates.find(s => s.id === "battery.readSettings");
+		assert.ok(def, "battery.readSettings must exist");
+		assert.strictEqual(def.type, "boolean");
+		assert.strictEqual(def.role, "button");
+	});
+
+	it("battery.workMode has a states map covering the app's mode table (1-8)", function () {
+		const def = stationIndicatorStates.find(s => s.id === "battery.workMode");
+		assert.ok(def, "battery.workMode must exist in stationIndicatorStates");
+		assert.strictEqual(def.type, "number", "type must be number");
+		assert.deepStrictEqual(
+			Object.keys(def.states)
+				.map(Number)
+				.sort((a, b) => a - b),
+			[1, 2, 3, 4, 5, 6, 7, 8],
+		);
 	});
 });

@@ -12,8 +12,10 @@ import {
 	DEVICE_COMMAND_POWER_ON,
 	DEVICE_COMMAND_POWER_OFF,
 	DTU_COMMAND_REBOOT,
+	DTU_COMMAND_REBOOT_STORAGE,
 	CLOUD_DEV_TYPE_DTU,
 	CLOUD_DEV_TYPE_MICRO,
+	CLOUD_DEV_TYPE_STORAGE_INVERTER,
 } from "./constants.js";
 import { unixSeconds } from "./utils.js";
 
@@ -324,6 +326,11 @@ interface CloudCommandContext {
 	log: ioBroker.Logger;
 	/** Send the given control action code to the device (of the given type) via the cloud. */
 	send: (action: number, devType: number) => Promise<void>;
+	/**
+	 * True for a storage plant (hybrid inverter). The commands are the same three, but the portal
+	 * addresses the inverter with its own device type and reboots the DTU with another code.
+	 */
+	storageSystem?: boolean;
 	setState: (id: string, value: ioBroker.StateValue, ack: boolean) => Promise<void>;
 	resetButton: (stateId: string) => void;
 }
@@ -337,11 +344,17 @@ interface CloudCommandContext {
  */
 const CLOUD_COMMANDS: Record<
 	string,
-	{ action: (val: ioBroker.StateValue) => number; button?: boolean; devType?: number }
+	{ action: (val: ioBroker.StateValue, storage: boolean) => number; button?: boolean; devType?: number }
 > = {
+	// Reboot / power on / power off carry the same codes for a microinverter and a hybrid inverter —
+	// the portal's maintenance dialog issues 3 / 6 / 7 for both.
 	"inverter.reboot": { action: () => DEVICE_COMMAND_REBOOT, button: true },
 	"inverter.active": { action: v => (v ? DEVICE_COMMAND_POWER_ON : DEVICE_COMMAND_POWER_OFF) },
-	"dtu.reboot": { action: () => DTU_COMMAND_REBOOT, button: true, devType: CLOUD_DEV_TYPE_DTU },
+	"dtu.reboot": {
+		action: (_v, storage) => (storage ? DTU_COMMAND_REBOOT_STORAGE : DTU_COMMAND_REBOOT),
+		button: true,
+		devType: CLOUD_DEV_TYPE_DTU,
+	},
 };
 
 /**
@@ -362,8 +375,9 @@ async function executeCloudCommand(stateId: string, state: ioBroker.State, ctx: 
 	if (cmd.button && !state.val) {
 		return true;
 	}
-	const action = cmd.action(state.val);
-	const devType = cmd.devType ?? CLOUD_DEV_TYPE_MICRO;
+	const storage = !!ctx.storageSystem;
+	const action = cmd.action(state.val, storage);
+	const devType = cmd.devType ?? (storage ? CLOUD_DEV_TYPE_STORAGE_INVERTER : CLOUD_DEV_TYPE_MICRO);
 	ctx.log.info(`[${ctx.deviceId}] Sending command "${stateId}" via cloud (action ${action}, dev_type ${devType})`);
 	try {
 		await ctx.send(action, devType);

@@ -241,6 +241,12 @@ class DeviceContext {
 	 * frequency, temperature, energy counters.
 	 */
 	burstActive: boolean;
+	/**
+	 * True once the cloud device tree showed a hybrid (storage) inverter below this DTU. The cloud
+	 * commands then go out the way the S-Miles portal sends them to such a plant: the inverter is
+	 * addressed with its own device type, and the DTU reboot carries the storage code.
+	 */
+	hybridInverter = false;
 	private meterStatesCreated: boolean;
 	private meterMeasurementStatesCreated: boolean;
 	private meterControlStatesCreated: boolean;
@@ -2560,6 +2566,7 @@ class DeviceContext {
 				},
 				setState: (id, val, ack) => this.setState(id, val, ack),
 				resetButton: id => this.scheduleButtonReset(id),
+				storageSystem: this.hybridInverter,
 			});
 			if (handled) {
 				return;

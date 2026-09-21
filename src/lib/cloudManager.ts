@@ -6,6 +6,7 @@ import type { ProtobufHandler } from "./protobufHandler.js";
 import { stationChannels } from "./stateDefinitions.js";
 import { CLOUD_DISCOVER_CONCURRENCY, CLOUD_RETRY_INITIAL_MS, CLOUD_RETRY_MAX_MS } from "./constants.js";
 import { errorMessage, mapLimit } from "./utils.js";
+import { CLOUD_DEV_TYPE_HYBRID_INVERTER } from "./hybridCloud.js";
 import { STATION_ICON } from "./deviceIcons.js";
 
 interface CloudManagerOptions {
@@ -126,6 +127,17 @@ class CloudManager {
 	/** Whether the cloud connection has a valid token. */
 	get hasToken(): boolean {
 		return !!this.cloud.token;
+	}
+
+	/**
+	 * Route a user write to a `station-<id>` state to the poller that owns the station states.
+	 *
+	 * @param stationId - Cloud station id.
+	 * @param stateId - State id below the station device.
+	 * @param state - The written state.
+	 */
+	async handleStationStateChange(stationId: number, stateId: string, state: ioBroker.State): Promise<void> {
+		await this.cloudPoller?.handleStationStateChange(stationId, stateId, state);
 	}
 
 	/**
@@ -368,6 +380,10 @@ class CloudManager {
 								slowPollFactor: this.slowPollFactor,
 							});
 							ctx.cloudStationId = station.id;
+							// Known before the first command can arrive: a storage plant is addressed
+							// with other codes than a microinverter.
+							const children = (dtu as { children?: Array<{ type?: number }> }).children ?? [];
+							ctx.hybridInverter = children.some(c => c.type === CLOUD_DEV_TYPE_HYBRID_INVERTER);
 							await ctx.initFromSerial(dtuSerial);
 							this.adapter.devices.set(dtuSerial, ctx);
 							this.adapter.log.info(`Created cloud-only device for DTU ${dtuSerial}`);

@@ -1,6 +1,6 @@
 import { CLOUD_DEV_TYPE_HYBRID_INVERTER } from "./hybridCloud.js";
 import { BURST_MIN_INTERVAL_MS, BURST_MAX_INTERVAL_MS, BURST_URI_REFRESH_MS, BURST_MAX_FAILURES, CLOUD_POLL_CONCURRENCY, } from "./constants.js";
-import { stationStateMap, buildStateCommon } from "./stateDefinitions.js";
+import { stationStateMap, stationIndicatorStateMap, stationIndicatorChannels, buildStateCommon, } from "./stateDefinitions.js";
 import { anonymize, errorMessage, mapLimit } from "./utils.js";
 const num = (v) => (typeof v === "number" ? v : parseFloat(String(v)) || 0);
 class BurstPoller {
@@ -213,14 +213,24 @@ class BurstPoller {
             ws("grid.batteryPower", num(es.bp)),
         ];
         if (soc !== undefined && soc !== null) {
-            writes.push(ws("grid.batterySoc", num(soc)));
+            writes.push(ws("battery.soc", num(soc)));
         }
         await Promise.allSettled(writes);
     }
     async writeStationState(deviceId, suffix, val, quality) {
         const fullId = `${deviceId}.${suffix}`;
         if (!this.stationStateObjects.has(fullId)) {
-            const def = stationStateMap.get(suffix);
+            const def = stationStateMap.get(suffix) ?? stationIndicatorStateMap.get(suffix);
+            const channelId = suffix.slice(0, suffix.indexOf("."));
+            const channel = stationIndicatorChannels.find(c => c.id === channelId);
+            if (channel && !this.stationStateObjects.has(`${deviceId}.${channelId}`)) {
+                this.stationStateObjects.add(`${deviceId}.${channelId}`);
+                await this.adapter.setObjectNotExistsAsync(`${deviceId}.${channelId}`, {
+                    type: "channel",
+                    common: { name: channel.name },
+                    native: {},
+                });
+            }
             if (def) {
                 await this.adapter.extendObjectAsync(fullId, {
                     type: "state",

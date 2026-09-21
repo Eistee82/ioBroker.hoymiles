@@ -58,7 +58,6 @@ export const meterMeasurementStates = [
 export const hybridChannels = [
     { id: "eps", name: { en: "Backup (EPS) output", de: "Notstrom-Ausgang (EPS)" }, source: "cloud" },
     { id: "battery", name: { en: "Battery", de: "Batterie" }, source: "cloud" },
-    { id: "gridMeter", name: { en: "Grid meter", de: "Netzzähler" }, source: "cloud" },
 ];
 export const hybridStates = [
     ...[1, 2, 3].flatMap(p => [
@@ -136,26 +135,123 @@ export const hybridStates = [
     n("battery.inverterVoltage", "Battery voltage (at inverter)", "Batteriespannung (am Wechselrichter)", "value.voltage", "V", { source: "cloud" }),
     n("battery.inverterCurrent", "Battery current (at inverter)", "Batteriestrom (am Wechselrichter)", "value.current", "A", { source: "cloud" }),
     n("battery.inverterPower", "Battery power (at inverter)", "Batterieleistung (am Wechselrichter)", "value.power", "W", { source: "cloud" }),
-    b("gridMeter.connected", "Grid meter online", "Netzzähler online", "indicator.connected", { source: "cloud" }),
-    n("gridMeter.power", "Total active power", "Gesamt-Wirkleistung", "value.power", "W", { source: "cloud" }),
-    n("gridMeter.reactivePower", "Total reactive power", "Gesamt-Blindleistung", "value.power.reactive", "var", {
+    n("inverter.pvPower", "PV power (all inputs)", "PV-Leistung (alle Eingänge)", "value.power", "W", {
         source: "cloud",
     }),
-    n("gridMeter.powerFactor", "Total power factor", "Gesamt-Leistungsfaktor", "value", "", { source: "cloud" }),
-    n("gridMeter.frequency", "Grid frequency", "Netzfrequenz", "value.frequency", "Hz", { source: "cloud" }),
+    n("inverter.pvEnergyToday", "PV energy today", "PV-Energie heute", "value.energy", "kWh", { source: "cloud" }),
+    n("inverter.pvHeatsinkTemperature", "PV heatsink temperature", "PV-Kühlkörpertemperatur", "value.temperature", "°C", { source: "cloud" }),
+    n("inverter.heatsinkTemperature", "Inverter heatsink temperature", "Wechselrichter-Kühlkörpertemperatur", "value.temperature", "°C", { source: "cloud" }),
+    n("inverter.batteryHeatsinkTemperature", "Battery-stage heatsink temperature", "Kühlkörpertemperatur der Batteriestufe", "value.temperature", "°C", { source: "cloud" }),
+    s("inverter.powerFaultCode", "Power fault code", "Fehlercode Leistungsteil", "text", { source: "cloud" }),
+    s("inverter.safetyFaultCode", "Safety fault code", "Fehlercode Sicherheitsteil", "text", { source: "cloud" }),
+    n("battery.chargeToday", "Charged today", "Heute geladen", "value.energy", "kWh", { source: "cloud" }),
+    n("battery.dischargeToday", "Discharged today", "Heute entladen", "value.energy", "kWh", { source: "cloud" }),
+    n("battery.cycles", "Charge cycles", "Ladezyklen", "value", "", { source: "cloud" }),
+    n("battery.heating", "Heating status", "Heizstatus", "value", "", { source: "cloud" }),
+    s("battery.heatingText", "Heating status (text)", "Heizstatus (Text)", "text", { source: "cloud" }),
+];
+export const hybridStateMap = new Map(hybridStates.map(d => [d.id, d]));
+export const stationIndicatorChannels = [
+    { id: "battery", name: { en: "Battery", de: "Batterie" }, source: "cloud" },
+    { id: "gridMeter", name: { en: "Grid meter", de: "Netzzähler" }, source: "cloud" },
+    { id: "load", name: { en: "Loads", de: "Verbraucher" }, source: "cloud" },
+    {
+        id: "pvMeter",
+        name: { en: "PV meter (third-party inverter)", de: "PV-Zähler (Fremd-Wechselrichter)" },
+        source: "cloud",
+    },
+    { id: "generator", name: { en: "Generator", de: "Generator" }, source: "cloud" },
+];
+const acStates = (ch, withCurrent) => [
+    ...(withCurrent
+        ? [
+            n(`${ch}.power`, "Total active power", "Gesamt-Wirkleistung", "value.power", "W", { source: "cloud" }),
+            n(`${ch}.reactivePower`, "Total reactive power", "Gesamt-Blindleistung", "value.power.reactive", "var", {
+                source: "cloud",
+            }),
+            n(`${ch}.frequency`, "Frequency", "Frequenz", "value.frequency", "Hz", { source: "cloud" }),
+        ]
+        : []),
     ...[1, 2, 3].flatMap(p => [
-        n(`gridMeter.l${p}Voltage`, `Voltage L${p}`, `Spannung L${p}`, "value.voltage", "V", { source: "cloud" }),
-        n(`gridMeter.l${p}Current`, `Current L${p}`, `Strom L${p}`, "value.current", "A", { source: "cloud" }),
-        n(`gridMeter.l${p}Power`, `Active power L${p}`, `Wirkleistung L${p}`, "value.power", "W", {
-            source: "cloud",
-        }),
-        n(`gridMeter.l${p}ReactivePower`, `Reactive power L${p}`, `Blindleistung L${p}`, "value.power.reactive", "var", { source: "cloud" }),
+        n(`${ch}.l${p}Voltage`, `Voltage L${p}`, `Spannung L${p}`, "value.voltage", "V", { source: "cloud" }),
+        n(`${ch}.l${p}Power`, `Active power L${p}`, `Wirkleistung L${p}`, "value.power", "W", { source: "cloud" }),
+        ...(withCurrent
+            ? [
+                n(`${ch}.l${p}Current`, `Current L${p}`, `Strom L${p}`, "value.current", "A", { source: "cloud" }),
+                n(`${ch}.l${p}ReactivePower`, `Reactive power L${p}`, `Blindleistung L${p}`, "value.power.reactive", "var", { source: "cloud" }),
+            ]
+            : []),
+    ]),
+];
+export const stationIndicatorStates = [
+    n("battery.soc", "State of charge", "Ladezustand", "value.battery", "%", { source: "cloud" }),
+    n("battery.capacity", "Installed capacity", "Installierte Kapazität", "value", "kWh", { source: "cloud" }),
+    n("battery.chargeToday", "Charged today", "Heute geladen", "value.energy", "kWh", { source: "cloud" }),
+    n("battery.dischargeToday", "Discharged today", "Heute entladen", "value.energy", "kWh", { source: "cloud" }),
+    n("battery.workMode", "Working mode", "Betriebsmodus", "value", "", {
+        source: "cloud",
+        states: {
+            1: "Self-consumption",
+            2: "Economy",
+            3: "Backup",
+            4: "Off-grid",
+            5: "Forced charging",
+            6: "Forced discharging",
+            7: "Peak shaving",
+            8: "Time of use",
+        },
+    }),
+    n("battery.reserveSoc", "Reserved state of charge", "Reservierter Ladezustand", "value", "%", {
+        source: "cloud",
+    }),
+    s("battery.settingsJson", "Battery settings (JSON)", "Batterie-Einstellungen (JSON)", "json", {
+        source: "cloud",
+    }),
+    n("battery.settingsUpdated", "Settings last read", "Einstellungen zuletzt gelesen", "value.time", "", {
+        source: "cloud",
+    }),
+    b("battery.readSettings", "Read battery settings", "Batterie-Einstellungen lesen", "button", {
+        source: "cloud",
+        write: true,
+    }),
+    b("gridMeter.connected", "Grid meter online", "Netzzähler online", "indicator.connected", { source: "cloud" }),
+    ...acStates("gridMeter", true),
+    n("gridMeter.powerFactor", "Total power factor", "Gesamt-Leistungsfaktor", "value", "", { source: "cloud" }),
+    n("gridMeter.importToday", "Imported today", "Heute bezogen", "value.energy", "kWh", { source: "cloud" }),
+    n("gridMeter.exportToday", "Exported today", "Heute eingespeist", "value.energy", "kWh", { source: "cloud" }),
+    ...[1, 2, 3].flatMap(p => [
         n(`gridMeter.l${p}PowerFactor`, `Power factor L${p}`, `Leistungsfaktor L${p}`, "value", "", {
             source: "cloud",
         }),
+        n(`gridMeter.l${p}ImportToday`, `Imported today L${p}`, `Heute bezogen L${p}`, "value.energy", "kWh", {
+            source: "cloud",
+        }),
+        n(`gridMeter.l${p}ExportToday`, `Exported today L${p}`, `Heute eingespeist L${p}`, "value.energy", "kWh", {
+            source: "cloud",
+        }),
     ]),
+    ...acStates("load", false),
+    n("load.mode", "Load mode", "Lastmodus", "value", "", { source: "cloud" }),
+    s("load.modeText", "Load mode (text)", "Lastmodus (Text)", "text", { source: "cloud" }),
+    n("load.energyToday", "Consumed today", "Heute verbraucht", "value.energy", "kWh", { source: "cloud" }),
+    ...[1, 2, 3].map(p => n(`load.l${p}EnergyToday`, `Consumed today L${p}`, `Heute verbraucht L${p}`, "value.energy", "kWh", {
+        source: "cloud",
+    })),
+    b("pvMeter.connected", "PV meter online", "PV-Zähler online", "indicator.connected", { source: "cloud" }),
+    ...acStates("pvMeter", true),
+    n("pvMeter.energyToday", "Energy today", "Energie heute", "value.energy", "kWh", { source: "cloud" }),
+    ...[1, 2, 3].map(p => n(`pvMeter.l${p}EnergyToday`, `Energy today L${p}`, `Energie heute L${p}`, "value.energy", "kWh", {
+        source: "cloud",
+    })),
+    n("generator.state", "Generator status", "Generatorstatus", "value", "", { source: "cloud" }),
+    s("generator.stateText", "Generator status (text)", "Generatorstatus (Text)", "text", { source: "cloud" }),
+    ...acStates("generator", true),
+    n("generator.energyToday", "Energy today", "Energie heute", "value.energy", "kWh", { source: "cloud" }),
+    ...[1, 2, 3].map(p => n(`generator.l${p}EnergyToday`, `Energy today L${p}`, `Energie heute L${p}`, "value.energy", "kWh", {
+        source: "cloud",
+    })),
 ];
-export const hybridStateMap = new Map(hybridStates.map(d => [d.id, d]));
+export const stationIndicatorStateMap = new Map(stationIndicatorStates.map(d => [d.id, d]));
 const channels = [
     { id: "info", name: { en: "Device information", de: "Geräteinformationen" } },
     { id: "grid", name: { en: "Grid output", de: "Netzeinspeisung" } },
@@ -310,12 +406,9 @@ const stationStates = [
     n("grid.loadPower", "Load power", "Lastleistung", "value.power", "W"),
     n("grid.batteryPower", "Battery power", "Batterieleistung", "value.power", "W"),
     n("grid.pvUtilization", "PV utilization", "PV-Auslastung", "value", "%"),
-    n("grid.batterySoc", "Battery state of charge", "Batterie-Ladezustand", "value.battery", "%"),
     n("grid.consumptionToday", "Consumption today", "Verbrauch heute", "value.energy", "kWh"),
     n("grid.gridImportToday", "Grid import today", "Netzbezug heute", "value.energy", "kWh"),
     n("grid.gridExportToday", "Grid export today", "Netzeinspeisung heute", "value.energy", "kWh"),
-    n("grid.batteryChargeToday", "Battery charged today", "Batterieladung heute", "value.energy", "kWh"),
-    n("grid.batteryDischargeToday", "Battery discharged today", "Batterieentladung heute", "value.energy", "kWh"),
     n("grid.dailyEnergy", "Daily energy", "Tagesenergie", "value.energy", "kWh"),
     n("grid.monthEnergy", "Month energy", "Monatsenergie", "value.energy", "kWh"),
     n("grid.yearEnergy", "Year energy", "Jahresenergie", "value.energy", "kWh"),
@@ -331,7 +424,6 @@ const stationStates = [
     s("info.stationName", "Station name", "Anlagenname", "text"),
     n("info.stationId", "Station ID", "Anlagen-ID", "value", ""),
     n("info.systemCapacity", "System capacity", "Anlagenleistung", "value", "kWp"),
-    n("info.batteryCapacity", "Battery capacity", "Batteriekapazität", "value", "kWh"),
     s("info.address", "Station address", "Anlagenstandort", "text"),
     n("info.latitude", "Latitude", "Breitengrad", "value.gps.latitude", "\u00b0"),
     n("info.longitude", "Longitude", "Längengrad", "value.gps.longitude", "\u00b0"),

@@ -9,7 +9,12 @@ import {
 	BURST_MAX_FAILURES,
 	CLOUD_POLL_CONCURRENCY,
 } from "./constants.js";
-import { stationStateMap, buildStateCommon } from "./stateDefinitions.js";
+import {
+	stationStateMap,
+	stationIndicatorStateMap,
+	stationIndicatorChannels,
+	buildStateCommon,
+} from "./stateDefinitions.js";
 import { anonymize, errorMessage, mapLimit } from "./utils.js";
 
 // The burst endpoint types its power fields as numbers, but the main cloud API is known to
@@ -411,7 +416,7 @@ class BurstPoller {
 			ws("grid.batteryPower", num(es.bp)),
 		];
 		if (soc !== undefined && soc !== null) {
-			writes.push(ws("grid.batterySoc", num(soc)));
+			writes.push(ws("battery.soc", num(soc)));
 		}
 		await Promise.allSettled(writes);
 	}
@@ -433,7 +438,18 @@ class BurstPoller {
 	): Promise<void> {
 		const fullId = `${deviceId}.${suffix}`;
 		if (!this.stationStateObjects.has(fullId)) {
-			const def = stationStateMap.get(suffix);
+			const def = stationStateMap.get(suffix) ?? stationIndicatorStateMap.get(suffix);
+			// The on-demand channels (e.g. `battery`) are not created with the station device.
+			const channelId = suffix.slice(0, suffix.indexOf("."));
+			const channel = stationIndicatorChannels.find(c => c.id === channelId);
+			if (channel && !this.stationStateObjects.has(`${deviceId}.${channelId}`)) {
+				this.stationStateObjects.add(`${deviceId}.${channelId}`);
+				await this.adapter.setObjectNotExistsAsync(`${deviceId}.${channelId}`, {
+					type: "channel",
+					common: { name: channel.name },
+					native: {},
+				});
+			}
 			if (def) {
 				await this.adapter.extendObjectAsync(fullId, {
 					type: "state",

@@ -3244,6 +3244,46 @@ describe("deviceContext – handleStateChange", function () {
 		assert.strictEqual(cloudCalls.length, 0, "no cloud command sent without an inverter serial");
 		assert.ok(getWarn().includes("inverter serial not known"), "user-facing message, not internal validation");
 	});
+
+	it("a hybrid (storage) inverter: inverter.active=false reaches sendCloudDeviceCommand(<inverterSn>, <dtuSn>, 7, 6)", async function () {
+		const { ctx, cloudCalls } = makeCloudFallbackCtx();
+		await ctx.initFromSerial("DTU9999");
+		ctx.setCloudInverterSn("INV1111");
+		ctx.hybridInverter = true;
+
+		await ctx.handleStateChange("inverter.active", {
+			val: false,
+			ack: false,
+			ts: Date.now(),
+			lc: Date.now(),
+			from: "",
+		});
+
+		assert.deepStrictEqual(cloudCalls, [{ devSn: "INV1111", dtuSn: "DTU9999", action: 7, devType: 6 }]);
+	});
+
+	it("a hybrid (storage) inverter: dtu.reboot reaches sendCloudDeviceCommand(<dtuSn>, <dtuSn>, 27, 1)", async function () {
+		const { ctx, cloudCalls } = makeCloudFallbackCtx();
+		await ctx.initFromSerial("DTU9999");
+		ctx.setCloudInverterSn("INV1111");
+		ctx.hybridInverter = true;
+
+		await ctx.handleStateChange("dtu.reboot", button(true));
+
+		assert.deepStrictEqual(cloudCalls, [{ devSn: "DTU9999", dtuSn: "DTU9999", action: 27, devType: 1 }]);
+	});
+
+	it("hybridInverter defaults to false, so a plain microinverter keeps the original codes", async function () {
+		const { ctx, cloudCalls } = makeCloudFallbackCtx();
+		await ctx.initFromSerial("DTU9999");
+		ctx.setCloudInverterSn("INV1111");
+
+		assert.strictEqual(ctx.hybridInverter, false, "hybridInverter must default to false");
+
+		await ctx.handleStateChange("dtu.reboot", button(true));
+
+		assert.deepStrictEqual(cloudCalls, [{ devSn: "DTU9999", dtuSn: "DTU9999", action: 1, devType: 1 }]);
+	});
 });
 
 // ============================================================
@@ -5811,6 +5851,33 @@ describe("deviceContext – cleanupObsoleteObjects", function () {
 
 		await ctx["cleanupObsoleteObjects"]();
 
-		assert.deepStrictEqual(deleted, ["hoymiles.0.TESTDTU.bogus.state"], "only the unknown id must be removed");
+		// gridMeter.power moved to the station device — on a per-DTU device it is now obsolete,
+		// same as the unrecognized "bogus.state".
+		assert.deepStrictEqual(
+			deleted,
+			["hoymiles.0.TESTDTU.gridMeter.power", "hoymiles.0.TESTDTU.bogus.state"],
+			"the obsolete gridMeter.power and the unknown id must be removed",
+		);
+	});
+
+	it("removes the obsolete gridMeter channel from a per-DTU device (it now lives under the station)", async function () {
+		const stateRows = ["battery.soc"];
+		const channelRows = ["battery", "gridMeter"];
+		const { adapter, deleted } = createTrackingAdapter(stateRows, channelRows);
+		const ctx = new DeviceContext({
+			adapter,
+			protobuf: null,
+			host: "",
+			enableLocal: false,
+			enableCloud: false,
+			enableCloudRelay: false,
+			dataInterval: 15,
+			slowPollFactor: 6,
+		});
+		ctx.deviceId = "TESTDTU";
+
+		await ctx["cleanupObsoleteObjects"]();
+
+		assert.deepStrictEqual(deleted, ["hoymiles.0.TESTDTU.gridMeter"]);
 	});
 });

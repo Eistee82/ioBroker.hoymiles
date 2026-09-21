@@ -313,14 +313,14 @@ describe("BurstPoller – hybrid inverters", function () {
 		poller.stop();
 	});
 
-	it("writes a storage station's m:0 power flow (es + soc) to station-<id>.grid.* with quality 0x00 when live", async function () {
+	it("writes a storage station's m:0 power flow (es + soc) to station-<id>.grid.*/battery.soc with quality 0x00 when live", async function () {
 		const { adapter, calls } = createTrackingAdapter();
 		let resolveStation;
 		const stationDone = new Promise(r => (resolveStation = r));
 		const trackedSetState = adapter.setStateAsync;
 		adapter.setStateAsync = async (id, val) => {
 			await trackedSetState(id, val);
-			if (id === "station-1.grid.batterySoc") {
+			if (id === "station-1.battery.soc") {
 				resolveStation();
 			}
 		};
@@ -353,7 +353,7 @@ describe("BurstPoller – hybrid inverters", function () {
 		assert.deepStrictEqual(byId["station-1.grid.gridPower"], { val: 0, ack: true, q: 0x00 });
 		assert.deepStrictEqual(byId["station-1.grid.loadPower"], { val: 571, ack: true, q: 0x00 });
 		assert.deepStrictEqual(byId["station-1.grid.batteryPower"], { val: 571, ack: true, q: 0x00 });
-		assert.deepStrictEqual(byId["station-1.grid.batterySoc"], { val: 25, ack: true, q: 0x00 });
+		assert.deepStrictEqual(byId["station-1.battery.soc"], { val: 25, ack: true, q: 0x00 });
 	});
 
 	it("flags a storage station's m:0 power flow with quality 0x42 when the stream is not live (con!=1)", async function () {
@@ -363,7 +363,7 @@ describe("BurstPoller – hybrid inverters", function () {
 		const trackedSetState = adapter.setStateAsync;
 		adapter.setStateAsync = async (id, val) => {
 			await trackedSetState(id, val);
-			if (id === "station-1.grid.batterySoc") {
+			if (id === "station-1.battery.soc") {
 				resolveStation();
 			}
 		};
@@ -391,8 +391,58 @@ describe("BurstPoller – hybrid inverters", function () {
 		poller.stop();
 
 		const byId = Object.fromEntries(calls.map(([id, val]) => [id, val]));
-		assert.strictEqual(byId["station-1.grid.batterySoc"].q, 0x42);
+		assert.strictEqual(byId["station-1.battery.soc"].q, 0x42);
 		assert.strictEqual(byId["station-1.grid.batteryPower"].q, 0x42);
+	});
+
+	it("creates the on-demand battery channel exactly once when writing battery.soc", async function () {
+		const { adapter, calls } = createTrackingAdapter();
+		const channelCalls = [];
+		adapter.setObjectNotExistsAsync = async id => {
+			channelCalls.push(id);
+		};
+		let resolveStation;
+		const stationDone = new Promise(r => (resolveStation = r));
+		const trackedSetState = adapter.setStateAsync;
+		adapter.setStateAsync = async (id, val) => {
+			await trackedSetState(id, val);
+			if (id === "station-1.battery.soc") {
+				resolveStation();
+			}
+		};
+
+		const cloud = {
+			getDeviceTree: async () => [],
+			getRealtimeUri: async () => "https://eurt.example.com/rds/api/0/burst/get?k=abc&t=1",
+			pollRealtimeBurst: async () => ({
+				flow: [{ i: 1, o: 10 }],
+				dly: 10000,
+				con: 1,
+				es: { pp: 0, gp: 0, bp: 571, lp: 571, sp: 0 },
+				soc: 25,
+			}),
+		};
+
+		const poller = new BurstPoller({
+			cloud,
+			adapter,
+			devices: new Map(),
+			stationDevices: new Set([1]),
+			burstActiveStations: new Set(),
+		});
+		await poller.start();
+		await stationDone;
+		poller.stop();
+
+		assert.deepStrictEqual(
+			channelCalls.filter(id => id === "station-1.battery"),
+			["station-1.battery"],
+			"the battery channel must be created exactly once",
+		);
+		assert.ok(
+			calls.some(([id]) => id === "station-1.battery.soc"),
+			"battery.soc must have been written",
+		);
 	});
 });
 

@@ -77,6 +77,7 @@ class DeviceContext {
     pvStatesCreated;
     pvCount;
     burstActive;
+    hybridInverter = false;
     meterStatesCreated;
     meterMeasurementStatesCreated;
     meterControlStatesCreated;
@@ -1600,6 +1601,7 @@ class DeviceContext {
                 },
                 setState: (id, val, ack) => this.setState(id, val, ack),
                 resetButton: id => this.scheduleButtonReset(id),
+                storageSystem: this.hybridInverter,
             });
             if (handled) {
                 return;
