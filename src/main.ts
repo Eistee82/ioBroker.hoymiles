@@ -6,15 +6,30 @@ import DeviceContext from "./lib/deviceContext.js";
 import { ProtobufHandler } from "./lib/protobufHandler.js";
 import { discoverDtus, probeHost } from "./lib/networkDiscovery.js";
 import { destroyAgent } from "./lib/httpClient.js";
-import { DISCOVERY_CONCURRENCY, DISCOVERY_TIMEOUT_MS, PROBE_TIMEOUT_MS } from "./lib/constants.js";
+import {
+	DISCOVERY_CONCURRENCY,
+	DISCOVERY_TIMEOUT_MS,
+	PROBE_TIMEOUT_MS,
+	POWER_LIMIT_DEADBAND_DEFAULT,
+	POWER_LIMIT_MIN_INTERVAL_SEC_DEFAULT,
+} from "./lib/constants.js";
 import { anonymize, errorMessage, mapLimit } from "./lib/utils.js";
 import { HoymilesDeviceManagement } from "./lib/deviceManagement.js";
+import BleGatewayManager, { type BleDeviceConfig } from "./lib/bleGatewayManager.js";
 
 interface DeviceConfig {
 	host: string;
 	enabled: boolean;
 	serial?: string;
 	reachable?: boolean;
+}
+
+/** A BLE inverter entry as stored in the config (PIN in protected-native). */
+interface BleDeviceConfigRaw {
+	sn?: string;
+	mac?: string;
+	pin?: string;
+	enabled?: boolean;
 }
 
 interface HoymilesConfig {
@@ -26,19 +41,26 @@ interface HoymilesConfig {
 	cloudPassword?: string;
 	dataInterval?: number;
 	slowPollFactor?: number;
+	powerLimitDeadband?: number;
+	powerLimitMinIntervalSec?: number;
 	devices?: DeviceConfig[];
 	host?: string; // Legacy v0.2.0 flat format
+	enableBleGateway?: boolean;
+	bleDevices?: BleDeviceConfigRaw[];
 }
 
 class Hoymiles extends utils.Adapter {
 	public devices: Map<string, DeviceContext>;
 	private localContexts: DeviceContext[];
 	private cloudManager: CloudManager | null;
+	private bleGatewayManager: BleGatewayManager | null;
 
 	/** Shared protobuf handler (loaded once, used by all DeviceContexts). */
 	private sharedProtobuf: ProtobufHandler | null;
 	/** Cached connection state to avoid redundant setStateAsync calls. */
 	private lastConnectionState: boolean | undefined;
+	/** Cached BLE connection state to avoid redundant setStateAsync calls. */
+	private lastBleConnected: boolean | undefined;
 
 	/**
 	 * ioBroker Device Manager backend. Held to keep the instance alive; it binds its own `dm:*`
@@ -58,6 +80,7 @@ class Hoymiles extends utils.Adapter {
 		this.devices = new Map();
 		this.localContexts = [];
 		this.cloudManager = null;
+		this.bleGatewayManager = null;
 		this.sharedProtobuf = null;
 
 		// Device Manager backend. Constructed here (not in onReady) because dm-utils binds its
@@ -72,10 +95,11 @@ class Hoymiles extends utils.Adapter {
 		const cfg = this.config as HoymilesConfig;
 		const enableLocal = cfg.enableLocal !== false; // default-on (primary use case)
 		const enableCloud = cfg.enableCloud === true; // opt-in
+		const enableBleGateway = cfg.enableBleGateway === true; // opt-in (BLE-only inverters)
 
-		if (!enableLocal && !enableCloud) {
+		if (!enableLocal && !enableCloud && !enableBleGateway) {
 			this.log.error(
-				"Neither local nor cloud connection is enabled. Please enable at least one in the adapter settings.",
+				"No connection method is enabled. Please enable local, cloud, or the BLE gateway in the adapter settings.",
 			);
 			return;
 		}
@@ -87,6 +111,14 @@ class Hoymiles extends utils.Adapter {
 		const dataInterval = Number.isNaN(rawInterval) ? 5 : rawInterval;
 		const rawSlowPoll = Number(cfg.slowPollFactor ?? 6);
 		const slowPollFactor = Number.isNaN(rawSlowPoll) || rawSlowPoll < 1 ? 6 : rawSlowPoll;
+		// Flash protection for power-limit writes. 0 is a valid "switch it off", so an empty or
+		// invalid field falls back to the default while a deliberate 0 is kept.
+		const rawDeadband = Number(cfg.powerLimitDeadband ?? POWER_LIMIT_DEADBAND_DEFAULT);
+		const powerLimitDeadband =
+			Number.isNaN(rawDeadband) || rawDeadband < 0 ? POWER_LIMIT_DEADBAND_DEFAULT : rawDeadband;
+		const rawMinInterval = Number(cfg.powerLimitMinIntervalSec ?? POWER_LIMIT_MIN_INTERVAL_SEC_DEFAULT);
+		const powerLimitMinIntervalSec =
+			Number.isNaN(rawMinInterval) || rawMinInterval < 0 ? POWER_LIMIT_MIN_INTERVAL_SEC_DEFAULT : rawMinInterval;
 		const enableCloudRelay = cfg.enableCloudRelay !== false;
 		// Fast realtime burst for cloud-only DTUs. Default on: it only affects DTUs without a
 		// local link (skipped otherwise) and follows the server-dictated cadence.
@@ -122,6 +154,8 @@ class Hoymiles extends utils.Adapter {
 					enableCloudRelay,
 					dataInterval,
 					slowPollFactor,
+					powerLimitDeadband,
+					powerLimitMinIntervalSec,
 				});
 				this.localContexts.push(ctx);
 
@@ -131,6 +165,41 @@ class Hoymiles extends utils.Adapter {
 				} catch (err) {
 					this.log.error(`Failed to start connection to ${devCfg.host}: ${errorMessage(err)}`);
 				}
+			}
+		}
+
+		// --- BLE gateway (ESPHome Bluetooth proxy) for BLE-only inverters (e.g. HMS-800-2WB) ---
+		if (enableBleGateway) {
+			// Only activated rows with a MAC and PIN are connected.
+			const bleDevices: BleDeviceConfig[] = (cfg.bleDevices || [])
+				.map(d => ({
+					sn: (d.sn || "").toUpperCase().replace(/[^0-9A-Z]/g, ""),
+					mac: (d.mac || "").toUpperCase(),
+					pin: d.pin || "",
+					enabled: d.enabled === true,
+				}))
+				.filter(d => d.enabled && d.mac && d.pin)
+				.map(({ sn, mac, pin }) => ({ sn, mac, pin }));
+			await this.setStateAsync("info.bleLastError", "", true);
+			this.bleGatewayManager = new BleGatewayManager({
+				adapter: this,
+				protobuf: this.sharedProtobuf,
+				devices: bleDevices,
+				dataInterval,
+				slowPollFactor,
+				powerLimitDeadband,
+				powerLimitMinIntervalSec,
+			});
+			try {
+				this.bleGatewayManager.start();
+			} catch (err) {
+				this.log.error(`BLE gateway startup failed: ${errorMessage(err)}`);
+				try {
+					this.bleGatewayManager.stop();
+				} catch (stopErr) {
+					this.log.warn(`BLE gateway stop also failed: ${errorMessage(stopErr)}`);
+				}
+				this.bleGatewayManager = null;
 			}
 		}
 
@@ -217,7 +286,17 @@ class Hoymiles extends utils.Adapter {
 	async updateConnectionState(): Promise<void> {
 		const anyLocalConnected = this.localContexts.some(ctx => ctx.connection?.connected);
 		const cloudOk = this.cloudManager?.hasToken;
-		const newState = !!(anyLocalConnected || cloudOk);
+		// A paired BLE inverter counts as a data connection; a bare gateway link does not.
+		const anyBleInverter = this.bleGatewayManager?.anyConnected() ?? false;
+		// info.bleConnected tracks the ESPHome gateway link itself (not inverter pairing).
+		const anyBleGateway = this.bleGatewayManager?.anyGatewayConnected() ?? false;
+
+		if (anyBleGateway !== this.lastBleConnected) {
+			this.lastBleConnected = anyBleGateway;
+			await this.setStateAsync("info.bleConnected", anyBleGateway, true);
+		}
+
+		const newState = !!(anyLocalConnected || cloudOk || anyBleInverter);
 		if (newState === this.lastConnectionState) {
 			return;
 		}
@@ -328,6 +407,18 @@ class Hoymiles extends utils.Adapter {
 	}
 
 	/**
+	 * Pick a message in the ioBroker system language. The admin sendTo dialog shows an `error`
+	 * string as-is, so a localized string is returned rather than an `{en, de}` object (which the
+	 * dialog would print verbatim).
+	 *
+	 * @param en - English text (also the fallback)
+	 * @param de - German text
+	 */
+	private tr(en: string, de: string): string {
+		return this.language === "de" ? de : en;
+	}
+
+	/**
 	 * Handle messages from the admin UI (e.g. device discovery).
 	 *
 	 * @param obj - The message object from admin
@@ -349,6 +440,10 @@ class Hoymiles extends utils.Adapter {
 				void this.handleTestCloudLogin(obj).catch(err =>
 					this.log.error(`TestCloudLogin failed: ${errorMessage(err)}`),
 				);
+			} else if (obj.command === "importBleDevices") {
+				void this.handleImportBleDevices(obj).catch(err =>
+					this.log.error(`ImportBleDevices failed: ${errorMessage(err)}`),
+				);
 			} else {
 				this.log.debug(`Unknown message command: ${obj.command}`);
 				this.reply(obj, { error: `Unknown command: ${obj.command}` });
@@ -368,7 +463,7 @@ class Hoymiles extends utils.Adapter {
 
 			if (found.length === 0) {
 				this.log.info("No DTUs found on the local network");
-				this.reply(obj, { error: { en: "No DTUs found", de: "Keine DTUs gefunden" } });
+				this.reply(obj, { error: this.tr("No DTUs found", "Keine DTUs gefunden") });
 				return;
 			}
 
@@ -405,6 +500,59 @@ class Hoymiles extends utils.Adapter {
 			this.reply(obj, { native: { devices: currentDevices } });
 		} catch (err) {
 			this.log.error(`Discovery failed: ${errorMessage(err)}`);
+			this.reply(obj, { error: errorMessage(err) });
+		}
+	}
+
+	/**
+	 * Add the currently-discovered Hoymiles BLE inverters (from `info.bleDiscovered`) as rows in the
+	 * config table so the user only has to enter each PIN and tick Active. Existing rows (and their
+	 * PINs) are preserved; nothing is written to disk here — the admin form is updated and the user
+	 * saves.
+	 *
+	 * @param obj - The message object to respond to
+	 */
+	private async handleImportBleDevices(obj: ioBroker.Message): Promise<void> {
+		try {
+			const st = await this.getStateAsync("info.bleDiscovered");
+			let devices: Array<{ hoymiles?: boolean; sn?: string; mac?: string }> = [];
+			try {
+				const parsed = JSON.parse((st?.val as string) || "{}");
+				devices = Array.isArray(parsed?.devices) ? parsed.devices : [];
+			} catch {
+				devices = [];
+			}
+			const norm = (m: string | undefined): string =>
+				String(m || "")
+					.replace(/[^0-9a-fA-F]/g, "")
+					.toUpperCase();
+			const found = devices.filter(d => d && d.hoymiles && d.mac);
+			if (found.length === 0) {
+				this.reply(obj, {
+					error: this.tr(
+						"No Hoymiles inverters discovered yet. Make sure an inverter is powered on (producing) and within Bluetooth range of the proxy.",
+						"Noch keine Hoymiles-Wechselrichter erkannt. Stelle sicher, dass ein Wechselrichter eingeschaltet ist (produziert) und in Bluetooth-Reichweite des Proxys liegt.",
+					),
+				});
+				return;
+			}
+
+			const cfg = this.config as HoymilesConfig;
+			const current: BleDeviceConfigRaw[] = (cfg.bleDevices || []).map(d => ({ ...d }));
+			const existing = new Set(current.map(d => norm(d.mac)));
+			let added = 0;
+			for (const d of found) {
+				const key = norm(d.mac);
+				if (key && !existing.has(key)) {
+					current.push({ sn: d.sn || "", mac: d.mac, pin: "", enabled: false });
+					existing.add(key);
+					added++;
+				}
+			}
+			this.log.info(`BLE import: ${added} new device(s) added to the config table (${found.length} discovered)`);
+			this.reply(obj, { native: { bleDevices: current } });
+		} catch (err) {
+			this.log.error(`BLE import failed: ${errorMessage(err)}`);
 			this.reply(obj, { error: errorMessage(err) });
 		}
 	}
@@ -488,7 +636,7 @@ class Hoymiles extends utils.Adapter {
 			const password = msg.password ?? cfg.cloudPassword ?? "";
 			if (!user || !password) {
 				this.reply(obj, {
-					error: { en: "Email and password required", de: "E-Mail und Passwort erforderlich" },
+					error: this.tr("Email and password required", "E-Mail und Passwort erforderlich"),
 				});
 				return;
 			}
@@ -613,6 +761,14 @@ class Hoymiles extends utils.Adapter {
 			} catch (err) {
 				this.log.warn(`CloudManager stop error: ${errorMessage(err)}`);
 			}
+			try {
+				if (this.bleGatewayManager) {
+					this.bleGatewayManager.stop();
+					this.bleGatewayManager = null;
+				}
+			} catch (err) {
+				this.log.warn(`BleGatewayManager stop error: ${errorMessage(err)}`);
+			}
 			// Idempotent safety net: disconnect() is a no-op for contexts already torn down above
 			// (local via localContexts, cloud-only via CloudManager.stop()).
 			for (const ctx of this.devices.values()) {
@@ -637,6 +793,7 @@ class Hoymiles extends utils.Adapter {
 			try {
 				await this.setStateAsync("info.connection", false, true);
 				await this.setStateAsync("info.cloudConnected", false, true);
+				await this.setStateAsync("info.bleConnected", false, true);
 			} catch (err) {
 				this.log.debug(`Shutdown state update skipped: ${errorMessage(err)}`);
 			}

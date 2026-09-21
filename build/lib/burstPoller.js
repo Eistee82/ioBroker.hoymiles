@@ -49,6 +49,23 @@ class BurstPoller {
         }
         this.stations.clear();
     }
+    releaseDtu(dtuSerial) {
+        for (const sb of this.stations.values()) {
+            let removed = false;
+            for (const [invSn, t] of sb.targets) {
+                if (t.dtuSerial === dtuSerial) {
+                    t.dev.burstActive = false;
+                    sb.targets.delete(invSn);
+                    removed = true;
+                }
+            }
+            if (removed) {
+                this.adapter.log.info(sb.targets.size === 0
+                    ? `Burst: all inverters of station ${sb.stationId} now served locally — keeping only the live station-level power aggregate`
+                    : `Burst: DTU ${dtuSerial} now served locally`);
+            }
+        }
+    }
     async startStation(stationId) {
         const targets = new Map();
         let deviceTree = [];
@@ -70,9 +87,6 @@ class BurstPoller {
                 }
             }
         }
-        if (targets.size === 0) {
-            return;
-        }
         const uri = await this.cloud.getRealtimeUri(stationId);
         for (const t of targets.values()) {
             t.dev.burstActive = true;
@@ -89,7 +103,9 @@ class BurstPoller {
             claimReleased: false,
         };
         this.stations.set(stationId, sb);
-        this.adapter.log.info(`Burst realtime started for station ${stationId} (${targets.size} cloud-only inverter(s))`);
+        this.adapter.log.info(targets.size === 0
+            ? `Burst realtime started for station ${stationId} (station-level power aggregate only — all inverters served locally)`
+            : `Burst realtime started for station ${stationId} (${targets.size} cloud-only inverter(s))`);
         void this.poll(sb);
     }
     async poll(sb) {
@@ -102,11 +118,24 @@ class BurstPoller {
                 sb.uri = await this.cloud.getRealtimeUri(sb.stationId);
                 sb.uriFetchedAt = Date.now();
             }
-            const data = await this.cloud.pollRealtimeBurst(sb.uri, {
-                m: 3,
-                mis: [...sb.targets.keys()],
-                t: 1,
-            });
+            let dly;
+            if (sb.targets.size > 0) {
+                const data = await this.cloud.pollRealtimeBurst(sb.uri, {
+                    m: 3,
+                    mis: [...sb.targets.keys()],
+                    t: 1,
+                });
+                const quality = data.con === 1 ? 0x00 : 0x42;
+                for (const inv of data.mis ?? []) {
+                    await this.writeInverter(sb, inv, quality);
+                }
+                dly = data.dly;
+            }
+            const stationData = await this.cloud.pollRealtimeBurst(sb.uri, { m: 0, t: 1 });
+            if (stationData.power) {
+                const sq = stationData.con === 1 ? 0x00 : 0x42;
+                await this.writeStation(sb.stationId, stationData.power, sq);
+            }
             if (sb.claimReleased) {
                 for (const t of sb.targets.values()) {
                     t.dev.burstActive = true;
@@ -116,16 +145,7 @@ class BurstPoller {
                 this.adapter.log.info(`Burst realtime for station ${sb.stationId} resumed`);
             }
             sb.consecutiveFailures = 0;
-            const quality = data.con === 1 ? 0x00 : 0x42;
-            for (const inv of data.mis ?? []) {
-                await this.writeInverter(sb, inv, quality);
-            }
-            const stationData = await this.cloud.pollRealtimeBurst(sb.uri, { m: 0, t: 1 });
-            if (stationData.power) {
-                const sq = stationData.con === 1 ? 0x00 : 0x42;
-                await this.writeStation(sb.stationId, stationData.power, sq);
-            }
-            nextDelay = Math.min(Math.max(data.dly ?? BURST_MIN_INTERVAL_MS, BURST_MIN_INTERVAL_MS), BURST_MAX_INTERVAL_MS);
+            nextDelay = Math.min(Math.max(dly ?? stationData.dly ?? BURST_MIN_INTERVAL_MS, BURST_MIN_INTERVAL_MS), BURST_MAX_INTERVAL_MS);
         }
         catch (err) {
             sb.uriFetchedAt = 0;

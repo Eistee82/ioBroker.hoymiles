@@ -4,6 +4,7 @@ import { CLOUD_RECONNECT_DELAY_MIN_MS, CLOUD_RECONNECT_DELAY_MAX_MS, CLOUD_HEART
 const CLOUD_CMD_HEARTBEAT = [0x22, 0x02];
 const CLOUD_CMD_REALDATA = [0x22, 0x0c];
 const CLOUD_CMD_REALDATA_STATUS = [0x22, 0x0d];
+const ACK_ONLY = new Set([0x01, 0x02, 0x0c, 0x0d]);
 class CloudRelay extends TcpConnection {
     paused;
     heartbeatTimer;
@@ -212,10 +213,11 @@ class CloudRelay extends TcpConnection {
                 continue;
             }
             const { cmdHigh, cmdLow, payload } = parsed;
-            if (cmdLow === 0x02 || cmdLow === 0x0c || cmdLow === 0x0d) {
+            const seq = (frame[4] << 8) | frame[5];
+            if (ACK_ONLY.has(cmdLow)) {
+                this.emit("ack", { cmdHigh, cmdLow, seq, payload });
                 continue;
             }
-            const seq = (frame[4] << 8) | frame[5];
             this.emit("command", { cmdHigh, cmdLow, seq, payload });
         }
     }

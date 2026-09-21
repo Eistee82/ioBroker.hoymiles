@@ -242,17 +242,22 @@
     "devices": [],
     "dataInterval": 5,
     "slowPollFactor": 6,
+    "powerLimitDeadband": 1,
+    "powerLimitMinIntervalSec": 60,
     "enableCloudRelay": true,
     "enableRealtimeBurst": true,
     "enableCloud": false,
     "cloudUser": "",
-    "cloudPassword": ""
+    "cloudPassword": "",
+    "enableBleGateway": false,
+    "bleDevices": []
   },
   "encryptedNative": [
     "cloudPassword"
   ],
   "protectedNative": [
-    "cloudPassword"
+    "cloudPassword",
+    "bleDevices"
   ],
   "instanceObjects": [
     {
@@ -295,6 +300,45 @@
       "common": {
         "name": "Last cloud connection error",
         "role": "text",
+        "type": "string",
+        "read": true,
+        "write": false,
+        "def": ""
+      },
+      "native": {}
+    },
+    {
+      "_id": "info.bleConnected",
+      "type": "state",
+      "common": {
+        "name": "BLE gateway connected",
+        "role": "indicator.connected",
+        "type": "boolean",
+        "read": true,
+        "write": false,
+        "def": false
+      },
+      "native": {}
+    },
+    {
+      "_id": "info.bleLastError",
+      "type": "state",
+      "common": {
+        "name": "Last BLE pairing error",
+        "role": "text",
+        "type": "string",
+        "read": true,
+        "write": false,
+        "def": ""
+      },
+      "native": {}
+    },
+    {
+      "_id": "info.bleDiscovered",
+      "type": "state",
+      "common": {
+        "name": "Discovered BLE gateways and devices (JSON)",
+        "role": "json",
         "type": "string",
         "read": true,
         "write": false,

@@ -1,5 +1,13 @@
 import assert from "node:assert";
-import { channels, states, stationChannels, stationStates } from "../build/lib/stateDefinitions.js";
+import { readFileSync } from "node:fs";
+import {
+	channels,
+	states,
+	stationChannels,
+	stationStates,
+	meterMeasurementStates,
+	meterControlStates,
+} from "../build/lib/stateDefinitions.js";
 
 // ============================================================
 // stateDefinitions
@@ -63,7 +71,7 @@ describe("stateDefinitions", function () {
 		assert.ok(stateIds.includes("dtu.serialNumber"), "Missing dtu.serialNumber state");
 		assert.ok(stateIds.includes("dtu.hwVersion"), "Missing dtu.hwVersion state");
 		assert.ok(stateIds.includes("dtu.swVersion"), "Missing dtu.swVersion state");
-		assert.ok(stateIds.includes("dtu.rssi"), "Missing dtu.rssi state");
+		assert.ok(stateIds.includes("dtu.signalQuality"), "Missing dtu.signalQuality state");
 		assert.ok(stateIds.includes("dtu.stepTime"), "Missing dtu.stepTime state");
 		assert.ok(stateIds.includes("dtu.accessModel"), "Missing dtu.accessModel state");
 		assert.ok(stateIds.includes("dtu.communicationTime"), "Missing dtu.communicationTime state");
@@ -177,5 +185,52 @@ describe("stateDefinitions – station", function () {
 		for (const s of stationStates) {
 			assert.ok(!s.write, `Station state ${s.id} should not be writable`);
 		}
+	});
+});
+
+// ============================================================
+// stateDefinitions – every selectable value is translated
+// ============================================================
+describe("stateDefinitions – state value translations", function () {
+	// ioBroker types common.states as Record<string, string>, so a value cannot carry its own
+	// translations. The Admin resolves the text through the adapter's i18n files instead — which
+	// only works if the exact string is a key there. A value added without that entry silently
+	// stays English in every language.
+	const LANGS = ["en", "de", "ru", "pt", "nl", "fr", "it", "es", "pl", "uk", "zh-cn"];
+
+	/** Collect every `states` value used anywhere in the definitions. */
+	function allStateValues() {
+		const values = new Set();
+		for (const def of [...states, ...stationStates, ...meterMeasurementStates, ...meterControlStates]) {
+			for (const text of Object.values(def.states ?? {})) {
+				values.add(text);
+			}
+		}
+		return values;
+	}
+
+	it("has an i18n entry for every selectable value, in all 11 languages", function () {
+		const missing = [];
+		for (const lang of LANGS) {
+			const dict = JSON.parse(readFileSync(`admin/i18n/${lang}.json`, "utf8"));
+			for (const value of allStateValues()) {
+				if (typeof dict[value] !== "string" || dict[value].length === 0) {
+					missing.push(`${lang}: "${value}"`);
+				}
+			}
+		}
+		assert.deepStrictEqual(missing, [], `untranslated state values:\n  ${missing.join("\n  ")}`);
+	});
+
+	it("offers the meter modes the firmware actually distinguishes", function () {
+		const mode = meterControlStates.find(d => d.id === "meter.mode");
+		assert.ok(mode, "meter.mode missing");
+		// 1 = polled only, 2 = grid device (the value the regulation tests for with `bnec $r0,#0x2`).
+		// 0 is the never-bound starting value, not a command: undoing a binding would need
+		// action 90, which memsets the whole network block including the inverter assignment.
+		assert.deepStrictEqual(Object.keys(mode.states), ["0", "1", "2"]);
+		assert.strictEqual(mode.states[1], "meter only");
+		assert.strictEqual(mode.states[2], "zero export");
+		assert.strictEqual(mode.write, true);
 	});
 });

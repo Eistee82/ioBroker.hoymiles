@@ -232,18 +232,39 @@ class CloudPoller {
             if (this.state !== "NIGHT_MODE") {
                 return;
             }
+            let anyStationLive = false;
             await mapLimit([...this.stationDevices], CLOUD_POLL_CONCURRENCY, async (stationId) => {
                 const deviceId = `station-${stationId}`;
+                if (await this.stationResumedUploading(stationId)) {
+                    anyStationLive = true;
+                }
                 await this.pollWeather(stationId, deviceId);
                 if (this.firmwareCheckDue(stationId)) {
                     await this.pollFirmwareStatus(stationId);
                 }
             });
             await this.setCloudConnected(true);
+            if (anyStationLive && this.state === "NIGHT_MODE") {
+                this.adapter.log.info("Cloud station is uploading again — resuming active cloud polling (no local connection needed)");
+                this.state = "POLLING_ACTIVE";
+                await this.poll();
+                this.scheduleCloudPoll();
+            }
         }
         catch (err) {
             this.adapter.log.warn(`Night poll failed: ${errorMessage(err)}`);
             await this.setCloudConnected(false);
+        }
+    }
+    async stationResumedUploading(stationId) {
+        try {
+            const data = await this.cloud.getStationRealtime(stationId);
+            const epoch = stationWallClockToEpoch(data.data_time, this.stationTzOffsetMs.get(stationId) ?? 0);
+            return epoch != null && Date.now() - epoch < CLOUD_STATION_STALE_MS;
+        }
+        catch (err) {
+            this.adapter.log.debug(`Night wake-up check failed for station ${stationId}: ${errorMessage(err)}`);
+            return false;
         }
     }
     async pollStation(stationId, isSlowPoll) {

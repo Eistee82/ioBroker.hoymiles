@@ -514,3 +514,58 @@ describe("cloudRelay", function () {
 		});
 	});
 });
+
+// ============================================================
+// cloudRelay – downlink routing
+// ============================================================
+// The cloud's answers to our own uploads used to be discarded here. They carry the server
+// time, the timezone offset and an error code, so they are now surfaced as "ack" — separate
+// from real commands, which must never be confused with them.
+describe("cloudRelay – downlink routing", function () {
+	let handler;
+
+	before(async function () {
+		this.timeout(10000);
+		const { ProtobufHandler } = await import("../build/lib/protobufHandler.js");
+		handler = new ProtobufHandler();
+		await handler.loadProtos();
+	});
+
+	function feed(low, payload = Buffer.alloc(0)) {
+		const relay = new CloudRelay("server.example.com", 10081);
+		relay.configure(handler, "4143A01CEDE4");
+		const events = { ack: [], command: [] };
+		relay.on("ack", e => events.ack.push(e));
+		relay.on("command", e => events.command.push(e));
+		relay["_onDownlink"](handler.buildMessage(0x23, low, payload));
+		relay.disconnect();
+		return events;
+	}
+
+	it('routes the acknowledgements of our uploads to "ack"', function () {
+		for (const low of [0x01, 0x02, 0x0c, 0x0d]) {
+			const e = feed(low);
+			assert.strictEqual(e.ack.length, 1, `0x23${low.toString(16)} should be an ack`);
+			assert.strictEqual(e.command.length, 0);
+			assert.strictEqual(e.ack[0].cmdLow, low);
+		}
+	});
+
+	it('routes an action command to "command"', function () {
+		const e = feed(0x05);
+		assert.strictEqual(e.command.length, 1);
+		assert.strictEqual(e.ack.length, 0);
+	});
+
+	it("keeps the command-status ack on the command path", function () {
+		// 0x2306 is an acknowledgement too, but the grid-profile serve keys off it.
+		const e = feed(0x06);
+		assert.strictEqual(e.command.length, 1);
+		assert.strictEqual(e.ack.length, 0);
+	});
+
+	it("no longer discards a downlink it does not implement", function () {
+		const e = feed(0x0a);
+		assert.strictEqual(e.command.length, 1);
+	});
+});

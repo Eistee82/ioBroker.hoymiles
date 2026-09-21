@@ -8,6 +8,7 @@ import {
 	HM_MAGIC_1,
 	SCALE_VOLTAGE,
 	SCALE_POWER,
+	SCALE_POWER_LIMIT_TCP,
 	SCALE_TEMPERATURE,
 	SCALE_CURRENT,
 	SCALE_FREQUENCY,
@@ -79,7 +80,6 @@ const CMD = {
 	HEARTBEAT: [0xa3, 0x02] as const,
 	NETWORK_INFO: [0xa3, 0x14] as const,
 	COMMAND_STATUS: [0xa3, 0x06] as const,
-	AUTO_SEARCH: [0xa3, 0x13] as const,
 	DEV_CONFIG_FETCH: [0xa3, 0x07] as const,
 	DEV_CONFIG_PUT: [0xa3, 0x08] as const,
 } as const;
@@ -423,6 +423,38 @@ class ProtobufHandler {
 	}
 
 	/**
+	 * Encode a HistPower request (tag 0xa315) — the device's own power curve for one day.
+	 *
+	 * The answer (0xa215) carries `power_array` at `step_time` resolution together with the day's
+	 * energy totals, which `handleHistPower()` turns into the `history.*` states. The curve comes
+	 * from the device itself, so it is available without the cloud.
+	 *
+	 * **`requested_day` must be 0, not a date.** The handler truncates the field to a single byte
+	 * and keeps it as an anchor, which a running counter is then compared against; when the counter
+	 * is below the anchor the whole array is skipped. A timestamp truncates to an arbitrary byte
+	 * (a local midnight tested here came out as 224) and the array stays empty — measured on an
+	 * HMS-800W-2T, explained in the firmware. 0 truncates to 0, so the gate is always open.
+	 *
+	 * The day is split into pages of at most 200 samples; the response reports the page count in
+	 * `ap`. Request `cp = 0 … ap-1` and concatenate to get the full day.
+	 *
+	 * @param timestamp - Unix timestamp in seconds (subject to the device's ±60 s time gate).
+	 * @param page - Page index (`cp`), 0-based.
+	 * @returns Framed message buffer
+	 */
+	encodeHistPowerRequest(timestamp: number, page = 0): Buffer {
+		const ResDTO = this.getType("AppGetHistPower", "AppGetHistPowerResDTO");
+		const msg = ResDTO.create({
+			cp: page,
+			offset: DTU_TIME_OFFSET,
+			requestedTime: timestamp,
+			requestedDay: 0,
+		});
+		const payload = ResDTO.encode(msg).finish();
+		return this.buildMessage(CMD.HIST_POWER[0], CMD.HIST_POWER[1], payload);
+	}
+
+	/**
 	 * Generic helper to encode a CommandResDTO action message.
 	 *
 	 * @param action - ACTION constant
@@ -509,19 +541,76 @@ class ProtobufHandler {
 	/**
 	 * Encode a SetConfig message to write DTU configuration.
 	 *
+	 * **This must always be a full set, never a partial write.** The DTU copies the decoded fields
+	 * into its configuration without checking whether they were actually transmitted, and proto3
+	 * does not transmit a field that holds its default. Sending only the field one wants to change
+	 * therefore silently clears everything else. On the HMS-800W-2T the decoder
+	 * (`hm_config_read_fields` at `0x4081591e`) writes `server_domain_name`, `serverport`,
+	 * `limit_power_mypower`, `server_send_time`, `lock_password` and `lock_time` **unguarded**
+	 * (`_fwanalysis/ADAPTER_FINDINGS.md` §15); on the 2WB a partial write is what wiped the server
+	 * domain, the port and the power limit in a live test.
+	 *
+	 * So `base` is required: it is the device's own last GetConfig response, and every field the
+	 * two messages share by name is carried over from it. 49 of the 54 SetConfig fields exist in
+	 * GetConfig under the same name, so nothing has to be guessed.
+	 *
+	 * `app_page` is deliberately left at 0. It gates the WiFi branch of the decoder — only with
+	 * `app_page == 1` does the device take `wifi_ssid` and `wifi_password` from the message. Left
+	 * alone, those two credentials cannot be touched by accident, and the write stays RAM-only on
+	 * the 2T instead of committing to flash.
+	 *
 	 * @param timestamp - Unix timestamp in seconds
-	 * @param config - Configuration fields to set
+	 * @param config - Configuration fields to change
+	 * @param base - The device's last GetConfig response, decoded (see {@link decodeGetConfigRaw})
 	 * @returns Framed message buffer
+	 * @throws {Error} When no base configuration is available — a partial write is never safe.
 	 */
-	encodeSetConfig(timestamp: number, config: Partial<SetConfigFields>): Buffer {
+	encodeSetConfig(timestamp: number, config: Partial<SetConfigFields>, base: Record<string, unknown> | null): Buffer {
 		const ResDTO = this.getType("SetConfig", "SetConfigResDTO");
+		if (!base) {
+			throw new Error(
+				"cannot write the configuration without having read it first — a partial SetConfig " +
+					"clears every field it does not carry",
+			);
+		}
+		// Carry over everything the two messages share by name. `appPage` is excluded on purpose
+		// (see above); the envelope fields are set explicitly below.
+		const envelope = new Set(["offset", "time", "tid", "errorCode", "appPage"]);
+		const carried: Record<string, unknown> = {};
+		for (const name of Object.keys(ResDTO.fields)) {
+			if (envelope.has(name)) {
+				continue;
+			}
+			const value = base[name];
+			if (value !== undefined && value !== null) {
+				carried[name] = value;
+			}
+		}
 		const msg = ResDTO.create({
+			...carried,
 			offset: DTU_TIME_OFFSET,
 			time: timestamp,
 			...config,
 		});
 		const payload = ResDTO.encode(msg).finish();
 		return this.buildMessage(CMD.SET_CONFIG[0], CMD.SET_CONFIG[1], payload);
+	}
+
+	/**
+	 * Decode a GetConfig response into its raw field object, for round-tripping into SetConfig.
+	 *
+	 * Kept separate from {@link decodeGetConfig}, which produces the curated result the states are
+	 * built from. This one keeps **every** field, including `lock_password` and `wifi_password`,
+	 * which the device sends in the clear and which the adapter deliberately does not expose as
+	 * states. Those values exist here for one purpose: writing them back unchanged so a
+	 * configuration write cannot erase them. **Never log this object.**
+	 *
+	 * @param payload - Raw GetConfig response payload
+	 * @returns All decoded fields, keyed by their protobuf field name
+	 */
+	decodeGetConfigRaw(payload: Buffer): Record<string, unknown> {
+		const ReqDTO = this.getType("GetConfig", "GetConfigReqDTO");
+		return ReqDTO.toObject(ReqDTO.decode(payload), { longs: Number, defaults: true });
 	}
 
 	/**
@@ -645,21 +734,6 @@ class ProtobufHandler {
 	}
 
 	/**
-	 * Encode an AutoSearch request to discover connected inverters.
-	 *
-	 * @param timestamp - Unix timestamp in seconds
-	 */
-	encodeAutoSearch(timestamp: number): Buffer {
-		const ResDTO = this.getType("AutoSearch", "AutoSearchResDTO");
-		const msg = ResDTO.create({
-			offset: DTU_TIME_OFFSET,
-			time: timestamp,
-		});
-		const payload = ResDTO.encode(msg).finish();
-		return this.buildMessage(CMD.AUTO_SEARCH[0], CMD.AUTO_SEARCH[1], payload);
-	}
-
-	/**
 	 * Encode a DevConfig fetch request.
 	 *
 	 * @param timestamp - Unix timestamp in seconds
@@ -773,9 +847,11 @@ class ProtobufHandler {
 	 * Decode a RealDataNew response payload.
 	 *
 	 * @param payload - The protobuf payload buffer
+	 * @param powerLimitScale - Divisor for `SGSMO.power_limit`; the device families disagree on it,
+	 *   see {@link SCALE_POWER_LIMIT_TCP}. Defaults to the TCP scale.
 	 * @returns Decoded real data result
 	 */
-	decodeRealDataNew(payload: Buffer): RealDataResult {
+	decodeRealDataNew(payload: Buffer, powerLimitScale: number = SCALE_POWER_LIMIT_TCP): RealDataResult {
 		const obj = this.decodePayload("RealDataNew", "RealDataNewReqDTO", payload);
 
 		const result: RealDataResult = {
@@ -795,15 +871,16 @@ class ProtobufHandler {
 				voltage: scaled(sgs.voltage, SCALE_VOLTAGE),
 				frequency: scaled(sgs.frequency, SCALE_FREQUENCY),
 				activePower: scaled(sgs.activePower, SCALE_POWER),
-				reactivePower: scaled(sgs.reactivePower, SCALE_POWER),
+				// reactive_power is signed on the wire (firmware loads it with a sign-extend), so it
+				// must be reinterpreted like temperature — capacitive reactive power is negative.
+				reactivePower: scaled(s16(sgs.reactivePower), SCALE_POWER),
 				current: scaled(sgs.current, SCALE_CURRENT),
 				powerFactor: scaled(sgs.powerFactor, SCALE_POWER_FACTOR),
 				temperature: scaled(s16(sgs.temperature), SCALE_TEMPERATURE),
 				warningNumber: num(sgs.warningNumber),
 				crcChecksum: num(sgs.crcChecksum),
 				linkStatus: num(sgs.linkStatus),
-				powerLimit: scaled(sgs.powerLimit, SCALE_POWER),
-				modulationIndexSignal: num(sgs.modulationIndexSignal),
+				powerLimit: scaled(sgs.powerLimit, powerLimitScale),
 			});
 		}
 
@@ -820,6 +897,17 @@ class ProtobufHandler {
 			});
 		}
 
+		// rp_data / rsd_data / tgs_data have buffers in the firmware struct (RpMO 24 B ×10,
+		// RSDMO 40 B ×20, TGSMO 88 B ×20 — `schema_2t.proto`, descriptor 0x408def60) but it is
+		// NOT established that these devices ever fill them: a struct field is not proof of a
+		// write. Their entry counts are reported so the answer comes from a real device instead
+		// of an assumption. States follow once a capture shows content.
+		result.extraLists = {
+			rp: arr(obj.rpData).length,
+			rsd: arr(obj.rsdData).length,
+			tgs: arr(obj.tgsData).length,
+		};
+
 		for (const m of arr(obj.meterData)) {
 			result.meter.push({
 				deviceType: num(m.deviceType),
@@ -831,6 +919,18 @@ class ProtobufHandler {
 				powerFactorTotal: scaled(m.powerFactorTotal, SCALE_POWER_FACTOR),
 				energyTotalPower: scaled(m.energyTotalPower, SCALE_ENERGY),
 				energyTotalConsumed: scaled(m.energyTotalConsumed, SCALE_ENERGY),
+				// Per-phase energies and power factors (MeterMO #9-#11, #13-#15, #23-#25). Same
+				// scales as their totals — a per-phase value cannot be scaled differently from the
+				// sum it contributes to.
+				energyPhaseAExport: scaled(m.energyPhase_A, SCALE_ENERGY),
+				energyPhaseBExport: scaled(m.energyPhase_B, SCALE_ENERGY),
+				energyPhaseCExport: scaled(m.energyPhase_C, SCALE_ENERGY),
+				energyPhaseAImport: scaled(m.energyPhase_AConsumed, SCALE_ENERGY),
+				energyPhaseBImport: scaled(m.energyPhase_BConsumed, SCALE_ENERGY),
+				energyPhaseCImport: scaled(m.energyPhase_CConsumed, SCALE_ENERGY),
+				powerFactorPhaseA: scaled(m.powerFactorPhase_A, SCALE_POWER_FACTOR),
+				powerFactorPhaseB: scaled(m.powerFactorPhase_B, SCALE_POWER_FACTOR),
+				powerFactorPhaseC: scaled(m.powerFactorPhase_C, SCALE_POWER_FACTOR),
 				faultCode: num(m.faultCode),
 				voltagePhaseA: scaled(m.voltagePhase_A, SCALE_VOLTAGE),
 				voltagePhaseB: scaled(m.voltagePhase_B, SCALE_VOLTAGE),
@@ -881,6 +981,11 @@ class ProtobufHandler {
 				wifiVersion: (di.wifiVersion as string) || "",
 				dtu485Mode: num(di.dtu485Mode),
 				sub1gFrequencyBand: num(di.sub1gFrequencyBand),
+				// `shls` carries the network meters the device knows, as numeric MACs.
+				knownMeters: (Array.isArray(di.shls) ? di.shls : [])
+					.map(v => (typeof v === "string" ? BigInt(v) : BigInt(Number(v) || 0)))
+					.filter(v => v > 0n)
+					.map(v => v.toString(16).padStart(12, "0")),
 			};
 		}
 
@@ -916,6 +1021,7 @@ class ProtobufHandler {
 			obj.defaultGateway_3,
 		);
 		const wifiIp = formatIpv4(obj.wifiIpAddr_0, obj.wifiIpAddr_1, obj.wifiIpAddr_2, obj.wifiIpAddr_3);
+		const dns = formatIpv4(obj.cableDns_0, obj.cableDns_1, obj.cableDns_2, obj.cableDns_3);
 		const mac = formatMac(obj.mac_0, obj.mac_1, obj.mac_2, obj.mac_3, obj.mac_4, obj.mac_5);
 		const wifiMac = formatMac(
 			obj.wifiMac_0,
@@ -951,6 +1057,8 @@ class ProtobufHandler {
 			wifiIpAddress: wifiIp,
 			macAddress: mac,
 			wifiMacAddress: wifiMac,
+			dnsServer: dns,
+			lockTime: num(obj.lockTime),
 		};
 	}
 
@@ -994,13 +1102,16 @@ class ProtobufHandler {
 
 		return {
 			serialNumber: serialToHex(obj.serialNumber),
-			powerArray: (obj.powerArray as number[]) || [],
+			// 0.1 W per unit, same scale the inverter uses for active power — established by
+			// measurement rather than by an instruction in the firmware, see HistPowerResult.
+			powerArray: ((obj.powerArray as number[]) || []).map(v => num(v) / SCALE_POWER),
 			totalEnergy: num(obj.totalEnergy),
 			dailyEnergy: num(obj.dailyEnergy),
 			stepTime: num(obj.stepTime),
-			startTime: num(obj.startTime),
 			relativePower: num(obj.relativePower),
 			warningNumber: num(obj.warningNumber),
+			pageCount: num(obj.ap),
+			absoluteStart: num(obj.absoluteStart),
 		};
 	}
 
