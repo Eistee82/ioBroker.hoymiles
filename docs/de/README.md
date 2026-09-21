@@ -38,6 +38,16 @@ Dieser Adapter ist für **Hoymiles HMS Mikrowechselrichter mit integrierter WiFi
 
 **Cloud-only-Betrieb:** Jeder unterstützte Wechselrichter im S-Miles-Konto funktioniert auch ganz ohne lokale Verbindung — der Adapter erkennt ihn automatisch und liefert über die Cloud Echtzeitleistung (Burst-Kanal), Energie-Aggregate, das Netzprofil sowie die Befehle Wechselrichter ein/aus + Neustart (`inverter.active` / `inverter.reboot`) und DTU-Neustart (`dtu.reboot`). Die übrigen Befehle (Leistungslimit, Sperren, Warnungen quittieren, …) erfordern die lokale TCP-Verbindung.
 
+### Hybrid-Wechselrichter mit Batterie (HAT-Serie) — Cloud, nur lesend, experimentell
+
+Ein Hoymiles-**Hybrid-Wechselrichter** im S-Miles-Konto — Referenzanlage: **HAT-6.0HV-EUG1** mit Batterie **HB-(10-23)S-G2**, dreiphasigem Netzzähler und DTS-WIFI-G1 — wird **über die Cloud** ausgelesen: dreiphasige AC-Werte, Notstrom-Ausgang (EPS), PV-Eingänge, die Batterie im Detail (Lade- und Gesundheitszustand, Zell- und Modul-Extremwerte) und der Netzzähler, dazu Energiefluss und Tages-Energiebilanz der Anlage. Die States stehen unter [Hybrid-Wechselrichter](#dtuserial--hybrid-wechselrichter-mit-batterie-hat-serie-cloud-dynamisch).
+
+- **Nur lesend.** An ein solches Gerät wird nichts Neues gesendet: kein Wechsel des Betriebsmodus, keine Batterie-Einstellungen. Auch das Auslesen des Netzprofils — ein Befehl, der bis zum Gerät hinuntergeht — wird für Hybrid-Wechselrichter ausgelassen. Die bestehenden Cloud-Befehle (`inverter.active`, `inverter.reboot`, `dtu.reboot`) sind unverändert, auf dieser Hardware aber **ungetestet**.
+- **Benötigt ein Installateur-Konto** (eines, das sich auf global.hoymiles.com anmelden kann). Für die S-Miles-Home-API ist der zugehörige Endpunkt nicht bekannt.
+- **Aktualisierungsrate:** Die Gerätewerte folgen dem Upload des Wechselrichters in die Cloud (etwa alle 5 Minuten); der Energiefluss der Anlage kommt über den schnellen Echtzeitkanal (an der Referenzanlage etwa alle 10 s).
+- **Vorzeichen werden so durchgereicht, wie die Cloud sie liefert.** An der Referenzanlage war die Batterieleistung positiv, während die Batterie entladen wurde.
+- Gebaut anhand einer einzigen Anlage und ohne Zugriff auf die Hardware — Rückmeldungen sind willkommen.
+
 > Dieser Adapter funktioniert **NICHT** mit: HMS-1600/1800/2000-4T ohne "DW", HM-Serie, MI-Serie, externen DTU-Sticks oder HMT-Dreiphasenmodellen.
 
 ## Konfiguration
@@ -363,9 +373,15 @@ Die Anzahl ermittelt der Adapter in dieser Reihenfolge:
 | `grid.power` | number | W | Gesamtleistung der Station (live in ~1,5–3 s über den Burst-Kanal — auch in einem rein lokalen Setup; nur ~80 s, wenn der Burst abgeschaltet ist) |
 | `grid.gridPower` | number | W | Netzaustauschleistung (Echtzeit, +Bezug/−Einspeisung) — nur bei Anlagen mit Zähler ≠ 0 |
 | `grid.loadPower` | number | W | Last-/Verbrauchsleistung (Echtzeit) |
-| `grid.batteryPower` | number | W | Batterieleistung (Echtzeit, +Laden/−Entladen) — nur bei Batteriesystemen |
+| `grid.batteryPower` | number | W | Batterieleistung (Echtzeit) — nur bei Batteriesystemen. Das Vorzeichen wird durchgereicht, wie es geliefert wird; an einer Hybrid-Anlage war es beim Entladen positiv |
+| `grid.batterySoc` | number | % | Ladezustand der Batterie — nur bei Batteriesystemen |
 | `grid.pvUtilization` | number | % | PV-Auslastung (Echtzeit) |
 | `grid.dailyEnergy` | number | kWh | Tagesenergie |
+| `grid.consumptionToday` | number | kWh | Verbrauch heute — nur bei Anlagen mit Batterie oder Netzzähler |
+| `grid.gridImportToday` | number | kWh | Heute aus dem Netz bezogene Energie — nur bei Anlagen mit Batterie oder Netzzähler |
+| `grid.gridExportToday` | number | kWh | Heute ins Netz eingespeiste Energie — nur bei Anlagen mit Batterie oder Netzzähler |
+| `grid.batteryChargeToday` | number | kWh | Heute in die Batterie geladene Energie — nur bei Batteriesystemen |
+| `grid.batteryDischargeToday` | number | kWh | Heute aus der Batterie entladene Energie — nur bei Batteriesystemen |
 | `grid.monthEnergy` | number | kWh | Monatsenergie |
 | `grid.yearEnergy` | number | kWh | Jahresenergie |
 | `grid.totalEnergy` | number | kWh | Gesamtenergie |
@@ -385,6 +401,7 @@ Die Anzahl ermittelt der Adapter in dieser Reihenfolge:
 | `info.stationName` | string | Anlagenname |
 | `info.stationId` | number | Anlagen-ID |
 | `info.systemCapacity` | number | Anlagenleistung (kWp) |
+| `info.batteryCapacity` | number | Installierte Batteriekapazität (kWh) — nur bei Batteriesystemen |
 | `info.address` | string | Anlagenstandort |
 | `info.latitude` | number | GPS-Breitengrad |
 | `info.longitude` | number | GPS-Längengrad |
@@ -643,6 +660,47 @@ Datenpunkte nie.
 | `meter.l3Voltage` | number | V | nein | Spannung L3 |
 | `meter.l3Current` | number | A | nein | Strom L3 |
 | `meter.l3Power` | number | W | nein | Leistung L3 (vorzeichenbehaftet) |
+
+### `<dtuSerial>.*` — Hybrid-Wechselrichter mit Batterie (HAT-Serie, Cloud, dynamisch)
+
+Wird nur angelegt, wenn die Cloud unter der DTU einen Hybrid-Wechselrichter meldet; alle States sind nur lesbar und kommen aus der Cloud. Die Summenwerte des Wechselrichters nutzen die States, die jedes Gerät hat: `grid.power` (kombinierte Wirkleistung), `grid.frequency`, `inverter.temperature` (interne Umgebungstemperatur), `inverter.model` / `serialNumber` / `swVersion` sowie `pv0.*` / `pv1.*` (`power`, `voltage`, `current`) für die PV-Eingänge. `battery.*` entsteht, sobald unter dem Wechselrichter eine Batterie hängt, `gridMeter.*`, sobald die Anlage einen Netzzähler hat.
+
+| Datenpunkt | Typ | Einheit | Beschreibung |
+|------------|-----|---------|--------------|
+| `grid.l1Voltage` / `l2…` / `l3…` | number | V | AC-Spannung des Wechselrichters je Phase |
+| `grid.l1Current` / `l2…` / `l3…` | number | A | AC-Strom des Wechselrichters je Phase |
+| `grid.l1Power` / `l2…` / `l3…` | number | W | Wirkleistung des Wechselrichters je Phase |
+| `grid.l1ReactivePower` / `l2…` / `l3…` | number | var | Blindleistung des Wechselrichters je Phase |
+| `inverter.operatingState` | number | — | Betriebsstatus als Zahl (beobachtet: 3 = netzgebunden; die vollständige Werteliste ist noch nicht bekannt) |
+| `inverter.operatingStateText` | string | — | Betriebsstatus im Wortlaut der Cloud |
+| `inverter.busVoltage` | number | V | Zwischenkreisspannung |
+| `inverter.drmMode` | number | — | DRM-Modus (Demand Response) |
+| `eps.l1Voltage` / `l2…` / `l3…` | number | V | Spannung am Notstrom-Ausgang (EPS) je Phase |
+| `eps.l1Current` / `l2…` / `l3…` | number | A | Strom am Notstrom-Ausgang (EPS) je Phase |
+| `eps.l1Power` / `l2…` / `l3…` | number | W | Wirkleistung am Notstrom-Ausgang (EPS) je Phase |
+| `battery.serialNumber` / `model` / `swVersion` / `hwVersion` | string | — | Batterie-Stammdaten aus der Geräteliste der Cloud |
+| `battery.capacity` | number | kWh | Installierte Batteriekapazität |
+| `battery.connected` | boolean | — | Batterie laut Cloud online |
+| `battery.type` | string | — | Batterietyp im Wortlaut der Cloud (z. B. `Li-Ion`) |
+| `battery.soc` | number | % | Ladezustand |
+| `battery.soh` | number | % | Gesundheitszustand |
+| `battery.state` | number | — | Batteriestatus als Zahl (beobachtet: 2 = Entladen) |
+| `battery.stateText` | string | — | Batteriestatus im Wortlaut der Cloud |
+| `battery.faultCode` | string | — | Fehlercode der Batterie (`0` = keiner) |
+| `battery.voltage` / `current` / `power` | number | V / A / W | Messwerte aus dem Batteriemanagementsystem |
+| `battery.maxChargeCurrent` / `maxDischargeCurrent` | number | A | Stromgrenzen, die die Batterie zulässt |
+| `battery.chargeCutoffVoltage` / `dischargeCutoffVoltage` | number | V | Spannungsgrenzen der Batterie |
+| `battery.cellTempMax` / `cellTempMin` | number | °C | Wärmste / kälteste Zelle |
+| `battery.moduleTempMax` / `moduleTempMin` | number | °C | Wärmstes / kältestes Modul |
+| `battery.cellVoltageMax` / `cellVoltageMin` | number | V | Höchste / niedrigste Zellspannung |
+| `battery.moduleVoltageMax` / `moduleVoltageMin` | number | V | Höchste / niedrigste Modulspannung |
+| `battery.inverterVoltage` / `inverterCurrent` / `inverterPower` | number | V / A / W | Dieselbe Batterie, wie der Wechselrichter sie an seinen Klemmen misst |
+| `gridMeter.connected` | boolean | — | Netzzähler laut Cloud online |
+| `gridMeter.power` | number | W | Gesamt-Wirkleistung am Netzanschluss |
+| `gridMeter.reactivePower` | number | var | Gesamt-Blindleistung |
+| `gridMeter.powerFactor` | number | — | Gesamt-Leistungsfaktor |
+| `gridMeter.frequency` | number | Hz | Netzfrequenz |
+| `gridMeter.l1Voltage` / `l1Current` / `l1Power` / `l1ReactivePower` / `l1PowerFactor` (auch `l2…`, `l3…`) | number | V / A / W / var / — | Messwerte des Netzzählers je Phase |
 
 ### Adapter-Ebene
 

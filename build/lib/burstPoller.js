@@ -1,3 +1,4 @@
+import { CLOUD_DEV_TYPE_HYBRID_INVERTER } from "./hybridCloud.js";
 import { BURST_MIN_INTERVAL_MS, BURST_MAX_INTERVAL_MS, BURST_URI_REFRESH_MS, BURST_MAX_FAILURES, CLOUD_POLL_CONCURRENCY, } from "./constants.js";
 import { stationStateMap, buildStateCommon } from "./stateDefinitions.js";
 import { anonymize, errorMessage, mapLimit } from "./utils.js";
@@ -82,7 +83,7 @@ class BurstPoller {
                 continue;
             }
             for (const inv of dtu.children ?? []) {
-                if (inv.sn) {
+                if (inv.sn && inv.type !== CLOUD_DEV_TYPE_HYBRID_INVERTER) {
                     targets.set(inv.sn, { dtuSerial: dev.dtuSerial, dev });
                 }
             }
@@ -132,9 +133,12 @@ class BurstPoller {
                 dly = data.dly;
             }
             const stationData = await this.cloud.pollRealtimeBurst(sb.uri, { m: 0, t: 1 });
+            const sq = stationData.con === 1 ? 0x00 : 0x42;
             if (stationData.power) {
-                const sq = stationData.con === 1 ? 0x00 : 0x42;
                 await this.writeStation(sb.stationId, stationData.power, sq);
+            }
+            else if (stationData.es) {
+                await this.writeStorageStation(sb.stationId, stationData.es, stationData.soc, sq);
             }
             if (sb.claimReleased) {
                 for (const t of sb.targets.values()) {
@@ -198,6 +202,20 @@ class BurstPoller {
             ws("grid.batteryPower", num(power.bat)),
             ws("grid.pvUtilization", num(power.pvr)),
         ]);
+    }
+    async writeStorageStation(stationId, es, soc, quality) {
+        const deviceId = `station-${stationId}`;
+        const ws = (suffix, val) => this.writeStationState(deviceId, suffix, val, quality);
+        const writes = [
+            ws("grid.power", num(es.pp)),
+            ws("grid.gridPower", num(es.gp)),
+            ws("grid.loadPower", num(es.lp)),
+            ws("grid.batteryPower", num(es.bp)),
+        ];
+        if (soc !== undefined && soc !== null) {
+            writes.push(ws("grid.batterySoc", num(soc)));
+        }
+        await Promise.allSettled(writes);
     }
     async writeStationState(deviceId, suffix, val, quality) {
         const fullId = `${deviceId}.${suffix}`;

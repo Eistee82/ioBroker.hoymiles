@@ -8,9 +8,10 @@ function makeMockAdapter() {
 	return {
 		log: { info: () => {}, warn: () => {}, debug: () => {}, error: () => {} },
 		setStateAsync: async () => {},
-		// CloudPoller's writeStationState creates state objects on demand. Tests don't care about
-		// the object, only the resulting setStateAsync call, so this is a no-op stub.
+		// CloudPoller's writeStationState / writeHybridState create objects on demand. Tests don't
+		// care about the object, only the resulting setStateAsync call, so these are no-op stubs.
 		extendObjectAsync: async () => {},
+		setObjectNotExistsAsync: async () => {},
 		setTimeout: (fn, ms) => globalThis.setTimeout(fn, ms),
 		clearTimeout: id => globalThis.clearTimeout(id),
 	};
@@ -35,6 +36,7 @@ function makeMockCloud() {
 		getMicroRealtimeData: async () => ({}),
 		getModuleRealtimeData: async () => ({}),
 		getMicroPortRules: async () => new Map(),
+		getRealIndicators: async () => null,
 	};
 }
 
@@ -2439,5 +2441,530 @@ describe("CloudPoller – freshness & re-online", function () {
 		assert.ok(freshPower, "grid.power should be written");
 		assert.strictEqual(freshPower.state.q, 0x00, "fresh grid.power must carry quality 0x00");
 		freshPoller.stop();
+	});
+});
+
+// ============================================================
+// CloudPoller – hybrid (storage) inverter
+// ============================================================
+describe("CloudPoller – hybrid inverter", function () {
+	// Recorded real device-tree shape for a HAT-6.0HV-EUG1 + battery, serials made up.
+	function hatDeviceTree() {
+		return [
+			{
+				sn: "DTU_HAT",
+				id: 1,
+				type: 1,
+				model_no: "DTS-WIFI-G1",
+				soft_ver: "",
+				hard_ver: "",
+				warn_data: { connect: true, warn: false },
+				children: [
+					{
+						sn: "INV_HAT",
+						id: 135250,
+						type: 6,
+						model_no: "HAT-6.0HV-EUG1",
+						soft_ver: "V02.07.07",
+						hard_ver: "",
+						warn_data: { connect: true, warn: false },
+						children: [
+							{
+								sn: "BAT_HAT",
+								id: -5,
+								type: 10,
+								model_no: "HB-(10-23)S-G2",
+								soft_ver: "V00.00.00.29",
+								hard_ver: "V00.00.02.113",
+								warn_data: { connect: true, warn: null },
+								extend_data: { bms_type: 1, bms_capacitor: "15.3", id: 135250 },
+								children: [],
+							},
+						],
+					},
+				],
+			},
+		];
+	}
+
+	function baseRealtime() {
+		return {
+			real_power: "0",
+			today_eq: "0",
+			month_eq: "0",
+			year_eq: "0",
+			total_eq: "0",
+			co2_emission_reduction: "0",
+			plant_tree: "0",
+		};
+	}
+
+	function hatDevice(overrides = {}) {
+		return {
+			dtuSerial: "DTU_HAT",
+			cloudStationId: 1,
+			connection: null,
+			pvStatesCreated: true,
+			pvCount: 0,
+			setCloudInverterSn: () => {},
+			createPvStates: async () => {},
+			...overrides,
+		};
+	}
+
+	it("never calls getMicroRealtimeData/getModuleRealtimeData for a hybrid inverter, and reads inverter/battery/grid-meter via getRealIndicators", async function () {
+		const selectorCalls = [];
+		let microCalled = false;
+		let moduleCalled = false;
+		const cloud = makeMockCloud();
+		cloud.getStationRealtime = async () => baseRealtime();
+		cloud.getDeviceTree = async () => hatDeviceTree();
+		cloud.getRealIndicators = async (stationId, selector) => {
+			selectorCalls.push(selector);
+			return null;
+		};
+		cloud.getMicroRealtimeData = async () => {
+			microCalled = true;
+			return {};
+		};
+		cloud.getModuleRealtimeData = async () => {
+			moduleCalled = true;
+			return {};
+		};
+
+		const devices = new Map([["DTU_HAT", hatDevice()]]);
+		const poller = makePoller({ cloud, devices, stationDevices: new Set([1]), slowPollFactor: 1 });
+		await poller.poll();
+		poller.stop();
+
+		assert.strictEqual(microCalled, false, "a hybrid inverter must never go through the microinverter path");
+		assert.strictEqual(moduleCalled, false, "a hybrid inverter has no per-module chart data");
+		assert.strictEqual(selectorCalls.length, 3, "inverter + battery + grid meter = 3 getRealIndicators calls");
+		assert.deepStrictEqual(selectorCalls[0], { type: 6, inv_list: [{ id: 135250, sn: "INV_HAT", type: 6 }] });
+		assert.deepStrictEqual(selectorCalls[1], {
+			type: 10,
+			inv_list: [{ id: 135250, sn: "INV_HAT", type: 0 }],
+			dev_sn: "BAT_HAT",
+		});
+		assert.deepStrictEqual(selectorCalls[2], { type: 2 });
+	});
+
+	it("writes hybrid indicator values to the right states with quality 0x00 when online and connected", async function () {
+		const stateWrites = {};
+		const cloud = makeMockCloud();
+		cloud.getStationRealtime = async () => baseRealtime();
+		cloud.getDeviceTree = async () => hatDeviceTree();
+		cloud.getRealIndicators = async (stationId, selector) => {
+			if (selector.type === 6) {
+				return {
+					title: "IND_INV",
+					pv_total: 0,
+					list: [
+						{ key: "p_total", val: 543, unit: "W" },
+						{ key: "v_a", val: "226.1", unit: "V" },
+						{ key: "peps_c", val: "0", unit: "W" },
+					],
+				};
+			}
+			if (selector.type === 10) {
+				return { title: "IND_BMS", list: [{ key: "bms_soc", val: "24", unit: "%" }] };
+			}
+			if (selector.type === 2) {
+				return {
+					title: "IND_GRID",
+					list: [
+						{ key: "p_total", val: -33, unit: "W" },
+						{ key: "grid_state", val: "1", fmt_val: "Online" },
+					],
+				};
+			}
+			return null;
+		};
+
+		const adapter = makeMockAdapter();
+		adapter.setStateAsync = async (id, val) => {
+			stateWrites[id] = val;
+		};
+		const devices = new Map([["DTU_HAT", hatDevice()]]);
+		const poller = makePoller({ cloud, adapter, devices, stationDevices: new Set([1]), slowPollFactor: 1 });
+		await poller.poll();
+		poller.stop();
+
+		assert.deepStrictEqual(stateWrites["DTU_HAT.grid.power"], { val: 543, ack: true, q: 0x00 });
+		assert.deepStrictEqual(stateWrites["DTU_HAT.grid.l1Voltage"], { val: 226.1, ack: true, q: 0x00 });
+		assert.deepStrictEqual(stateWrites["DTU_HAT.eps.l3Power"], { val: 0, ack: true, q: 0x00 });
+		assert.deepStrictEqual(stateWrites["DTU_HAT.battery.soc"], { val: 24, ack: true, q: 0x00 });
+		assert.deepStrictEqual(stateWrites["DTU_HAT.gridMeter.power"], { val: -33, ack: true, q: 0x00 });
+		assert.strictEqual(stateWrites["DTU_HAT.gridMeter.connected"].val, true);
+		assert.strictEqual(stateWrites["DTU_HAT.gridMeter.connected"].q, 0x00);
+	});
+
+	it("flags hybrid inverter values with quality 0x42 when the inverter's warn_data.connect is false", async function () {
+		const stateWrites = {};
+		const tree = hatDeviceTree();
+		tree[0].children[0].warn_data = { connect: false, warn: false };
+		const cloud = makeMockCloud();
+		cloud.getStationRealtime = async () => baseRealtime();
+		cloud.getDeviceTree = async () => tree;
+		cloud.getRealIndicators = async (stationId, selector) =>
+			selector.type === 6 ? { title: "IND_INV", list: [{ key: "p_total", val: 543 }] } : null;
+
+		const adapter = makeMockAdapter();
+		adapter.setStateAsync = async (id, val) => {
+			stateWrites[id] = val;
+		};
+		const devices = new Map([["DTU_HAT", hatDevice()]]);
+		const poller = makePoller({ cloud, adapter, devices, stationDevices: new Set([1]), slowPollFactor: 1 });
+		await poller.poll();
+		poller.stop();
+
+		assert.strictEqual(stateWrites["DTU_HAT.grid.power"].q, 0x42);
+	});
+
+	it("creates the battery/eps/gridMeter channels and their states on first use, not again on a later poll", async function () {
+		const setObjectCalls = [];
+		const extendObjectCalls = [];
+		const cloud = makeMockCloud();
+		cloud.getStationRealtime = async () => baseRealtime();
+		cloud.getDeviceTree = async () => hatDeviceTree();
+		cloud.getRealIndicators = async (stationId, selector) => {
+			if (selector.type === 6) {
+				return {
+					title: "IND_INV",
+					list: [
+						{ key: "p_total", val: 543 },
+						{ key: "peps_c", val: 0 },
+					],
+				};
+			}
+			if (selector.type === 10) {
+				return { title: "IND_BMS", list: [{ key: "bms_soc", val: 24 }] };
+			}
+			if (selector.type === 2) {
+				return { title: "IND_GRID", list: [{ key: "p_total", val: -33 }] };
+			}
+			return null;
+		};
+
+		const adapter = makeMockAdapter();
+		adapter.setObjectNotExistsAsync = async id => {
+			setObjectCalls.push(id);
+		};
+		adapter.extendObjectAsync = async id => {
+			extendObjectCalls.push(id);
+		};
+		const devices = new Map([["DTU_HAT", hatDevice()]]);
+		const poller = makePoller({ cloud, adapter, devices, stationDevices: new Set([1]), slowPollFactor: 1 });
+
+		await poller.poll();
+		const channelCallsAfterFirstPoll = setObjectCalls.filter(id => id.startsWith("DTU_HAT."));
+		const stateCallsAfterFirstPoll = extendObjectCalls.filter(id => id.startsWith("DTU_HAT."));
+		// All writes of one poll start at the same time; the ones sharing a channel must wait for a
+		// single creation call instead of each issuing their own.
+		assert.deepStrictEqual(
+			[...channelCallsAfterFirstPoll].sort(),
+			["DTU_HAT.battery", "DTU_HAT.eps", "DTU_HAT.gridMeter"],
+			"each of the three hybrid channels must be created exactly once",
+		);
+		assert.strictEqual(
+			stateCallsAfterFirstPoll.length,
+			new Set(stateCallsAfterFirstPoll).size,
+			"no state object may be created twice",
+		);
+		assert.ok(stateCallsAfterFirstPoll.includes("DTU_HAT.battery.soc"));
+		assert.ok(stateCallsAfterFirstPoll.includes("DTU_HAT.eps.l3Power"));
+		assert.ok(stateCallsAfterFirstPoll.includes("DTU_HAT.gridMeter.power"));
+
+		// Reset the per-DTU throttle so the second poll actually re-fetches (see the throttling
+		// test above for the same pattern).
+		poller.lastRealtimeFetch.set("DTU_HAT", 0);
+		setObjectCalls.length = 0;
+		extendObjectCalls.length = 0;
+		await poller.poll();
+		poller.stop();
+
+		assert.deepStrictEqual(
+			setObjectCalls.filter(id => id.startsWith("DTU_HAT.")),
+			[],
+			"no channel must be created again on a later poll",
+		);
+		assert.deepStrictEqual(
+			extendObjectCalls.filter(id => id.startsWith("DTU_HAT.")),
+			[],
+			"no state must be created again on a later poll",
+		);
+	});
+
+	it("creates PV states from pv_total when the indicator list carries no PV entries (e.g. at night)", async function () {
+		let createArgs = null;
+		const cloud = makeMockCloud();
+		cloud.getStationRealtime = async () => baseRealtime();
+		cloud.getDeviceTree = async () => hatDeviceTree();
+		cloud.getRealIndicators = async (stationId, selector) =>
+			selector.type === 6 ? { title: "IND_INV", pv_total: 2, list: [] } : null;
+
+		const devices = new Map([
+			[
+				"DTU_HAT",
+				hatDevice({
+					pvStatesCreated: false,
+					createPvStates: async (count, cloudOnly) => {
+						createArgs = { count, cloudOnly };
+					},
+				}),
+			],
+		]);
+		const poller = makePoller({ cloud, devices, stationDevices: new Set([1]), slowPollFactor: 1 });
+		await poller.poll();
+		poller.stop();
+
+		assert.deepStrictEqual(createArgs, { count: 2, cloudOnly: true });
+	});
+
+	it("writes pv_p_0 / pv_v_1 indicator entries to pv0.power / pv1.voltage", async function () {
+		const stateWrites = {};
+		const cloud = makeMockCloud();
+		cloud.getStationRealtime = async () => baseRealtime();
+		cloud.getDeviceTree = async () => hatDeviceTree();
+		cloud.getRealIndicators = async (stationId, selector) =>
+			selector.type === 6
+				? {
+						title: "IND_INV",
+						pv_total: 2,
+						list: [
+							{ key: "pv_p_0", val: 120, unit: "W" },
+							{ key: "pv_v_1", val: "35.2", unit: "V" },
+						],
+					}
+				: null;
+
+		const adapter = makeMockAdapter();
+		adapter.setStateAsync = async (id, val) => {
+			stateWrites[id] = typeof val === "object" ? val.val : val;
+		};
+		const dev = hatDevice({
+			pvStatesCreated: false,
+			createPvStates: async count => {
+				dev.pvCount = count;
+				dev.pvStatesCreated = true;
+			},
+		});
+		const devices = new Map([["DTU_HAT", dev]]);
+		const poller = makePoller({ cloud, adapter, devices, stationDevices: new Set([1]), slowPollFactor: 1 });
+		await poller.poll();
+		poller.stop();
+
+		assert.strictEqual(stateWrites["DTU_HAT.pv0.power"], 120);
+		assert.strictEqual(stateWrites["DTU_HAT.pv1.voltage"], 35.2);
+	});
+
+	it("leaves a DTU with a normal microinverter child (type 3) on the microinverter path, untouched by getRealIndicators", async function () {
+		let microCalled = false;
+		let realIndicatorsCalled = false;
+		const cloud = makeMockCloud();
+		cloud.getStationRealtime = async () => baseRealtime();
+		cloud.getDeviceTree = async () => [
+			{
+				sn: "DTU_MICRO",
+				id: 1,
+				children: [
+					{ sn: "INV_MICRO", id: 100, type: 3, model_no: "HMS-800W-2T", warn_data: { connect: true } },
+				],
+			},
+		];
+		cloud.getMicroRealtimeData = async () => {
+			microCalled = true;
+			return { MI_POWER: 100 };
+		};
+		cloud.getRealIndicators = async () => {
+			realIndicatorsCalled = true;
+			return null;
+		};
+
+		const devices = new Map([
+			[
+				"DTU_MICRO",
+				{
+					dtuSerial: "DTU_MICRO",
+					cloudStationId: 1,
+					connection: null,
+					pvStatesCreated: true,
+					setCloudInverterSn: () => {},
+					createPvStates: async () => {},
+				},
+			],
+		]);
+		const poller = makePoller({ cloud, devices, stationDevices: new Set([1]), slowPollFactor: 1 });
+		await poller.poll();
+		poller.stop();
+
+		assert.strictEqual(microCalled, true, "a normal microinverter must still use getMicroRealtimeData");
+		assert.strictEqual(realIndicatorsCalled, false, "getRealIndicators must not be called for a microinverter");
+	});
+
+	it("pollGridProfiles skips a DTU whose first child is a hybrid inverter, but still reads a microinverter's profile", async function () {
+		const readCalls = [];
+		const cloud = makeMockCloud();
+		cloud.getStationRealtime = async () => baseRealtime();
+		cloud.getDeviceTree = async () => [
+			{
+				sn: "DTU_HAT2",
+				id: 1,
+				children: [{ sn: "INV_HAT2", id: 2, type: 6, warn_data: { connect: true } }],
+			},
+			{
+				sn: "DTU_MICRO2",
+				id: 3,
+				children: [{ sn: "INV_MICRO2", id: 4, type: 3, warn_data: { connect: true } }],
+			},
+		];
+		cloud.readGridProfileViaCloud = async (devSn, dtuSn) => {
+			readCalls.push({ devSn, dtuSn });
+			return [];
+		};
+		cloud.getRealIndicators = async () => null;
+
+		const devices = new Map([
+			[
+				"DTU_HAT2",
+				{
+					dtuSerial: "DTU_HAT2",
+					cloudStationId: 1,
+					connection: null,
+					pvStatesCreated: true,
+					setCloudInverterSn: () => {},
+					createPvStates: async () => {},
+				},
+			],
+			[
+				"DTU_MICRO2",
+				{
+					dtuSerial: "DTU_MICRO2",
+					cloudStationId: 1,
+					connection: null,
+					pvStatesCreated: true,
+					setCloudInverterSn: () => {},
+					createPvStates: async () => {},
+				},
+			],
+		]);
+		const poller = makePoller({ cloud, devices, stationDevices: new Set([1]), slowPollFactor: 1 });
+		await poller.poll();
+		poller.stop();
+
+		assert.strictEqual(readCalls.length, 1, "the grid profile must be read for the microinverter DTU only");
+		assert.strictEqual(readCalls[0].dtuSn, "DTU_MICRO2");
+	});
+
+	it("writes the storage station's day-energy balance and live flow from reflux_station_data", async function () {
+		const stateWrites = {};
+		const cloud = makeMockCloud();
+		cloud.getStationRealtime = async () => ({
+			...baseRealtime(),
+			reflux_station_data: {
+				icon_bms: 1,
+				icon_grid: 1,
+				grid_power: "0.0",
+				load_power: "567.0",
+				bms_power: "567.0",
+				bms_soc: "25",
+				use_eq_total: "14300",
+				efg_total: "6500",
+				e2g_total: "3000",
+				e2b_total: "7800",
+				efb_total: "5400",
+			},
+		});
+		cloud.getDeviceTree = async () => [];
+		const adapter = makeMockAdapter();
+		adapter.setStateAsync = async (id, val) => {
+			stateWrites[id] = typeof val === "object" ? val.val : val;
+		};
+		const poller = makePoller({ cloud, adapter, stationDevices: new Set([1]), slowPollFactor: 1 });
+		await poller.poll();
+		poller.stop();
+
+		assert.strictEqual(stateWrites["station-1.grid.consumptionToday"], 14.3);
+		assert.strictEqual(stateWrites["station-1.grid.gridImportToday"], 6.5);
+		assert.strictEqual(stateWrites["station-1.grid.gridExportToday"], 3);
+		assert.strictEqual(stateWrites["station-1.grid.batteryChargeToday"], 7.8);
+		assert.strictEqual(stateWrites["station-1.grid.batteryDischargeToday"], 5.4);
+		assert.strictEqual(stateWrites["station-1.grid.batterySoc"], 25);
+		assert.strictEqual(stateWrites["station-1.grid.loadPower"], 567);
+	});
+
+	it("keeps the day-energy counters but skips the live flow states when the station is burst-active", async function () {
+		const stateWrites = {};
+		const cloud = makeMockCloud();
+		cloud.getStationRealtime = async () => ({
+			...baseRealtime(),
+			reflux_station_data: {
+				icon_bms: 1,
+				icon_grid: 1,
+				grid_power: "0.0",
+				load_power: "567.0",
+				bms_power: "567.0",
+				bms_soc: "25",
+				use_eq_total: "14300",
+				efg_total: "6500",
+				e2g_total: "3000",
+				e2b_total: "7800",
+				efb_total: "5400",
+			},
+		});
+		cloud.getDeviceTree = async () => [];
+		const adapter = makeMockAdapter();
+		adapter.setStateAsync = async (id, val) => {
+			stateWrites[id] = typeof val === "object" ? val.val : val;
+		};
+		const poller = makePoller({
+			cloud,
+			adapter,
+			stationDevices: new Set([1]),
+			burstActiveStations: new Set([1]),
+			slowPollFactor: 1,
+		});
+		await poller.poll();
+		poller.stop();
+
+		assert.strictEqual(stateWrites["station-1.grid.consumptionToday"], 14.3);
+		assert.strictEqual(stateWrites["station-1.grid.batteryChargeToday"], 7.8);
+		assert.strictEqual(stateWrites["station-1.grid.loadPower"], undefined);
+		assert.strictEqual(stateWrites["station-1.grid.batterySoc"], undefined);
+		assert.strictEqual(stateWrites["station-1.grid.batteryPower"], undefined);
+		assert.strictEqual(stateWrites["station-1.grid.gridPower"], undefined);
+	});
+
+	it("writes nothing from reflux_station_data on a balcony system (icon_bms=0, icon_grid=0)", async function () {
+		const stateWrites = {};
+		const cloud = makeMockCloud();
+		cloud.getStationRealtime = async () => ({
+			...baseRealtime(),
+			reflux_station_data: {
+				icon_bms: 0,
+				icon_grid: 0,
+				grid_power: "0.0",
+				load_power: "0.0",
+				bms_power: "0.0",
+				bms_soc: "0",
+				use_eq_total: "0",
+				efg_total: "0",
+				e2g_total: "0",
+				e2b_total: "0",
+				efb_total: "0",
+			},
+		});
+		cloud.getDeviceTree = async () => [];
+		const adapter = makeMockAdapter();
+		adapter.setStateAsync = async (id, val) => {
+			stateWrites[id] = typeof val === "object" ? val.val : val;
+		};
+		const poller = makePoller({ cloud, adapter, stationDevices: new Set([1]), slowPollFactor: 1 });
+		await poller.poll();
+		poller.stop();
+
+		assert.strictEqual(stateWrites["station-1.grid.consumptionToday"], undefined);
+		assert.strictEqual(stateWrites["station-1.grid.batterySoc"], undefined);
+		assert.strictEqual(stateWrites["station-1.grid.loadPower"], undefined);
 	});
 });

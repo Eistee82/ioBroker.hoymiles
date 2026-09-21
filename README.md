@@ -150,6 +150,7 @@ Cloud stations create aggregated device nodes (e.g. `hoymiles.0.station-12345.*`
 
 ### **WORK IN PROGRESS**
 
+- (@Eistee82) **Hybrid inverters with a battery (HAT series, e.g. HAT-6.0HV-EUG1) can now be read out through the cloud** — experimental and read-only. You get the three-phase AC values, the backup (EPS) output, the PV inputs, the battery in detail (state of charge and health, cell and module extremes) and the grid meter, plus the plant's power flow, battery state of charge and the day's balance of consumption, grid import/export and battery charge/discharge. Nothing new is sent to such a device, and the grid-profile read is skipped for it. Needs an installer-type S-Miles account
 - (@Eistee82) **Inverters of the WB series (e.g. HMS-800-2WB) can now be used locally.** They have no network port and are only reachable over Bluetooth, so the adapter talks to them through a cheap ESP32 running an ESPHome Bluetooth Proxy — reading and controlling them without the cloud. Proxy and inverters are found automatically
 - (@Eistee82) **Your inverters and plants now appear on the Config Manager tab** with live values, controls and a settings dialog — no need to build your own view first
 - (@Eistee82) **A Shelly or ecotracker energy meter can be connected to a WB-series inverter**, either just to read it out or so the inverter throttles itself and nothing is fed into the grid. The regulation runs inside the inverter, so it keeps working even when the adapter does not

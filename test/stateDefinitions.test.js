@@ -7,6 +7,9 @@ import {
 	stationStates,
 	meterMeasurementStates,
 	meterControlStates,
+	hybridChannels,
+	hybridStates,
+	hybridStateMap,
 } from "../build/lib/stateDefinitions.js";
 
 // ============================================================
@@ -232,5 +235,60 @@ describe("stateDefinitions – state value translations", function () {
 		assert.strictEqual(mode.states[1], "meter only");
 		assert.strictEqual(mode.states[2], "zero export");
 		assert.strictEqual(mode.write, true);
+	});
+});
+
+// ============================================================
+// stateDefinitions – hybrid (storage) inverter states
+// ============================================================
+describe("stateDefinitions – hybrid inverter states", function () {
+	it("hybridStates array is not empty", function () {
+		assert.ok(hybridStates.length > 0);
+	});
+
+	it("no duplicate hybrid state IDs", function () {
+		const ids = hybridStates.map(s => s.id);
+		assert.strictEqual(ids.length, new Set(ids).size, "Duplicate hybrid state IDs found");
+	});
+
+	it("no hybrid state ID collides with an existing device state ID", function () {
+		const stateIds = new Set(states.map(s => s.id));
+		const collisions = hybridStates.filter(s => stateIds.has(s.id)).map(s => s.id);
+		assert.deepStrictEqual(
+			collisions,
+			[],
+			`hybrid state(s) collide with existing states: ${collisions.join(", ")}`,
+		);
+	});
+
+	it("every hybrid state's channel prefix is a known hybrid or device channel", function () {
+		const channelIds = new Set([...channels, ...hybridChannels].map(c => c.id));
+		for (const s of hybridStates) {
+			const channelId = s.id.split(".")[0];
+			assert.ok(channelIds.has(channelId), `Hybrid state ${s.id} belongs to undefined channel "${channelId}"`);
+		}
+	});
+
+	it("every hybrid state is sourced from the cloud", function () {
+		for (const s of hybridStates) {
+			assert.strictEqual(s.source, "cloud", `Hybrid state ${s.id} must have source "cloud"`);
+		}
+	});
+
+	it("no hybrid state uses role 'state' (they are all typed measurements/indicators/text)", function () {
+		for (const s of hybridStates) {
+			assert.notStrictEqual(s.role, "state", `Hybrid state ${s.id} must not use the generic "state" role`);
+		}
+	});
+
+	it("every hybrid state has en and de translations", function () {
+		for (const s of hybridStates) {
+			assert.ok(typeof s.name === "object" && s.name.en, `Hybrid state ${s.id} missing English name`);
+			assert.ok(typeof s.name === "object" && s.name.de, `Hybrid state ${s.id} missing German name`);
+		}
+	});
+
+	it("hybridStateMap indexes every hybrid state exactly once", function () {
+		assert.strictEqual(hybridStateMap.size, hybridStates.length);
 	});
 });

@@ -38,6 +38,16 @@ This adapter is designed for **Hoymiles HMS microinverters with an integrated Wi
 
 **Cloud-only operation:** any supported inverter in your S-Miles account also works without a local connection at all — the adapter discovers it automatically and provides realtime power (burst channel), energy aggregates, grid profile, and the inverter on/off + reboot (`inverter.active` / `inverter.reboot`) plus DTU reboot (`dtu.reboot`) commands over the cloud. The remaining commands (power limit, lock, clean warnings, …) require the local TCP link.
 
+### Hybrid inverters with battery (HAT series) — cloud, read-only, experimental
+
+A Hoymiles **hybrid inverter** in your S-Miles account — reference system: **HAT-6.0HV-EUG1** with a **HB-(10-23)S-G2** battery, a three-phase grid meter and a DTS-WIFI-G1 — is read out **through the cloud**: three-phase AC values, backup (EPS) output, PV inputs, the battery in detail (state of charge and health, cell and module extremes) and the grid meter, plus the plant's power flow and daily energy balance. See [Hybrid Inverter](#dtuserial--hybrid-inverter-with-battery-hat-series-cloud-dynamic) for the states.
+
+- **Read-only.** Nothing new is sent to such a device: no operating-mode change, no battery settings. The grid-profile read, which is a command sent down to the device, is skipped for hybrid inverters as well. The existing cloud commands (`inverter.active`, `inverter.reboot`, `dtu.reboot`) are unchanged but **untested** on this hardware.
+- **Needs an installer-type account** (one that can log in at global.hoymiles.com). The endpoint behind it is not known for the S-Miles Home API.
+- **Update rate:** the per-device values follow the inverter's upload to the cloud (about every 5 minutes); the plant's power flow comes from the fast realtime channel (about every 10 s on the reference system).
+- **Signs are passed through as the cloud delivers them.** On the reference system the battery power was positive while the battery discharged.
+- Built against a single system without access to the hardware — please report what you see.
+
 > This adapter does **NOT** work with: HMS-1600/1800/2000-4T without "DW", HM series, MI series, external DTU sticks, or HMT three-phase models.
 
 ## Configuration
@@ -360,9 +370,15 @@ The adapter determines how many there are, in this order:
 | `grid.power` | number | W | Total station power (live in ~1.5–3 s via the burst channel — also in a purely local setup; only ~80 s when the burst is switched off) |
 | `grid.gridPower` | number | W | Grid exchange power (realtime, +import/−export) — non-zero only on metered systems |
 | `grid.loadPower` | number | W | Load/consumption power (realtime) |
-| `grid.batteryPower` | number | W | Battery power (realtime, +charge/−discharge) — battery systems only |
+| `grid.batteryPower` | number | W | Battery power (realtime) — battery systems only. The sign is passed through as delivered; on a hybrid-inverter plant it was positive while the battery discharged |
+| `grid.batterySoc` | number | % | Battery state of charge — battery systems only |
 | `grid.pvUtilization` | number | % | PV utilization (realtime) |
 | `grid.dailyEnergy` | number | kWh | Daily energy |
+| `grid.consumptionToday` | number | kWh | Today's consumption — plants with battery or grid meter only |
+| `grid.gridImportToday` | number | kWh | Energy drawn from the grid today — plants with battery or grid meter only |
+| `grid.gridExportToday` | number | kWh | Energy fed into the grid today — plants with battery or grid meter only |
+| `grid.batteryChargeToday` | number | kWh | Energy charged into the battery today — battery systems only |
+| `grid.batteryDischargeToday` | number | kWh | Energy discharged from the battery today — battery systems only |
 | `grid.monthEnergy` | number | kWh | Monthly energy |
 | `grid.yearEnergy` | number | kWh | Yearly energy |
 | `grid.totalEnergy` | number | kWh | Total lifetime energy |
@@ -382,6 +398,7 @@ The adapter determines how many there are, in this order:
 | `info.stationName` | string | Station name |
 | `info.stationId` | number | Station ID |
 | `info.systemCapacity` | number | System capacity (kWp) |
+| `info.batteryCapacity` | number | Installed battery capacity (kWh) — battery systems only |
 | `info.address` | string | Station address |
 | `info.latitude` | number | GPS latitude |
 | `info.longitude` | number | GPS longitude |
@@ -638,6 +655,47 @@ series has neither a meter input nor a regulation for it, so these states never 
 | `meter.l3Voltage` | number | V | no | Voltage L3 |
 | `meter.l3Current` | number | A | no | Current L3 |
 | `meter.l3Power` | number | W | no | Power L3 (signed) |
+
+### `<dtuSerial>.*` — Hybrid Inverter with Battery (HAT series, cloud, dynamic)
+
+Created only when the cloud reports a hybrid inverter below the DTU; all of them are read-only and come from the cloud. The inverter's totals use the states every device has: `grid.power` (combined active power), `grid.frequency`, `inverter.temperature` (internal ambient temperature), `inverter.model` / `serialNumber` / `swVersion`, and `pv0.*` / `pv1.*` (`power`, `voltage`, `current`) for the PV inputs. `battery.*` exists once a battery hangs below the inverter, `gridMeter.*` once the plant has a grid meter.
+
+| State | Type | Unit | Description |
+|-------|------|------|-------------|
+| `grid.l1Voltage` / `l2…` / `l3…` | number | V | Inverter AC voltage per phase |
+| `grid.l1Current` / `l2…` / `l3…` | number | A | Inverter AC current per phase |
+| `grid.l1Power` / `l2…` / `l3…` | number | W | Inverter active power per phase |
+| `grid.l1ReactivePower` / `l2…` / `l3…` | number | var | Inverter reactive power per phase |
+| `inverter.operatingState` | number | — | Operating state as a number (3 = on-grid was observed; the full value list is not known yet) |
+| `inverter.operatingStateText` | string | — | Operating state as the cloud words it |
+| `inverter.busVoltage` | number | V | DC bus voltage |
+| `inverter.drmMode` | number | — | DRM (demand response) mode |
+| `eps.l1Voltage` / `l2…` / `l3…` | number | V | Backup (EPS) output voltage per phase |
+| `eps.l1Current` / `l2…` / `l3…` | number | A | Backup (EPS) output current per phase |
+| `eps.l1Power` / `l2…` / `l3…` | number | W | Backup (EPS) output active power per phase |
+| `battery.serialNumber` / `model` / `swVersion` / `hwVersion` | string | — | Battery identity from the cloud's device list |
+| `battery.capacity` | number | kWh | Installed battery capacity |
+| `battery.connected` | boolean | — | Battery reported online by the cloud |
+| `battery.type` | string | — | Battery chemistry as the cloud words it (e.g. `Li-Ion`) |
+| `battery.soc` | number | % | State of charge |
+| `battery.soh` | number | % | State of health |
+| `battery.state` | number | — | Battery state as a number (2 = discharging was observed) |
+| `battery.stateText` | string | — | Battery state as the cloud words it |
+| `battery.faultCode` | string | — | Battery fault code (`0` = none) |
+| `battery.voltage` / `current` / `power` | number | V / A / W | Battery measurements from the battery management system |
+| `battery.maxChargeCurrent` / `maxDischargeCurrent` | number | A | Current limits the battery allows |
+| `battery.chargeCutoffVoltage` / `dischargeCutoffVoltage` | number | V | Voltage limits of the battery |
+| `battery.cellTempMax` / `cellTempMin` | number | °C | Hottest / coldest cell |
+| `battery.moduleTempMax` / `moduleTempMin` | number | °C | Hottest / coldest module |
+| `battery.cellVoltageMax` / `cellVoltageMin` | number | V | Highest / lowest cell voltage |
+| `battery.moduleVoltageMax` / `moduleVoltageMin` | number | V | Highest / lowest module voltage |
+| `battery.inverterVoltage` / `inverterCurrent` / `inverterPower` | number | V / A / W | The same battery as the inverter measures it at its own terminals |
+| `gridMeter.connected` | boolean | — | Grid meter reported online |
+| `gridMeter.power` | number | W | Total active power at the grid connection |
+| `gridMeter.reactivePower` | number | var | Total reactive power |
+| `gridMeter.powerFactor` | number | — | Total power factor |
+| `gridMeter.frequency` | number | Hz | Grid frequency |
+| `gridMeter.l1Voltage` / `l1Current` / `l1Power` / `l1ReactivePower` / `l1PowerFactor` (also `l2…`, `l3…`) | number | V / A / W / var / — | Per-phase readings of the grid meter |
 
 ### Adapter-level States
 

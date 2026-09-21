@@ -1,6 +1,7 @@
 import type CloudConnection from "./cloudConnection.js";
-import type { BurstInverter, BurstStationPower } from "./cloudConnection.js";
+import type { BurstInverter, BurstStationPower, BurstStorageFlow } from "./cloudConnection.js";
 import type DeviceContext from "./deviceContext.js";
+import { CLOUD_DEV_TYPE_HYBRID_INVERTER } from "./hybridCloud.js";
 import {
 	BURST_MIN_INTERVAL_MS,
 	BURST_MAX_INTERVAL_MS,
@@ -187,7 +188,10 @@ class BurstPoller {
 				continue;
 			}
 			for (const inv of dtu.children ?? []) {
-				if (inv.sn) {
+				// The per-inverter mode (m:3) is a microinverter feature. A hybrid inverter is not
+				// known to answer it, and claiming its grid.power here would stop the slow poller
+				// from writing a value nobody else delivers.
+				if (inv.sn && inv.type !== CLOUD_DEV_TYPE_HYBRID_INVERTER) {
 					targets.set(inv.sn, { dtuSerial: dev.dtuSerial, dev });
 				}
 			}
@@ -259,9 +263,12 @@ class BurstPoller {
 			// Station-level power flow (m:0), aggregated live across all inverters of the station.
 			// The first poll after opening the stream sometimes omits `power` — just skip it then.
 			const stationData = await this.cloud.pollRealtimeBurst(sb.uri, { m: 0, t: 1 });
+			const sq: ioBroker.STATE_QUALITY[keyof ioBroker.STATE_QUALITY] = stationData.con === 1 ? 0x00 : 0x42;
 			if (stationData.power) {
-				const sq: ioBroker.STATE_QUALITY[keyof ioBroker.STATE_QUALITY] = stationData.con === 1 ? 0x00 : 0x42;
 				await this.writeStation(sb.stationId, stationData.power, sq);
+			} else if (stationData.es) {
+				// A storage system delivers its power flow in its own block instead of `power`.
+				await this.writeStorageStation(sb.stationId, stationData.es, stationData.soc, sq);
 			}
 
 			// Every poll of this cycle worked again — take the power states back from the slow cloud
@@ -376,6 +383,37 @@ class BurstPoller {
 			ws("grid.batteryPower", num(power.bat)),
 			ws("grid.pvUtilization", num(power.pvr)),
 		]);
+	}
+
+	/**
+	 * Write the realtime power flow of a storage system (burst m:0, `es` block) to the same
+	 * `station-<id>.grid.*` states {@link writeStation} fills, plus the battery's state of charge.
+	 * Signs are passed through as the cloud delivers them.
+	 *
+	 * @param stationId - Cloud station id.
+	 * @param es - The `es` object from a burst m:0 response.
+	 * @param soc - Battery state of charge (%), when delivered.
+	 * @param quality - ioBroker state quality (0x00 live, 0x42 stale).
+	 */
+	private async writeStorageStation(
+		stationId: number,
+		es: BurstStorageFlow,
+		soc: number | undefined,
+		quality: ioBroker.STATE_QUALITY[keyof ioBroker.STATE_QUALITY],
+	): Promise<void> {
+		const deviceId = `station-${stationId}`;
+		const ws = (suffix: string, val: number): Promise<void> =>
+			this.writeStationState(deviceId, suffix, val, quality);
+		const writes = [
+			ws("grid.power", num(es.pp)),
+			ws("grid.gridPower", num(es.gp)),
+			ws("grid.loadPower", num(es.lp)),
+			ws("grid.batteryPower", num(es.bp)),
+		];
+		if (soc !== undefined && soc !== null) {
+			writes.push(ws("grid.batterySoc", num(soc)));
+		}
+		await Promise.allSettled(writes);
 	}
 
 	/**

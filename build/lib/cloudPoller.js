@@ -3,8 +3,9 @@ import { MAX_PV_PORTS } from "./deviceContext.js";
 import { CLOUD_POLL_CONCURRENCY, CLOUD_STATION_STALE_MS, DEFAULT_POLL_MS, MIN_POLL_MS, RELAY_POLL_DELAY_MS, } from "./constants.js";
 import { formatDtuVersion, formatSwVersion } from "./protobufHandler.js";
 import { anonymize, deriveStationTzOffsetMs, errorMessage, logOnError, mapLimit, stationWallClockToEpoch, } from "./utils.js";
-import { stationStateMap, buildStateCommon } from "./stateDefinitions.js";
+import { stationStateMap, hybridStateMap, hybridChannels, buildStateCommon } from "./stateDefinitions.js";
 import { mapCloudGridProfile } from "./gridProfile.js";
+import { CLOUD_DEV_TYPE_BATTERY, CLOUD_DEV_TYPE_HYBRID_INVERTER, REAL_INDICATOR_TYPE_GRID_METER, mapRealIndicators, mapStorageStationData, } from "./hybridCloud.js";
 const num = (v) => parseFloat(v) || 0;
 const WEATHER_DESCRIPTIONS = {
     "01d": { en: "Clear sky", de: "Klarer Himmel" },
@@ -26,6 +27,8 @@ const WEATHER_DESCRIPTIONS = {
     "50d": { en: "Mist/Fog", de: "Nebel" },
     "50n": { en: "Mist/Fog", de: "Nebel" },
 };
+const hybridChannelMap = new Map(hybridChannels.map(c => [c.id, c]));
+const isHybridInverter = (node) => node.type === CLOUD_DEV_TYPE_HYBRID_INVERTER;
 class CloudPoller {
     static PORT_COUNT_RE = /(\d+)\s*(?:T|WB)$/i;
     cloud;
@@ -50,6 +53,9 @@ class CloudPoller {
     lastCloudConnected;
     stationStateObjects = new Set();
     gridProfileRead = new Set();
+    hybridObjects = new Map();
+    reportedUnknownKeys = new Set();
+    multiBatteryReported = new Set();
     constructor(options) {
         this.cloud = options.cloud;
         this.adapter = options.adapter;
@@ -317,8 +323,23 @@ class CloudPoller {
             w("info.lastCloudUpdate", cloudUpdateEpoch, 0x00),
             w("info.lastDataTime", stationWallClockToEpoch(data.last_data_time, offsetMs), 0x00),
         ];
-        if (!this.burstActiveStations.has(stationId)) {
+        const burstOwnsFlow = this.burstActiveStations.has(stationId);
+        if (!burstOwnsFlow) {
             writes.push(w("grid.power", num(data.real_power)));
+        }
+        const storage = mapStorageStationData(data.reflux_station_data);
+        if (storage) {
+            const ws = (suffix, value) => w(suffix, value).catch(err => {
+                this.adapter.log.warn(`Cloud state write failed: ${errorMessage(err)}`);
+            });
+            for (const e of storage.energy) {
+                writes.push(ws(e.suffix, e.val));
+            }
+            if (!burstOwnsFlow) {
+                for (const f of storage.flow) {
+                    writes.push(ws(f.suffix, f.val));
+                }
+            }
         }
         await Promise.all(writes);
     }
@@ -369,6 +390,7 @@ class CloudPoller {
                 w("info.stationName", details.name || null),
                 w("info.stationId", stationId),
                 w("info.systemCapacity", details.capacitor != null ? num(details.capacitor) : null),
+                w("info.batteryCapacity", num(details.bms_capacitor) || null),
                 w("info.address", address || null),
                 w("info.latitude", lat),
                 w("info.longitude", lon),
@@ -423,7 +445,7 @@ class CloudPoller {
                 continue;
             }
             const inv = dtu.children?.[0];
-            if (!inv?.sn) {
+            if (!inv?.sn || isHybridInverter(inv)) {
                 continue;
             }
             try {
@@ -502,6 +524,7 @@ class CloudPoller {
         const tzOffsetS = this.stationCoords.get(stationId)?.tzOffsetS ?? 0;
         const today = new Date(now + tzOffsetS * 1000).toISOString().substring(0, 10);
         const dtuTasks = [];
+        let gridMeterRead = false;
         for (const dtu of deviceTree) {
             const dtuDev = this.devices.get(dtu.sn);
             if (!dtuDev?.dtuSerial || dtuDev.connection?.connected) {
@@ -513,22 +536,37 @@ class CloudPoller {
                 continue;
             }
             const microIds = [];
+            const hybrids = [];
             for (const inv of dtu.children || []) {
-                if (inv.id) {
+                if (!inv.id) {
+                    continue;
+                }
+                if (isHybridInverter(inv)) {
+                    hybrids.push(inv);
+                }
+                else {
                     microIds.push(inv.id);
                 }
             }
-            if (microIds.length === 0) {
+            if (microIds.length === 0 && hybrids.length === 0) {
                 continue;
             }
-            dtuTasks.push({ dtu, dtuDev, sn, microIds });
+            dtuTasks.push({ dtu, dtuDev, sn, microIds, hybrids });
         }
         if (dtuTasks.length === 0) {
             return;
         }
-        await mapLimit(dtuTasks, CLOUD_POLL_CONCURRENCY, async ({ dtu, dtuDev, sn, microIds }) => {
+        await mapLimit(dtuTasks, CLOUD_POLL_CONCURRENCY, async ({ dtu, dtuDev, sn, microIds, hybrids }) => {
             try {
                 this.lastRealtimeFetch.set(sn, now);
+                for (const inv of hybrids) {
+                    const withGridMeter = !gridMeterRead;
+                    gridMeterRead = true;
+                    await this.pollHybridInverter(stationId, dtuDev, sn, inv, online, withGridMeter);
+                }
+                if (microIds.length === 0) {
+                    return;
+                }
                 const s = this.boundSetState;
                 const devConnected = dtu.children?.some(inv => inv.warn_data?.connect) ?? false;
                 const q = online && devConnected ? 0x00 : 0x42;
@@ -562,7 +600,7 @@ class CloudPoller {
                     }
                 }
                 const pvTasks = [];
-                const children = dtu.children || [];
+                const children = (dtu.children || []).filter(inv => !isHybridInverter(inv));
                 const portRules = await this.cloud.getMicroPortRules();
                 if (!dtuDev.pvStatesCreated && children.length > 0) {
                     let maxPorts = 0;
@@ -615,6 +653,125 @@ class CloudPoller {
                 this.lastFirmwareCheckDay.delete(sid);
             }
         }
+    }
+    async pollHybridInverter(stationId, dtuDev, sn, inv, online, withGridMeter) {
+        const q = online && inv.warn_data?.connect ? 0x00 : 0x42;
+        const writes = [];
+        const invData = await this.cloud.getRealIndicators(stationId, {
+            type: CLOUD_DEV_TYPE_HYBRID_INVERTER,
+            inv_list: [{ id: inv.id, sn: inv.sn, type: CLOUD_DEV_TYPE_HYBRID_INVERTER }],
+        });
+        const mapped = mapRealIndicators(invData);
+        this.reportUnknownKeys(invData?.title, mapped.unknownKeys);
+        for (const v of mapped.values) {
+            if (v.id === "grid.power" && dtuDev.burstActive) {
+                continue;
+            }
+            writes.push(this.writeHybridState(sn, v.id, v.val, q));
+        }
+        const reportedInputs = typeof invData?.pv_total === "number" ? invData.pv_total : 0;
+        const pvInputs = Math.min(Math.max(reportedInputs, ...mapped.pv.map(p => p.port + 1)), MAX_PV_PORTS);
+        if (pvInputs > 0 && (!dtuDev.pvStatesCreated || pvInputs > dtuDev.pvCount)) {
+            await dtuDev.createPvStates(Math.max(pvInputs, dtuDev.pvCount), true);
+            dtuDev.pvStatesCreated = true;
+        }
+        for (const p of mapped.pv) {
+            if (p.port >= 0 && p.port < dtuDev.pvCount) {
+                writes.push(this.writeHybridState(sn, `pv${p.port}.${p.field}`, p.val, q));
+            }
+        }
+        const batteries = (inv.children ?? []).filter(c => c.type === CLOUD_DEV_TYPE_BATTERY);
+        if (batteries.length > 1 && !this.multiBatteryReported.has(sn)) {
+            this.multiBatteryReported.add(sn);
+            this.adapter.log.warn(`Hybrid inverter ${anonymize(sn, "dtu")} reports ${batteries.length} batteries — only the first one is read. Please open an issue so the others can be supported.`);
+        }
+        for (const bat of batteries.slice(0, 1)) {
+            const batConnected = !!bat.warn_data?.connect;
+            const bq = online && batConnected ? 0x00 : 0x42;
+            const extend = (bat.extend_data ?? {});
+            const capacity = num(String(extend.bms_capacitor ?? ""));
+            const identity = [
+                ["battery.serialNumber", bat.sn || null],
+                ["battery.model", bat.model_no || null],
+                ["battery.swVersion", bat.soft_ver || null],
+                ["battery.hwVersion", bat.hard_ver || null],
+                ["battery.capacity", capacity > 0 ? capacity : null],
+                ["battery.connected", batConnected],
+            ];
+            for (const [id, val] of identity) {
+                if (val !== null) {
+                    writes.push(this.writeHybridState(sn, id, val, 0x00));
+                }
+            }
+            const batData = await this.cloud.getRealIndicators(stationId, {
+                type: CLOUD_DEV_TYPE_BATTERY,
+                inv_list: [{ id: inv.id, sn: inv.sn, type: 0 }],
+                dev_sn: bat.sn,
+            });
+            const batMapped = mapRealIndicators(batData);
+            this.reportUnknownKeys(batData?.title, batMapped.unknownKeys);
+            for (const v of batMapped.values) {
+                writes.push(this.writeHybridState(sn, v.id, v.val, bq));
+            }
+        }
+        if (withGridMeter) {
+            const meterData = await this.cloud.getRealIndicators(stationId, { type: REAL_INDICATOR_TYPE_GRID_METER });
+            const meterMapped = mapRealIndicators(meterData);
+            this.reportUnknownKeys(meterData?.title, meterMapped.unknownKeys);
+            const mq = online ? 0x00 : 0x42;
+            for (const v of meterMapped.values) {
+                writes.push(this.writeHybridState(sn, v.id, v.val, mq));
+            }
+        }
+        const results = await Promise.allSettled(writes);
+        for (const r of results) {
+            if (r.status === "rejected") {
+                this.adapter.log.warn(`Cloud state write failed: ${errorMessage(r.reason)}`);
+            }
+        }
+        this.adapter.log.debug(`Hybrid inverter ${anonymize(sn, "dtu")}: ${mapped.values.length} inverter value(s), ${mapped.pv.length} PV value(s), data_time=${invData?.last_data_time ?? "n/a"}`);
+    }
+    async writeHybridState(sn, suffix, val, quality) {
+        const fullId = `${sn}.${suffix}`;
+        const def = hybridStateMap.get(suffix);
+        if (def) {
+            const channelId = suffix.slice(0, suffix.indexOf("."));
+            const channel = hybridChannelMap.get(channelId);
+            if (channel) {
+                await this.createHybridObjectOnce(`${sn}.${channelId}`, () => this.adapter.setObjectNotExistsAsync(`${sn}.${channelId}`, {
+                    type: "channel",
+                    common: { name: channel.name },
+                    native: {},
+                }));
+            }
+            await this.createHybridObjectOnce(fullId, () => this.adapter.extendObjectAsync(fullId, {
+                type: "state",
+                common: buildStateCommon(def),
+                native: {},
+            }));
+        }
+        await this.boundSetState(fullId, { val, ack: true, q: quality });
+    }
+    createHybridObjectOnce(id, create) {
+        let pending = this.hybridObjects.get(id);
+        if (!pending) {
+            pending = create().catch(err => {
+                this.hybridObjects.delete(id);
+                throw err;
+            });
+            this.hybridObjects.set(id, pending);
+        }
+        return pending;
+    }
+    reportUnknownKeys(title, keys) {
+        const fresh = keys.filter(k => !this.reportedUnknownKeys.has(`${title}:${k}`));
+        if (fresh.length === 0) {
+            return;
+        }
+        for (const k of fresh) {
+            this.reportedUnknownKeys.add(`${title}:${k}`);
+        }
+        this.adapter.log.debug(`Cloud indicator set ${title ?? "?"}: no state for key(s) ${fresh.join(", ")}`);
     }
     resolvePortCount(inv, portRules, knownPvCount) {
         const sn = inv.sn || "";

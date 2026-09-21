@@ -23,6 +23,7 @@ import {
 	APP_TID,
 } from "./constants.js";
 import type { CloudGridProfileParam } from "./gridProfile.js";
+import type { RealIndicatorData } from "./hybridCloud.js";
 import {
 	errorMessage,
 	withTimeout,
@@ -86,6 +87,27 @@ export interface BurstData {
 	flow?: BurstFlowEdge[];
 	/** Present for m:3 (per-device detail). */
 	mis?: BurstInverter[];
+	/** Present for m:0 on a storage system, where it replaces `power`. */
+	es?: BurstStorageFlow;
+	/** Present for m:0 on a storage system: battery state of charge (%). */
+	soc?: number;
+}
+/**
+ * Station power flow of a storage system (burst m:0), all in watts. Seen on a hybrid-inverter
+ * station, which delivers this block instead of {@link BurstStationPower}. Signs are passed through
+ * as delivered; `bp` was positive while the battery discharged.
+ */
+export interface BurstStorageFlow {
+	/** PV generation power (W). */
+	pp: number;
+	/** Grid power (W). */
+	gp: number;
+	/** Battery power (W). */
+	bp: number;
+	/** Load / consumption power (W). */
+	lp: number;
+	/** Not identified yet — 0 in every sample seen. */
+	sp: number;
 }
 
 /**
@@ -271,6 +293,8 @@ interface CloudStationDetails {
 	timezone: { tz_name: string };
 	/** Station wall-clock time ("YYYY-MM-DD HH:mm:ss"), station-local zone. */
 	local_time?: string;
+	/** Installed battery capacity in kWh. Storage stations only. */
+	bms_capacitor?: string;
 	[key: string]: unknown;
 }
 
@@ -1111,6 +1135,42 @@ class CloudConnection {
 			return await parseChartResponse(rawBuf, this.log);
 		} catch (err) {
 			this.log(`[diag] Module chart error: ${errorMessage(err)}`);
+			return null;
+		}
+	}
+
+	/**
+	 * Read the live values of a hybrid inverter, its battery or the station's grid meter.
+	 * Endpoint: /pvm-data/api/0/indicators/data/select_real_indicators_data — what the S-Miles web
+	 * portal's device detail view polls. Unlike the microinverter day charts this is plain JSON.
+	 *
+	 * Only the web/installer API is known to serve it; a home-profile account gets `null`. The
+	 * request is a pure read of values the cloud already holds — nothing is sent to the device.
+	 *
+	 * @param stationId - Cloud station ID.
+	 * @param selector - Device selector: `{type:6, inv_list:[{id,sn,type:6}]}` for a hybrid inverter,
+	 *   `{type:2}` for the grid meter, `{type:10, inv_list:[{id,sn,type:0}], dev_sn}` for a battery.
+	 * @returns The decoded `data` object, or null when unavailable.
+	 */
+	async getRealIndicators(stationId: number, selector: Record<string, unknown>): Promise<RealIndicatorData | null> {
+		this.assertStationId(stationId);
+		await this.ensureToken();
+		if (this.profile === "home") {
+			return null;
+		}
+		try {
+			const result = await this._post<RealIndicatorData>(
+				"/pvm-data/api/0/indicators/data/select_real_indicators_data",
+				{ sid: stationId, ...selector },
+			);
+			this.logResponseSample(`real-indicators-${String(selector.type)}`, result);
+			if (result.status !== "0") {
+				this.log(`[diag] Real indicators (type ${String(selector.type)}) failed: ${result.message}`);
+				return null;
+			}
+			return result.data ?? null;
+		} catch (err) {
+			this.log(`[diag] Real indicators (type ${String(selector.type)}) error: ${errorMessage(err)}`);
 			return null;
 		}
 	}

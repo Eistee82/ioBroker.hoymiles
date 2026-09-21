@@ -18,8 +18,15 @@ import {
 	mapLimit,
 	stationWallClockToEpoch,
 } from "./utils.js";
-import { stationStateMap, buildStateCommon } from "./stateDefinitions.js";
+import { stationStateMap, hybridStateMap, hybridChannels, buildStateCommon } from "./stateDefinitions.js";
 import { mapCloudGridProfile } from "./gridProfile.js";
+import {
+	CLOUD_DEV_TYPE_BATTERY,
+	CLOUD_DEV_TYPE_HYBRID_INVERTER,
+	REAL_INDICATOR_TYPE_GRID_METER,
+	mapRealIndicators,
+	mapStorageStationData,
+} from "./hybridCloud.js";
 
 /**
  * Parse a string to number, returning 0 for NaN/undefined.
@@ -49,6 +56,20 @@ const WEATHER_DESCRIPTIONS: Record<string, { en: string; de: string }> = {
 	"50d": { en: "Mist/Fog", de: "Nebel" },
 	"50n": { en: "Mist/Fog", de: "Nebel" },
 };
+
+/** Device-tree node as `CloudConnection.getDeviceTree` returns it. */
+type CloudTreeNode = Awaited<ReturnType<CloudConnection["getDeviceTree"]>>[number];
+
+/** Channel definitions of a hybrid inverter, by channel id. */
+const hybridChannelMap = new Map(hybridChannels.map(c => [c.id, c]));
+
+/**
+ * Whether a device-tree node is a hybrid (storage) inverter. Those are read through their own
+ * endpoint; every microinverter-specific request and command must leave them alone.
+ *
+ * @param node - Inverter node below a DTU.
+ */
+const isHybridInverter = (node: CloudTreeNode): boolean => node.type === CLOUD_DEV_TYPE_HYBRID_INVERTER;
 
 /** Cloud polling states that determine what data is fetched and at what interval. */
 type CloudPollState = "POLLING_ACTIVE" | "RELAY_TRIGGERED" | "NIGHT_MODE";
@@ -136,6 +157,12 @@ class CloudPoller {
 	private readonly stationStateObjects: Set<string> = new Set();
 	/** DTU serials whose grid profile was already read via the cloud (read once — it rarely changes). */
 	private readonly gridProfileRead: Set<string> = new Set();
+	/** Hybrid-inverter channels/states created via `writeHybridState`, by full id → their creation. */
+	private readonly hybridObjects: Map<string, Promise<unknown>> = new Map();
+	/** Indicator keys without a mapping that were already reported, so each is logged only once. */
+	private readonly reportedUnknownKeys: Set<string> = new Set();
+	/** DTU serials whose surplus batteries were already reported. */
+	private readonly multiBatteryReported: Set<string> = new Set();
 
 	/**
 	 * @param options - Cloud poller configuration
@@ -554,8 +581,28 @@ class CloudPoller {
 		];
 		// The realtime burst (m:0) owns the live station power; only write it here when no burst
 		// is streaming this station, so the two don't fight over `grid.power`.
-		if (!this.burstActiveStations.has(stationId)) {
+		const burstOwnsFlow = this.burstActiveStations.has(stationId);
+		if (!burstOwnsFlow) {
 			writes.push(w("grid.power", num(data.real_power)));
+		}
+		// Storage systems (battery and/or grid meter): the day's energy balance, plus the live flow
+		// whenever the burst is not streaming it anyway.
+		// Each of these catches its own failure, so it can never take the station's core values
+		// above down with it through the shared Promise.all.
+		const storage = mapStorageStationData(data.reflux_station_data);
+		if (storage) {
+			const ws = (suffix: string, value: number): Promise<void> =>
+				w(suffix, value).catch(err => {
+					this.adapter.log.warn(`Cloud state write failed: ${errorMessage(err)}`);
+				});
+			for (const e of storage.energy) {
+				writes.push(ws(e.suffix, e.val));
+			}
+			if (!burstOwnsFlow) {
+				for (const f of storage.flow) {
+					writes.push(ws(f.suffix, f.val));
+				}
+			}
 		}
 		await Promise.all(writes);
 	}
@@ -636,6 +683,8 @@ class CloudPoller {
 				w("info.stationName", details.name || null),
 				w("info.stationId", stationId),
 				w("info.systemCapacity", details.capacitor != null ? num(details.capacitor) : null),
+				// Storage stations only; a plain PV station must not grow the state.
+				w("info.batteryCapacity", num(details.bms_capacitor) || null),
 				w("info.address", address || null),
 				w("info.latitude", lat),
 				w("info.longitude", lon),
@@ -707,7 +756,9 @@ class CloudPoller {
 				continue;
 			}
 			const inv = dtu.children?.[0];
-			if (!inv?.sn) {
+			// The read is a command sent down to the device, built for microinverters. A hybrid
+			// inverter was never tested with it, so it is not sent there.
+			if (!inv?.sn || isHybridInverter(inv)) {
 				continue;
 			}
 			try {
@@ -835,7 +886,10 @@ class CloudPoller {
 			dtuDev: DeviceContext;
 			sn: string;
 			microIds: number[];
+			hybrids: CloudTreeNode[];
 		}> = [];
+		// The grid meter belongs to the station, not to one inverter — read it once per cycle.
+		let gridMeterRead = false;
 
 		for (const dtu of deviceTree) {
 			const dtuDev = this.devices.get(dtu.sn);
@@ -852,16 +906,22 @@ class CloudPoller {
 			}
 
 			const microIds: number[] = [];
+			const hybrids: CloudTreeNode[] = [];
 			for (const inv of dtu.children || []) {
-				if (inv.id) {
+				if (!inv.id) {
+					continue;
+				}
+				if (isHybridInverter(inv)) {
+					hybrids.push(inv);
+				} else {
 					microIds.push(inv.id);
 				}
 			}
-			if (microIds.length === 0) {
+			if (microIds.length === 0 && hybrids.length === 0) {
 				continue;
 			}
 
-			dtuTasks.push({ dtu, dtuDev, sn, microIds });
+			dtuTasks.push({ dtu, dtuDev, sn, microIds, hybrids });
 		}
 
 		if (dtuTasks.length === 0) {
@@ -869,9 +929,17 @@ class CloudPoller {
 		}
 
 		// Fetch DTUs with limited concurrency
-		await mapLimit(dtuTasks, CLOUD_POLL_CONCURRENCY, async ({ dtu, dtuDev, sn, microIds }) => {
+		await mapLimit(dtuTasks, CLOUD_POLL_CONCURRENCY, async ({ dtu, dtuDev, sn, microIds, hybrids }) => {
 			try {
 				this.lastRealtimeFetch.set(sn, now);
+				for (const inv of hybrids) {
+					const withGridMeter = !gridMeterRead;
+					gridMeterRead = true;
+					await this.pollHybridInverter(stationId, dtuDev, sn, inv, online, withGridMeter);
+				}
+				if (microIds.length === 0) {
+					return;
+				}
 				const s = this.boundSetState;
 				// Fresh cloud values are good (0x00); when the station's last upload is stale they
 				// are flagged 0x42 (device not connected) so consumers can tell the last reading is
@@ -923,7 +991,7 @@ class CloudPoller {
 
 				// Per-PV port metrics (parallel per port)
 				const pvTasks: Array<Promise<void>> = [];
-				const children = dtu.children || [];
+				const children = (dtu.children || []).filter(inv => !isHybridInverter(inv));
 
 				// Authoritative port counts, keyed by inverter serial prefix. Fetched once per
 				// session and cached inside CloudConnection; an empty map (endpoint unavailable)
@@ -994,6 +1062,198 @@ class CloudPoller {
 				this.lastFirmwareCheckDay.delete(sid);
 			}
 		}
+	}
+
+	/**
+	 * Read one hybrid (storage) inverter: its own AC/EPS/PV values, every battery below it, and —
+	 * once per station and cycle — the grid meter. All three are plain reads of values the cloud
+	 * already holds; nothing is sent to the device.
+	 *
+	 * @param stationId - Cloud station id.
+	 * @param dtuDev - Device context of the DTU the inverter hangs on.
+	 * @param sn - DTU serial = state id prefix.
+	 * @param inv - Hybrid inverter node from the device tree.
+	 * @param online - Whether the station's last upload is fresh.
+	 * @param withGridMeter - Also read the station's grid meter.
+	 */
+	private async pollHybridInverter(
+		stationId: number,
+		dtuDev: DeviceContext,
+		sn: string,
+		inv: CloudTreeNode,
+		online: boolean,
+		withGridMeter: boolean,
+	): Promise<void> {
+		type Quality = ioBroker.STATE_QUALITY[keyof ioBroker.STATE_QUALITY];
+		const q: Quality = online && inv.warn_data?.connect ? 0x00 : 0x42;
+		const writes: Array<Promise<void>> = [];
+
+		const invData = await this.cloud.getRealIndicators(stationId, {
+			type: CLOUD_DEV_TYPE_HYBRID_INVERTER,
+			inv_list: [{ id: inv.id, sn: inv.sn, type: CLOUD_DEV_TYPE_HYBRID_INVERTER }],
+		});
+		const mapped = mapRealIndicators(invData);
+		this.reportUnknownKeys(invData?.title, mapped.unknownKeys);
+		for (const v of mapped.values) {
+			// Same hand-over as on the microinverter path: a streaming burst owns grid.power.
+			if (v.id === "grid.power" && dtuDev.burstActive) {
+				continue;
+			}
+			writes.push(this.writeHybridState(sn, v.id, v.val, q));
+		}
+
+		// PV inputs. The input count is reported even at night, when the list carries no PV values.
+		const reportedInputs = typeof invData?.pv_total === "number" ? invData.pv_total : 0;
+		const pvInputs = Math.min(Math.max(reportedInputs, ...mapped.pv.map(p => p.port + 1)), MAX_PV_PORTS);
+		if (pvInputs > 0 && (!dtuDev.pvStatesCreated || pvInputs > dtuDev.pvCount)) {
+			await dtuDev.createPvStates(Math.max(pvInputs, dtuDev.pvCount), true);
+			dtuDev.pvStatesCreated = true;
+		}
+		for (const p of mapped.pv) {
+			if (p.port >= 0 && p.port < dtuDev.pvCount) {
+				writes.push(this.writeHybridState(sn, `pv${p.port}.${p.field}`, p.val, q));
+			}
+		}
+
+		// There is one `battery` channel per device. Only a single-battery system was ever seen, so
+		// a second pack is reported rather than left to overwrite the first one's values.
+		const batteries = (inv.children ?? []).filter(c => c.type === CLOUD_DEV_TYPE_BATTERY);
+		if (batteries.length > 1 && !this.multiBatteryReported.has(sn)) {
+			this.multiBatteryReported.add(sn);
+			this.adapter.log.warn(
+				`Hybrid inverter ${anonymize(sn, "dtu")} reports ${batteries.length} batteries — only the first one is read. Please open an issue so the others can be supported.`,
+			);
+		}
+		for (const bat of batteries.slice(0, 1)) {
+			const batConnected = !!bat.warn_data?.connect;
+			const bq: Quality = online && batConnected ? 0x00 : 0x42;
+			const extend = (bat.extend_data ?? {}) as { bms_capacitor?: string | number };
+			const capacity = num(String(extend.bms_capacitor ?? ""));
+			const identity: Array<[string, string | number | boolean | null]> = [
+				["battery.serialNumber", bat.sn || null],
+				["battery.model", bat.model_no || null],
+				["battery.swVersion", bat.soft_ver || null],
+				["battery.hwVersion", bat.hard_ver || null],
+				["battery.capacity", capacity > 0 ? capacity : null],
+				["battery.connected", batConnected],
+			];
+			for (const [id, val] of identity) {
+				if (val !== null) {
+					// Identity and link state describe the cloud's own record — always good quality.
+					writes.push(this.writeHybridState(sn, id, val, 0x00));
+				}
+			}
+			const batData = await this.cloud.getRealIndicators(stationId, {
+				type: CLOUD_DEV_TYPE_BATTERY,
+				inv_list: [{ id: inv.id, sn: inv.sn, type: 0 }],
+				dev_sn: bat.sn,
+			});
+			const batMapped = mapRealIndicators(batData);
+			this.reportUnknownKeys(batData?.title, batMapped.unknownKeys);
+			for (const v of batMapped.values) {
+				writes.push(this.writeHybridState(sn, v.id, v.val, bq));
+			}
+		}
+
+		if (withGridMeter) {
+			const meterData = await this.cloud.getRealIndicators(stationId, { type: REAL_INDICATOR_TYPE_GRID_METER });
+			const meterMapped = mapRealIndicators(meterData);
+			this.reportUnknownKeys(meterData?.title, meterMapped.unknownKeys);
+			const mq: Quality = online ? 0x00 : 0x42;
+			for (const v of meterMapped.values) {
+				writes.push(this.writeHybridState(sn, v.id, v.val, mq));
+			}
+		}
+
+		const results = await Promise.allSettled(writes);
+		for (const r of results) {
+			if (r.status === "rejected") {
+				this.adapter.log.warn(`Cloud state write failed: ${errorMessage(r.reason)}`);
+			}
+		}
+		this.adapter.log.debug(
+			`Hybrid inverter ${anonymize(sn, "dtu")}: ${mapped.values.length} inverter value(s), ${mapped.pv.length} PV value(s), data_time=${invData?.last_data_time ?? "n/a"}`,
+		);
+	}
+
+	/**
+	 * Write a `<dtuSerial>.<suffix>` state of a hybrid inverter, creating the object — and its
+	 * channel — on first use. Suffixes that are not hybrid-specific (`grid.power`, `pvN.*`) already
+	 * exist on the device and are simply written.
+	 *
+	 * @param sn - DTU serial = state id prefix.
+	 * @param suffix - State id below the device.
+	 * @param val - Value to write.
+	 * @param quality - ioBroker state quality.
+	 */
+	private async writeHybridState(
+		sn: string,
+		suffix: string,
+		val: ioBroker.StateValue,
+		quality: ioBroker.STATE_QUALITY[keyof ioBroker.STATE_QUALITY],
+	): Promise<void> {
+		const fullId = `${sn}.${suffix}`;
+		const def = hybridStateMap.get(suffix);
+		if (def) {
+			const channelId = suffix.slice(0, suffix.indexOf("."));
+			const channel = hybridChannelMap.get(channelId);
+			if (channel) {
+				await this.createHybridObjectOnce(`${sn}.${channelId}`, () =>
+					this.adapter.setObjectNotExistsAsync(`${sn}.${channelId}`, {
+						type: "channel",
+						common: { name: channel.name },
+						native: {},
+					}),
+				);
+			}
+			await this.createHybridObjectOnce(fullId, () =>
+				this.adapter.extendObjectAsync(fullId, {
+					type: "state",
+					common: buildStateCommon(def),
+					native: {},
+				}),
+			);
+		}
+		await this.boundSetState(fullId, { val, ack: true, q: quality });
+	}
+
+	/**
+	 * Create an object at most once per adapter run. A poll starts all of a device's writes at the
+	 * same time, so the cache holds the pending creation itself: every write that needs the same
+	 * channel waits for the one call instead of issuing its own. A failed creation is forgotten and
+	 * retried by the next write.
+	 *
+	 * @param id - Full object id, the cache key.
+	 * @param create - Performs the creation.
+	 */
+	private createHybridObjectOnce(id: string, create: () => Promise<unknown>): Promise<unknown> {
+		let pending = this.hybridObjects.get(id);
+		if (!pending) {
+			pending = create().catch(err => {
+				this.hybridObjects.delete(id);
+				throw err;
+			});
+			this.hybridObjects.set(id, pending);
+		}
+		return pending;
+	}
+
+	/**
+	 * Log indicator keys the adapter has no state for — once each, so a device or firmware that
+	 * delivers more than the reference system shows up in a debug log without flooding it.
+	 *
+	 * @param title - Indicator set the keys came from.
+	 * @param keys - Unmapped keys of one response.
+	 */
+	private reportUnknownKeys(title: string | undefined, keys: string[]): void {
+		const fresh = keys.filter(k => !this.reportedUnknownKeys.has(`${title}:${k}`));
+		if (fresh.length === 0) {
+			return;
+		}
+		for (const k of fresh) {
+			this.reportedUnknownKeys.add(`${title}:${k}`);
+		}
+		this.adapter.log.debug(`Cloud indicator set ${title ?? "?"}: no state for key(s) ${fresh.join(", ")}`);
 	}
 
 	/**

@@ -496,6 +496,26 @@ class CloudConnection {
             return null;
         }
     }
+    async getRealIndicators(stationId, selector) {
+        this.assertStationId(stationId);
+        await this.ensureToken();
+        if (this.profile === "home") {
+            return null;
+        }
+        try {
+            const result = await this._post("/pvm-data/api/0/indicators/data/select_real_indicators_data", { sid: stationId, ...selector });
+            this.logResponseSample(`real-indicators-${String(selector.type)}`, result);
+            if (result.status !== "0") {
+                this.log(`[diag] Real indicators (type ${String(selector.type)}) failed: ${result.message}`);
+                return null;
+            }
+            return result.data ?? null;
+        }
+        catch (err) {
+            this.log(`[diag] Real indicators (type ${String(selector.type)}) error: ${errorMessage(err)}`);
+            return null;
+        }
+    }
     async getStationRealtime(stationId) {
         this.assertStationId(stationId);
         await this.ensureToken();

@@ -1002,6 +1002,79 @@ describe("cloudConnection – getRealtimeUri", function () {
 });
 
 // ============================================================
+// cloudConnection – getRealIndicators
+// ============================================================
+describe("cloudConnection – getRealIndicators", function () {
+	let originalPost;
+
+	beforeEach(function () {
+		originalPost = CloudConnection.prototype._post;
+	});
+
+	afterEach(function () {
+		CloudConnection.prototype._post = originalPost;
+	});
+
+	it("returns null without any HTTP call for profile 'home'", async function () {
+		const cloud = new CloudConnection("u", "p");
+		cloud.token = "fake-token";
+		cloud.tokenTime = Date.now();
+		cloud.profile = "home";
+		let called = false;
+		CloudConnection.prototype._post = async function () {
+			called = true;
+			return { status: "0", data: { title: "IND_INV", list: [] } };
+		};
+		const result = await cloud.getRealIndicators(1, { type: 6, inv_list: [{ id: 1, sn: "X", type: 6 }] });
+		assert.strictEqual(result, null);
+		assert.strictEqual(called, false, "a home-profile account must not hit the network for this endpoint");
+	});
+
+	it("posts {sid, ...selector} to select_real_indicators_data and returns data for profile 'installer'", async function () {
+		const cloud = new CloudConnection("u", "p");
+		cloud.token = "fake-token";
+		cloud.tokenTime = Date.now();
+		cloud.profile = "installer";
+		let calledPath;
+		let calledBody;
+		CloudConnection.prototype._post = async function (apiPath, body) {
+			calledPath = apiPath;
+			calledBody = body;
+			return { status: "0", data: { title: "IND_INV", list: [{ key: "p_total", val: 543 }] } };
+		};
+		const selector = { type: 6, inv_list: [{ id: 135250, sn: "INV_HAT", type: 6 }] };
+		const result = await cloud.getRealIndicators(42, selector);
+		assert.strictEqual(calledPath, "/pvm-data/api/0/indicators/data/select_real_indicators_data");
+		assert.deepStrictEqual(calledBody, { sid: 42, type: 6, inv_list: [{ id: 135250, sn: "INV_HAT", type: 6 }] });
+		assert.deepStrictEqual(result, { title: "IND_INV", list: [{ key: "p_total", val: 543 }] });
+	});
+
+	it("returns null when the server reports a non-zero status", async function () {
+		const cloud = new CloudConnection("u", "p");
+		cloud.token = "fake-token";
+		cloud.tokenTime = Date.now();
+		cloud.profile = "installer";
+		CloudConnection.prototype._post = async function () {
+			return { status: "1", message: "device not found" };
+		};
+		const result = await cloud.getRealIndicators(1, { type: 2 });
+		assert.strictEqual(result, null);
+	});
+
+	it("returns null when the request throws", async function () {
+		const cloud = new CloudConnection("u", "p");
+		cloud.token = "fake-token";
+		cloud.tokenTime = Date.now();
+		cloud.profile = "installer";
+		CloudConnection.prototype._post = async function () {
+			throw new Error("network error");
+		};
+		const result = await cloud.getRealIndicators(1, { type: 2 });
+		assert.strictEqual(result, null);
+	});
+});
+
+// ============================================================
 // cloudConnection – pollRealtimeBurst (real HTTPS mock server — pollRealtimeBurst
 // posts directly to the caller-supplied `uri` via httpClient.postJson, bypassing
 // this._post, so it cannot be exercised via the prototype-override pattern above).

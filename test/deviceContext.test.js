@@ -5747,3 +5747,70 @@ describe("deviceContext – Shelly meter", function () {
 		assert.deepStrictEqual(shellyWrites, [], "no shelly states on TCP devices");
 	});
 });
+
+// ============================================================
+// deviceContext – cleanupObsoleteObjects (hybrid states/channels count as known)
+// ============================================================
+describe("deviceContext – cleanupObsoleteObjects", function () {
+	/**
+	 * Tracking adapter mock with a fake object view: `getObjectViewAsync` is called once per
+	 * kind ("state", "channel") by `cleanupObsoleteObjects` — `stateRows`/`channelRows` are the
+	 * relative ids (e.g. "battery.soc") the mock "system" reports as existing under the device
+	 * for each kind, so a row is never double-counted across the two calls.
+	 *
+	 * @param stateRows - Relative state ids currently present under the device.
+	 * @param channelRows - Relative channel ids currently present under the device.
+	 */
+	function createTrackingAdapter(stateRows, channelRows) {
+		const deleted = [];
+		const adapter = {
+			namespace: "hoymiles.0",
+			log: { info: () => {}, warn: () => {}, debug: () => {}, error: () => {} },
+			setStateAsync: async () => {},
+			extendObjectAsync: async () => {},
+			setObjectNotExistsAsync: async () => {},
+			getStateAsync: async () => null,
+			getObjectViewAsync: async (_system, kind, opts) => ({
+				rows: (kind === "channel" ? channelRows : stateRows).map(rel => ({ id: `${opts.startkey}${rel}` })),
+			}),
+			delObjectAsync: async (id, _options) => {
+				deleted.push(id);
+			},
+			setInterval: () => undefined,
+			clearInterval: () => {},
+			setTimeout: () => undefined,
+			clearTimeout: () => {},
+			subscribeStates: () => {},
+			unsubscribeStates: () => {},
+			devices: new Map(),
+			matchLocalDeviceToCloud: () => {},
+			onRelayDataSent: () => {},
+			onLocalConnected: () => {},
+			onLocalDisconnected: () => {},
+			onSendTimeUpdated: () => {},
+			updateConnectionState: async () => {},
+		};
+		return { adapter, deleted };
+	}
+
+	it("keeps hybrid states/channels and known device states, removes an unknown id", async function () {
+		const stateRows = ["battery.soc", "eps.l1Power", "gridMeter.power", "grid.l1Voltage", "bogus.state"];
+		const channelRows = ["battery"];
+		const { adapter, deleted } = createTrackingAdapter(stateRows, channelRows);
+		const ctx = new DeviceContext({
+			adapter,
+			protobuf: null,
+			host: "",
+			enableLocal: false,
+			enableCloud: false,
+			enableCloudRelay: false,
+			dataInterval: 15,
+			slowPollFactor: 6,
+		});
+		ctx.deviceId = "TESTDTU";
+
+		await ctx["cleanupObsoleteObjects"]();
+
+		assert.deepStrictEqual(deleted, ["hoymiles.0.TESTDTU.bogus.state"], "only the unknown id must be removed");
+	});
+});

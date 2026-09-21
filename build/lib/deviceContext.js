@@ -6,7 +6,7 @@ import { executeCommand, executeCloudCommand, flashWritingStateForAction, } from
 import Encryption from "./encryption.js";
 import { buildShellyBindData, encodeShellyBindBody, parseEnergyFlow, parseMeterDevices, SHELLY_DEV_TYPE_GRID, SHELLY_DEV_TYPE_METER_ONLY, } from "./shellyProtocol.js";
 const SHELLY_CMD_TAG = [0xa3, 0x18];
-import { channels, states, meterMeasurementStates, meterControlStates, buildStateCommon } from "./stateDefinitions.js";
+import { channels, states, meterMeasurementStates, meterControlStates, hybridChannels, hybridStates, buildStateCommon, } from "./stateDefinitions.js";
 import { getAlarmDescription } from "./alarmCodes.js";
 import { decodeGridProfile, byteSwap16 } from "./gridProfile.js";
 import EnergyGuard from "./energyGuard.js";
@@ -347,8 +347,8 @@ class DeviceContext {
         this.adapter.log.info(`[${this.deviceId}] Device states created`);
     }
     async cleanupObsoleteObjects() {
-        const knownStates = new Set(states.map(d => d.id));
-        const knownChannels = new Set(channels.map(c => c.id));
+        const knownStates = new Set([...states, ...hybridStates].map(d => d.id));
+        const knownChannels = new Set([...channels, ...hybridChannels].map(c => c.id));
         const isKnown = (rel) => knownStates.has(rel) ||
             knownChannels.has(rel) ||
             /^pv\d+(\.|$)/.test(rel) ||

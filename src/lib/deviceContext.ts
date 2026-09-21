@@ -28,7 +28,15 @@ import {
 
 /** `CommCmd` carrier tag — the same one the pairing handshake uses. */
 const SHELLY_CMD_TAG = [0xa3, 0x18] as const;
-import { channels, states, meterMeasurementStates, meterControlStates, buildStateCommon } from "./stateDefinitions.js";
+import {
+	channels,
+	states,
+	meterMeasurementStates,
+	meterControlStates,
+	hybridChannels,
+	hybridStates,
+	buildStateCommon,
+} from "./stateDefinitions.js";
 import { getAlarmDescription } from "./alarmCodes.js";
 import { decodeGridProfile, byteSwap16 } from "./gridProfile.js";
 import EnergyGuard from "./energyGuard.js";
@@ -626,8 +634,10 @@ class DeviceContext {
 	 * obsolete entries from older adapter versions vanish on update.
 	 */
 	private async cleanupObsoleteObjects(): Promise<void> {
-		const knownStates = new Set(states.map(d => d.id));
-		const knownChannels = new Set(channels.map(c => c.id));
+		// The hybrid-inverter states are created on demand by the cloud poller, not from `states` —
+		// they count as known all the same, or every adapter start would delete and recreate them.
+		const knownStates = new Set([...states, ...hybridStates].map(d => d.id));
+		const knownChannels = new Set([...channels, ...hybridChannels].map(c => c.id));
 		const isKnown = (rel: string): boolean =>
 			knownStates.has(rel) ||
 			knownChannels.has(rel) ||
