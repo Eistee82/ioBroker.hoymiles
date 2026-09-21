@@ -247,6 +247,18 @@ export function mapRealIndicators(data) {
     }
     return result;
 }
+export const FLOW_NODE_GRID = 2;
+export const FLOW_NODE_BATTERY = 10;
+export function directedPower(raw, node, edges) {
+    const magnitude = Math.abs(raw);
+    if (edges.some(e => e.from === node)) {
+        return magnitude;
+    }
+    if (edges.some(e => e.to === node)) {
+        return magnitude === 0 ? 0 : -magnitude;
+    }
+    return raw;
+}
 export function stationIndicatorTypes(block) {
     if (!block || typeof block !== "object") {
         return [];
@@ -283,13 +295,20 @@ export function mapStorageStationData(block) {
             list.push({ suffix, val: Math.round((val / scale) * 1000) / 1000 });
         }
     };
+    const edges = Array.isArray(rf.flows) ? rf.flows.map(f => ({ from: Number(f?.out), to: Number(f?.in) })) : [];
+    const inGraph = (node) => edges.some(e => e.from === node || e.to === node);
     const gridPower = toNumber(rf.grid_power);
     if (gridPower !== null) {
-        result.flow.push({ suffix: "grid.gridPower", val: gridPower === 0 ? 0 : -gridPower });
+        const val = inGraph(FLOW_NODE_GRID) ? directedPower(gridPower, FLOW_NODE_GRID, edges) : -gridPower;
+        result.flow.push({ suffix: "grid.gridPower", val: val === 0 ? 0 : val });
     }
     add(result.flow, "grid.loadPower", rf.load_power);
     if (hasBattery) {
-        add(result.flow, "grid.batteryPower", rf.bms_power);
+        const batteryPower = toNumber(rf.bms_power);
+        if (batteryPower !== null) {
+            const val = directedPower(batteryPower, FLOW_NODE_BATTERY, edges);
+            result.flow.push({ suffix: "grid.batteryPower", val: val === 0 ? 0 : val });
+        }
     }
     add(result.energy, "grid.consumptionToday", rf.use_eq_total, 1000);
     add(result.energy, "grid.gridImportToday", rf.efg_total, 1000);

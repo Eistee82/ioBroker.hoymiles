@@ -1,4 +1,4 @@
-import { CLOUD_DEV_TYPE_HYBRID_INVERTER } from "./hybridCloud.js";
+import { CLOUD_DEV_TYPE_HYBRID_INVERTER, FLOW_NODE_BATTERY, FLOW_NODE_GRID, directedPower } from "./hybridCloud.js";
 import { BURST_MIN_INTERVAL_MS, BURST_MAX_INTERVAL_MS, BURST_URI_REFRESH_MS, BURST_MAX_FAILURES, CLOUD_POLL_CONCURRENCY, } from "./constants.js";
 import { stationStateMap, hybridStateMap, hybridChannels, buildStateCommon } from "./stateDefinitions.js";
 import { anonymize, errorMessage, mapLimit } from "./utils.js";
@@ -69,6 +69,7 @@ class BurstPoller {
     }
     async startStation(stationId) {
         const targets = new Map();
+        let storagePlant = false;
         let deviceTree = [];
         try {
             deviceTree = await this.cloud.getDeviceTree(stationId);
@@ -83,7 +84,10 @@ class BurstPoller {
                 continue;
             }
             for (const inv of dtu.children ?? []) {
-                if (inv.sn && inv.type !== CLOUD_DEV_TYPE_HYBRID_INVERTER) {
+                if (inv.type === CLOUD_DEV_TYPE_HYBRID_INVERTER) {
+                    storagePlant = true;
+                }
+                else if (inv.sn) {
                     targets.set(inv.sn, { dtuSerial: dev.dtuSerial, dev });
                 }
             }
@@ -104,9 +108,11 @@ class BurstPoller {
             claimReleased: false,
         };
         this.stations.set(stationId, sb);
-        this.adapter.log.info(targets.size === 0
-            ? `Burst realtime started for station ${stationId} (station-level power aggregate only — all inverters served locally)`
-            : `Burst realtime started for station ${stationId} (${targets.size} cloud-only inverter(s))`);
+        this.adapter.log.info(targets.size > 0
+            ? `Burst realtime started for station ${stationId} (${targets.size} cloud-only inverter(s))`
+            : storagePlant
+                ? `Burst realtime started for station ${stationId} (storage plant: power flow and battery state of charge — the channel has no per-inverter mode for hybrid inverters)`
+                : `Burst realtime started for station ${stationId} (station-level power aggregate only — all inverters served locally)`);
         void this.poll(sb);
     }
     async poll(sb) {
@@ -138,7 +144,7 @@ class BurstPoller {
                 await this.writeStation(sb.stationId, stationData.power, sq);
             }
             else if (stationData.es) {
-                await this.writeStorageStation(sb.stationId, stationData.es, stationData.soc, sq);
+                await this.writeStorageStation(sb.stationId, stationData.es, stationData.flow, stationData.soc, sq);
             }
             if (sb.claimReleased) {
                 for (const t of sb.targets.values()) {
@@ -203,14 +209,15 @@ class BurstPoller {
             ws("grid.pvUtilization", num(power.pvr)),
         ]);
     }
-    async writeStorageStation(stationId, es, soc, quality) {
+    async writeStorageStation(stationId, es, flow, soc, quality) {
         const deviceId = `station-${stationId}`;
         const ws = (suffix, val) => this.writeStationState(deviceId, suffix, val, quality);
+        const edges = (flow ?? []).map(e => ({ from: Number(e?.o), to: Number(e?.i) }));
         const writes = [
             ws("grid.power", num(es.pp)),
-            ws("grid.gridPower", num(es.gp)),
+            ws("grid.gridPower", directedPower(num(es.gp), FLOW_NODE_GRID, edges)),
             ws("grid.loadPower", num(es.lp)),
-            ws("grid.batteryPower", num(es.bp)),
+            ws("grid.batteryPower", directedPower(num(es.bp), FLOW_NODE_BATTERY, edges)),
         ];
         if (soc !== undefined && soc !== null) {
             for (const dev of this.devices.values()) {

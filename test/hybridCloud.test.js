@@ -9,6 +9,9 @@ import {
 	REAL_INDICATOR_TYPE_PV_METER,
 	REAL_INDICATOR_TYPE_GENERATOR,
 	SETTING_ACTION_BATTERY_MODE_READ,
+	FLOW_NODE_BATTERY,
+	FLOW_NODE_GRID,
+	directedPower,
 	mapBatterySettings,
 	mapRealIndicators,
 	mapStorageStationData,
@@ -614,6 +617,34 @@ describe("hybridCloud – stationIndicatorTypes", function () {
 	});
 });
 
+describe("hybridCloud – directedPower", function () {
+	it("uses the node ids of the cloud's flow graph", function () {
+		assert.strictEqual(FLOW_NODE_GRID, 2);
+		assert.strictEqual(FLOW_NODE_BATTERY, 10);
+	});
+
+	it("is positive while the node is a source, whatever sign the reading carries", function () {
+		const importing = [{ from: 2, to: 1 }];
+		assert.strictEqual(directedPower(273, FLOW_NODE_GRID, importing), 273);
+		assert.strictEqual(directedPower(-276, FLOW_NODE_GRID, importing), 276);
+	});
+
+	it("is negative while the node is a sink, whatever sign the reading carries", function () {
+		const charging = [{ from: 4, to: 10 }];
+		assert.strictEqual(directedPower(1500, FLOW_NODE_BATTERY, charging), -1500);
+		assert.strictEqual(directedPower(-1500, FLOW_NODE_BATTERY, charging), -1500);
+	});
+
+	it("never produces -0", function () {
+		assert.ok(Object.is(directedPower(0, FLOW_NODE_GRID, [{ from: 4, to: 2 }]), 0));
+	});
+
+	it("keeps the reading as delivered when the graph does not mention the node", function () {
+		assert.strictEqual(directedPower(-42, FLOW_NODE_GRID, [{ from: 10, to: 1 }]), -42);
+		assert.strictEqual(directedPower(42, FLOW_NODE_GRID, []), 42);
+	});
+});
+
 describe("hybridCloud – mapStorageStationData", function () {
 	// Checked against the portal's dashboard: from grid 6.5, to grid 3, charged 7.8, discharged 5.4,
 	// consumption 14.3 kWh.
@@ -660,6 +691,41 @@ describe("hybridCloud – mapStorageStationData", function () {
 		assert.strictEqual(gridPowerOf("120"), -120, "export arrives positive and must become negative");
 		assert.ok(Object.is(gridPowerOf("0.0"), 0), "zero must stay +0, not become -0");
 		assert.strictEqual(gridPowerOf("x"), undefined, "a non-numeric value is skipped");
+	});
+
+	// Recorded at night with an empty battery: the grid (node 2) feeds the load (node 1).
+	it("takes the direction from the flow graph when the block carries one", function () {
+		const recorded = { ...BLOCK, grid_power: "-276.0", bms_power: "0.0", flows: [{ out: 2, in: 1, v: 0 }] };
+		assert.deepStrictEqual(toObject(mapStorageStationData(recorded).flow), {
+			"grid.gridPower": 276,
+			"grid.loadPower": 567,
+			"grid.batteryPower": 0,
+		});
+		// PV surplus: PV (4) feeds the load, charges the battery (10) and exports to the grid (2).
+		// Whatever sign the raw numbers carry, a sink is negative.
+		const surplus = [
+			{ out: 4, in: 1 },
+			{ out: 4, in: 10 },
+			{ out: 4, in: 2 },
+		];
+		for (const [grid, battery] of [
+			["800", "1500"],
+			["-800", "-1500"],
+		]) {
+			const flow = toObject(
+				mapStorageStationData({ ...BLOCK, grid_power: grid, bms_power: battery, flows: surplus }).flow,
+			);
+			assert.strictEqual(flow["grid.gridPower"], -800, `feed-in must be negative (raw ${grid})`);
+			assert.strictEqual(flow["grid.batteryPower"], -1500, `charging must be negative (raw ${battery})`);
+		}
+		// Discharging into the load: the battery is a source.
+		const discharging = mapStorageStationData({ ...BLOCK, bms_power: "567.0", flows: [{ out: 10, in: 1 }] });
+		assert.strictEqual(toObject(discharging.flow)["grid.batteryPower"], 567);
+	});
+
+	it("tolerates a malformed flow graph", function () {
+		const mapped = mapStorageStationData({ ...BLOCK, grid_power: "-50", flows: [null, {}, { out: "x" }] });
+		assert.strictEqual(toObject(mapped.flow)["grid.gridPower"], 50, "falls back to the block's own sign");
 	});
 
 	it("leaves the battery values out on a station with a meter but no battery", function () {

@@ -390,6 +390,43 @@ export function mapRealIndicators(data: RealIndicatorData | null | undefined): M
 	return result;
 }
 
+/** Node ids of the cloud's energy-flow graph (the portal maps 4 = PV, 1 = load, 10 = battery, 2 = grid). */
+export const FLOW_NODE_GRID = 2;
+export const FLOW_NODE_BATTERY = 10;
+
+/** One edge of the energy-flow graph: power runs from node `from` to node `to`. */
+export interface FlowEdge {
+	/** Node the power comes out of. */
+	from: number;
+	/** Node the power goes into. */
+	to: number;
+}
+
+/**
+ * Give a power reading its direction: positive while the node is a SOURCE (the grid is drawn from,
+ * the battery discharges), negative while it is a SINK (feed-in, charging).
+ *
+ * The direction is taken from the flow graph, not from the sign of the reading — the S-Miles portal
+ * does the same: it draws the arrows from this graph and prints `Math.abs()` of the grid power. The
+ * sign of the raw number cannot be relied on: the station realtime block reports grid import as a
+ * negative number, the realtime burst as a positive one.
+ *
+ * @param raw - Power as delivered, any sign.
+ * @param node - Node the reading belongs to.
+ * @param edges - Flow graph of the same sample.
+ * @returns The signed power; the raw value when the graph does not mention the node (nothing flows).
+ */
+export function directedPower(raw: number, node: number, edges: FlowEdge[]): number {
+	const magnitude = Math.abs(raw);
+	if (edges.some(e => e.from === node)) {
+		return magnitude;
+	}
+	if (edges.some(e => e.to === node)) {
+		return magnitude === 0 ? 0 : -magnitude;
+	}
+	return raw;
+}
+
 /**
  * Which station-level measuring points to read. The cloud answers a request for something the plant
  * does not have with a complete template of zeros, so presence has to come from elsewhere: the
@@ -421,6 +458,8 @@ export function stationIndicatorTypes(block: unknown): number[] {
 
 /** The `reflux_station_data` block of the station realtime response, as far as the adapter reads it. */
 export interface StorageStationData {
+	/** Energy-flow graph: power runs from node `out` to node `in` (node ids: see `FLOW_NODE_*`). */
+	flows?: Array<{ out?: number; in?: number } | null>;
 	/** Grid exchange power, W. */
 	grid_power?: string | number;
 	/** Load / consumption power, W. */
@@ -482,19 +521,25 @@ export function mapStorageStationData(block: unknown): MappedStorageStation | nu
 			list.push({ suffix, val: Math.round((val / scale) * 1000) / 1000 });
 		}
 	};
-	// This block reports grid import as a NEGATIVE number, the realtime burst — which owns the same
-	// state while it streams — as a positive one. Measured on a storage plant with an empty battery
-	// at night (load 386 W, PV 0, battery 0, so 386 W had to come from the grid): `grid_power` was
-	// -386 here while the burst's `gp` read +326…+363 minutes earlier in the same situation. The state
-	// is documented as +import/−export, which is the burst's convention, so this value is turned
-	// round — otherwise its sign would flip whenever the writer changes.
+	// Direction comes from the flow graph (see `directedPower`). Without a graph the block's own
+	// signs have to do: measured with an empty battery at night (load 386 W, PV 0, battery 0, so
+	// 386 W had to come from the grid) `grid_power` read -386, i.e. import is negative here and is
+	// turned round to the documented +import/−export; `bms_power` read +567 while discharging,
+	// which already is the documented +discharge/−charge.
+	const edges = Array.isArray(rf.flows) ? rf.flows.map(f => ({ from: Number(f?.out), to: Number(f?.in) })) : [];
+	const inGraph = (node: number): boolean => edges.some(e => e.from === node || e.to === node);
 	const gridPower = toNumber(rf.grid_power);
 	if (gridPower !== null) {
-		result.flow.push({ suffix: "grid.gridPower", val: gridPower === 0 ? 0 : -gridPower });
+		const val = inGraph(FLOW_NODE_GRID) ? directedPower(gridPower, FLOW_NODE_GRID, edges) : -gridPower;
+		result.flow.push({ suffix: "grid.gridPower", val: val === 0 ? 0 : val });
 	}
 	add(result.flow, "grid.loadPower", rf.load_power);
 	if (hasBattery) {
-		add(result.flow, "grid.batteryPower", rf.bms_power);
+		const batteryPower = toNumber(rf.bms_power);
+		if (batteryPower !== null) {
+			const val = directedPower(batteryPower, FLOW_NODE_BATTERY, edges);
+			result.flow.push({ suffix: "grid.batteryPower", val: val === 0 ? 0 : val });
+		}
 	}
 	add(result.energy, "grid.consumptionToday", rf.use_eq_total, 1000);
 	add(result.energy, "grid.gridImportToday", rf.efg_total, 1000);

@@ -1,7 +1,7 @@
 import type CloudConnection from "./cloudConnection.js";
-import type { BurstInverter, BurstStationPower, BurstStorageFlow } from "./cloudConnection.js";
+import type { BurstFlowEdge, BurstInverter, BurstStationPower, BurstStorageFlow } from "./cloudConnection.js";
 import type DeviceContext from "./deviceContext.js";
-import { CLOUD_DEV_TYPE_HYBRID_INVERTER } from "./hybridCloud.js";
+import { CLOUD_DEV_TYPE_HYBRID_INVERTER, FLOW_NODE_BATTERY, FLOW_NODE_GRID, directedPower } from "./hybridCloud.js";
 import {
 	BURST_MIN_INTERVAL_MS,
 	BURST_MAX_INTERVAL_MS,
@@ -170,6 +170,7 @@ class BurstPoller {
 	 */
 	private async startStation(stationId: number): Promise<void> {
 		const targets = new Map<string, InverterTarget>();
+		let storagePlant = false;
 		let deviceTree: Awaited<ReturnType<CloudConnection["getDeviceTree"]>> = [];
 		try {
 			deviceTree = await this.cloud.getDeviceTree(stationId);
@@ -191,7 +192,9 @@ class BurstPoller {
 				// The per-inverter mode (m:3) is a microinverter feature. A hybrid inverter is not
 				// known to answer it, and claiming its grid.power here would stop the slow poller
 				// from writing a value nobody else delivers.
-				if (inv.sn && inv.type !== CLOUD_DEV_TYPE_HYBRID_INVERTER) {
+				if (inv.type === CLOUD_DEV_TYPE_HYBRID_INVERTER) {
+					storagePlant = true;
+				} else if (inv.sn) {
 					targets.set(inv.sn, { dtuSerial: dev.dtuSerial, dev });
 				}
 			}
@@ -215,9 +218,11 @@ class BurstPoller {
 		};
 		this.stations.set(stationId, sb);
 		this.adapter.log.info(
-			targets.size === 0
-				? `Burst realtime started for station ${stationId} (station-level power aggregate only — all inverters served locally)`
-				: `Burst realtime started for station ${stationId} (${targets.size} cloud-only inverter(s))`,
+			targets.size > 0
+				? `Burst realtime started for station ${stationId} (${targets.size} cloud-only inverter(s))`
+				: storagePlant
+					? `Burst realtime started for station ${stationId} (storage plant: power flow and battery state of charge — the channel has no per-inverter mode for hybrid inverters)`
+					: `Burst realtime started for station ${stationId} (station-level power aggregate only — all inverters served locally)`,
 		);
 		void this.poll(sb);
 	}
@@ -268,7 +273,7 @@ class BurstPoller {
 				await this.writeStation(sb.stationId, stationData.power, sq);
 			} else if (stationData.es) {
 				// A storage system delivers its power flow in its own block instead of `power`.
-				await this.writeStorageStation(sb.stationId, stationData.es, stationData.soc, sq);
+				await this.writeStorageStation(sb.stationId, stationData.es, stationData.flow, stationData.soc, sq);
 			}
 
 			// Every poll of this cycle worked again — take the power states back from the slow cloud
@@ -397,23 +402,27 @@ class BurstPoller {
 	 *
 	 * @param stationId - Cloud station id.
 	 * @param es - The `es` object from a burst m:0 response.
+	 * @param flow - The flow graph of the same response; it carries the direction of `gp` and `bp`.
 	 * @param soc - Battery state of charge (%), when delivered.
 	 * @param quality - ioBroker state quality (0x00 live, 0x42 stale).
 	 */
 	private async writeStorageStation(
 		stationId: number,
 		es: BurstStorageFlow,
+		flow: BurstFlowEdge[] | undefined,
 		soc: number | undefined,
 		quality: ioBroker.STATE_QUALITY[keyof ioBroker.STATE_QUALITY],
 	): Promise<void> {
 		const deviceId = `station-${stationId}`;
 		const ws = (suffix: string, val: number): Promise<void> =>
 			this.writeStationState(deviceId, suffix, val, quality);
+		// `o` is the node the power comes out of, `i` the node it goes into.
+		const edges = (flow ?? []).map(e => ({ from: Number(e?.o), to: Number(e?.i) }));
 		const writes = [
 			ws("grid.power", num(es.pp)),
-			ws("grid.gridPower", num(es.gp)),
+			ws("grid.gridPower", directedPower(num(es.gp), FLOW_NODE_GRID, edges)),
 			ws("grid.loadPower", num(es.lp)),
-			ws("grid.batteryPower", num(es.bp)),
+			ws("grid.batteryPower", directedPower(num(es.bp), FLOW_NODE_BATTERY, edges)),
 		];
 		if (soc !== undefined && soc !== null) {
 			for (const dev of this.devices.values()) {

@@ -360,6 +360,54 @@ describe("BurstPoller – hybrid inverters", function () {
 		assert.strictEqual(byId["station-1.battery.soc"], undefined, "there is no station battery place");
 	});
 
+	// The burst delivers magnitudes; which way the power runs is in the flow graph (`o` = the node
+	// it comes out of, `i` = the node it goes into; 4 = PV, 1 = load, 10 = battery, 2 = grid). The
+	// S-Miles portal reads it the same way: arrows from the graph, Math.abs() on the grid power.
+	it("takes the direction of grid and battery power from the flow graph: feed-in and charging are negative", async function () {
+		const { adapter, calls } = createTrackingAdapter();
+		let resolveStation;
+		const stationDone = new Promise(r => (resolveStation = r));
+		const trackedSetState = adapter.setStateAsync;
+		adapter.setStateAsync = async (id, val) => {
+			await trackedSetState(id, val);
+			if (id === "station-1.grid.batteryPower") {
+				resolveStation();
+			}
+		};
+		const cloud = {
+			getDeviceTree: async () => [],
+			getRealtimeUri: async () => "https://eurt.example.com/rds/api/0/burst/get?k=abc&t=1",
+			// PV surplus: PV feeds the load, charges the battery and exports the rest.
+			pollRealtimeBurst: async () => ({
+				flow: [
+					{ i: 1, o: 4 },
+					{ i: 10, o: 4 },
+					{ i: 2, o: 4 },
+				],
+				dly: 10000,
+				con: 1,
+				es: { pp: 3000, gp: 800, bp: 1500, lp: 700, sp: 0 },
+				soc: 60,
+			}),
+		};
+		const poller = new BurstPoller({
+			cloud,
+			adapter,
+			devices: new Map(),
+			stationDevices: new Set([1]),
+			burstActiveStations: new Set(),
+		});
+		await poller.start();
+		await stationDone;
+		poller.stop();
+
+		const byId = Object.fromEntries(calls.map(([id, val]) => [id, val.val]));
+		assert.strictEqual(byId["station-1.grid.power"], 3000);
+		assert.strictEqual(byId["station-1.grid.loadPower"], 700);
+		assert.strictEqual(byId["station-1.grid.gridPower"], -800, "the grid is a sink → feed-in → negative");
+		assert.strictEqual(byId["station-1.grid.batteryPower"], -1500, "the battery is a sink → charging → negative");
+	});
+
 	it("does not write any soc at all when the station has no locally-known hybrid device", async function () {
 		const { adapter, calls } = createTrackingAdapter();
 		let resolveStation;
