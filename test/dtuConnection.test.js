@@ -494,3 +494,101 @@ describe("dtuConnection", function () {
 		});
 	});
 });
+
+// ============================================================
+// _onData – encrypted frames (DTU firmware V01.01.01+) carry a 16-byte tag beyond totalLen
+// ============================================================
+describe("dtuConnection – encrypted framing", function () {
+	function buildFrame(tag, payloadLen, extra = 0) {
+		const totalLen = 10 + payloadLen;
+		const buf = Buffer.alloc(totalLen + extra, 0xaa);
+		buf[0] = 0x48;
+		buf[1] = 0x4d;
+		buf[2] = tag >> 8;
+		buf[3] = tag & 0xff;
+		buf[8] = (totalLen >> 8) & 0xff;
+		buf[9] = totalLen & 0xff;
+		return buf;
+	}
+
+	it("delivers an encrypted frame including its tag once encryption is on", function () {
+		const conn = new DtuConnection("192.168.1.100", 10081);
+		const messages = [];
+		conn.on("message", msg => messages.push(msg));
+		conn.setEncryptedFrames(true);
+
+		const frame = buildFrame(0xa211, 20, 16);
+		conn._onData(frame.subarray(0, 30)); // header + payload, tag still missing
+		assert.strictEqual(messages.length, 0, "must wait for the tag");
+		conn._onData(frame.subarray(30));
+		assert.strictEqual(messages.length, 1);
+		assert.strictEqual(messages[0].length, 46, "totalLen + 16-byte tag");
+		conn.disconnect();
+	});
+
+	it("does not wait for a tag on a plain-talking DTU", function () {
+		const conn = new DtuConnection("192.168.1.100", 10081);
+		const messages = [];
+		conn.on("message", msg => messages.push(msg));
+
+		conn._onData(buildFrame(0xa211, 20));
+		assert.strictEqual(messages.length, 1);
+		assert.strictEqual(messages[0].length, 30);
+		conn.disconnect();
+	});
+
+	it("keeps InfoData (0xa201) at totalLen even when encryption is on", function () {
+		const conn = new DtuConnection("192.168.1.100", 10081);
+		const messages = [];
+		conn.on("message", msg => messages.push(msg));
+		conn.setEncryptedFrames(true);
+
+		const info = buildFrame(0xa201, 20);
+		const next = buildFrame(0xa211, 4, 16);
+		conn._onData(Buffer.concat([info, next]));
+		assert.strictEqual(messages.length, 2, "InfoData must not swallow the next frame's bytes");
+		assert.strictEqual(messages[0].length, 30);
+		assert.strictEqual(messages[1].length, 30, "4-byte payload + 16-byte tag + header");
+		conn.disconnect();
+	});
+
+	it("splits two encrypted frames in one chunk at the right places", function () {
+		const conn = new DtuConnection("192.168.1.100", 10081);
+		const messages = [];
+		conn.on("message", msg => messages.push(msg));
+		conn.setEncryptedFrames(true);
+
+		const a = buildFrame(0xa211, 7, 16);
+		const b = buildFrame(0xa209, 3, 16);
+		conn._onData(Buffer.concat([a, b]));
+		assert.strictEqual(messages.length, 2);
+		assert.strictEqual(messages[0].length, 33);
+		assert.strictEqual(messages[1].length, 29);
+		conn.disconnect();
+	});
+
+	it("an empty encrypted frame carries no tag", function () {
+		const conn = new DtuConnection("192.168.1.100", 10081);
+		const messages = [];
+		conn.on("message", msg => messages.push(msg));
+		conn.setEncryptedFrames(true);
+
+		conn._onData(buildFrame(0xa202, 0));
+		assert.strictEqual(messages.length, 1);
+		assert.strictEqual(messages[0].length, 10);
+		conn.disconnect();
+	});
+
+	it("setEncryptedFrames(false) returns to plain framing", function () {
+		const conn = new DtuConnection("192.168.1.100", 10081);
+		const messages = [];
+		conn.on("message", msg => messages.push(msg));
+		conn.setEncryptedFrames(true);
+		conn.setEncryptedFrames(false);
+
+		conn._onData(buildFrame(0xa211, 5));
+		assert.strictEqual(messages.length, 1);
+		assert.strictEqual(messages[0].length, 15);
+		conn.disconnect();
+	});
+});

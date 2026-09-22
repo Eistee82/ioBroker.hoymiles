@@ -1,4 +1,5 @@
 import * as net from "node:net";
+import * as tls from "node:tls";
 import { EventEmitter } from "node:events";
 
 /**
@@ -44,6 +45,8 @@ abstract class TcpConnection extends EventEmitter {
 	protected readonly host: string;
 	protected readonly port: number;
 	protected readonly timers: TimerScheduler;
+	/** TLS settings when the connection is wrapped in TLS; null for a plain TCP socket. */
+	protected readonly tlsOptions: tls.ConnectionOptions | null;
 
 	private reconnectTimer: ioBroker.Timeout | undefined;
 	private readonly reconnectDelayMin: number;
@@ -55,6 +58,7 @@ abstract class TcpConnection extends EventEmitter {
 	 * @param reconnectDelayMin - Initial reconnect delay in ms
 	 * @param reconnectDelayMax - Maximum reconnect delay in ms
 	 * @param timers - Adapter-managed timer scheduler; falls back to native timers when omitted
+	 * @param tlsOptions - Wrap the socket in TLS with these options (CA, versions); omit for plain TCP
 	 */
 	constructor(
 		host: string,
@@ -62,11 +66,13 @@ abstract class TcpConnection extends EventEmitter {
 		reconnectDelayMin: number,
 		reconnectDelayMax: number,
 		timers?: TimerScheduler,
+		tlsOptions?: tls.ConnectionOptions | null,
 	) {
 		super();
 		this.host = host;
 		this.port = port;
 		this.timers = timers ?? NATIVE_TIMERS;
+		this.tlsOptions = tlsOptions ?? null;
 		this.socket = null;
 		this.connected = false;
 		this.destroyed = false;
@@ -89,18 +95,41 @@ abstract class TcpConnection extends EventEmitter {
 		this._cleanupSocket();
 
 		this.connected = false;
-		this.socket = new net.Socket();
-
-		this._configureSocket(this.socket);
-
-		this.socket.connect(this.port, this.host, () => {
+		const onConnected = (): void => {
 			this.connected = true;
 			this.reconnectDelay = this.reconnectDelayMin;
 			this._onConnected();
-		});
+		};
+
+		if (this.tlsOptions) {
+			// TLS: the socket connects and completes the handshake in one go; the callback fires on
+			// `secureConnect`. A certificate the CA does not vouch for surfaces as an "error" event.
+			const socket = tls.connect(
+				{
+					host: this.host,
+					port: this.port,
+					// SNI and hostname check need a name, not an address
+					...(net.isIP(this.host) ? {} : { servername: this.host }),
+					...this.tlsOptions,
+				},
+				onConnected,
+			);
+			this.socket = socket;
+			this._configureSocket(socket);
+		} else {
+			const socket = new net.Socket();
+			this.socket = socket;
+			this._configureSocket(socket);
+			socket.connect(this.port, this.host, onConnected);
+		}
 
 		this.socket.on("error", (err: Error) => this._handleDisconnect(err));
 		this.socket.on("close", () => this._handleDisconnect(null));
+	}
+
+	/** Whether this connection is wrapped in TLS. */
+	get usesTls(): boolean {
+		return this.tlsOptions !== null;
 	}
 
 	/** Close the connection permanently and stop all timers. */

@@ -50,6 +50,9 @@ import {
 	POWER_LIMIT_DEADBAND_DEFAULT,
 	POWER_LIMIT_MIN_INTERVAL_SEC_DEFAULT,
 	HIST_MAX_PAGES,
+	HM_HEADER_SIZE,
+	LOCAL_GCM_TAG_LEN,
+	CLOUD_RELAY_TLS_PORT,
 } from "./constants.js";
 import { whToKwh } from "./convert.js";
 import { anonymize, errorMessage, safeJsonStringify, unixSeconds } from "./utils.js";
@@ -208,8 +211,6 @@ class DeviceContext {
 	protobuf: ProtobufHandler;
 	encryption: Encryption | null;
 	encryptionRequired: boolean;
-	/** Keeps the "cannot relay encrypted RealData" warning to one line per session. */
-	private warnedEncryptedRelay: boolean;
 	/** Dead band and minimum interval for the commands the DTU persists to flash. */
 	private readonly flashGuard: FlashGuardOptions;
 	/** Last flash-writing command per state id — the guard judges the next write against it. */
@@ -345,7 +346,6 @@ class DeviceContext {
 		this.protobuf = options.protobuf;
 		this.encryption = null;
 		this.encryptionRequired = false;
-		this.warnedEncryptedRelay = false;
 		this.cloudStationId = null;
 
 		this.pollTimer = undefined;
@@ -419,7 +419,7 @@ class DeviceContext {
 				10081,
 				() => {
 					const ts = unixSeconds();
-					return this.protobuf.encodeHeartbeat(ts);
+					return this.wireFrame(this.protobuf.encodeHeartbeat(ts));
 				},
 				this.adapter,
 			);
@@ -510,7 +510,7 @@ class DeviceContext {
 
 		// Request device info immediately — poll cycle starts after InfoData is received
 		const ts = unixSeconds();
-		this.connection?.send(this.protobuf.encodeInfoRequest(ts)).catch(e => {
+		this.connection?.send(this.wireFrame(this.protobuf.encodeInfoRequest(ts))).catch(e => {
 			this.adapter.log.debug(`[${this.deviceId}] InfoRequest send failed: ${errorMessage(e)}`);
 		});
 
@@ -854,7 +854,7 @@ class DeviceContext {
 		}
 		this.gridChunks.clear();
 		this.connection
-			.send(this.protobuf.encodeDevConfigFetch(unixSeconds(), this.dtuSerial, this.inverterSn))
+			.send(this.wireFrame(this.protobuf.encodeDevConfigFetch(unixSeconds(), this.dtuSerial, this.inverterSn)))
 			.catch(e => {
 				this.adapter.log.debug(`[${this.deviceId}] DevConfigFetch send failed: ${errorMessage(e)}`);
 			});
@@ -982,7 +982,7 @@ class DeviceContext {
 			);
 			return;
 		}
-		const frame = this.protobuf.buildMessage(cmd.cmdHigh, cmd.cmdLow, cmd.payload);
+		const frame = this.wireFrame(this.protobuf.buildMessage(cmd.cmdHigh, cmd.cmdLow, cmd.payload));
 		this.connection.send(frame).catch(e => {
 			this.adapter.log.warn(`[${this.deviceId}] forwarding cloud action ${action} failed: ${errorMessage(e)}`);
 		});
@@ -1211,7 +1211,7 @@ class DeviceContext {
 			}, timeoutMs);
 
 			this.pendingResponse = { cmdKey, resolve: () => settle(true), timer };
-			conn.send(message).catch(err => {
+			conn.send(this.wireFrame(message)).catch(err => {
 				this.adapter.log.debug(`[${this.host}] sendAndWait send failed: ${errorMessage(err)}`);
 				if (this.pendingResponse?.cmdKey === cmdKey) {
 					this.adapter.clearTimeout(timer);
@@ -1294,22 +1294,36 @@ class DeviceContext {
 			const msgId = (message[2] << 8) | message[3];
 			const seqNum = (message[4] << 8) | message[5];
 
+			// A DTU that encrypts (firmware V01.01.01+) leaves the InfoData response plain and
+			// appends a 16-byte authentication tag beyond `totalLen` to every other frame with a
+			// payload. CRC and totalLen cover the ciphertext, so `payload` is the ciphertext here.
 			let decryptedPayload = payload;
-			if (this.encryptionRequired && this.encryption) {
-				if (!(cmdHigh === 0xa2 && cmdLow === 0x01)) {
-					try {
-						decryptedPayload = this.encryption.decrypt(payload, msgId, seqNum);
-					} catch (err) {
-						this.adapter.log.warn(`[${this.host}] Decryption failed: ${errorMessage(err)}`);
-						return;
-					}
+			if (this.encryptionRequired && this.encryption && payload.length > 0 && Encryption.isEncryptedTag(msgId)) {
+				const body = message.subarray(HM_HEADER_SIZE, parsed.totalLen + LOCAL_GCM_TAG_LEN);
+				if (body.length < payload.length + LOCAL_GCM_TAG_LEN) {
+					this.adapter.log.warn(
+						`[${this.host}] Decryption failed: frame 0x${msgId.toString(16)} arrived without its authentication tag`,
+					);
+					return;
+				}
+				try {
+					decryptedPayload = this.encryption.decrypt(body, msgId, seqNum);
+				} catch (err) {
+					this.adapter.log.warn(`[${this.host}] Decryption failed: ${errorMessage(err)}`);
+					return;
 				}
 			}
 
 			const tag = this.deviceId || this.host;
 			switch ((cmdHigh << 8) | cmdLow) {
 				case 0xa211:
-					this.relayRealData(message);
+					// The relay re-frames the plain protobuf; hand it the decrypted payload under
+					// the original header so an encrypting DTU is relayed like any other.
+					this.relayRealData(
+						decryptedPayload === payload
+							? message
+							: Buffer.concat([message.subarray(0, HM_HEADER_SIZE), decryptedPayload]),
+					);
 					this.handleRealData(decryptedPayload).catch(err =>
 						this.adapter.log.warn(`[${tag}] handleRealData error: ${errorMessage(err)}`),
 					);
@@ -1386,30 +1400,28 @@ class DeviceContext {
 	 * on port 10081 carries unencrypted `0x22NN`/`0x23NN` frames (captures under
 	 * `_fwanalysis/captures/`, protobuf directly parseable, serial in the clear).
 	 *
-	 * It stops being sound the moment a DTU demands encryption (`dfs` bit 25): key and IV are
-	 * derived from `enc_rand` **plus message id plus sequence number** (see `Encryption`), and
-	 * the re-framing changes both — the server would receive bytes it cannot decrypt. Sending
-	 * nothing is the better failure: the cloud then sees a device that went quiet rather than
-	 * one that talks gibberish.
+	 * A DTU with firmware V01.01.01+ encrypts its local frames, but the cloud frames stay plain
+	 * even there (only the transport becomes TLS) — so the caller hands over the *decrypted*
+	 * payload under the original header and the relay keeps working unchanged.
 	 *
-	 * @param message - The raw HM-framed local RealData response (`0xa211`).
+	 * @param message - The HM-framed local RealData response (`0xa211`) with a plain payload.
 	 */
 	private relayRealData(message: Buffer): void {
 		if (!this.cloudRelay) {
 			return;
 		}
-		if (this.encryptionRequired) {
-			if (!this.warnedEncryptedRelay) {
-				this.warnedEncryptedRelay = true;
-				this.adapter.log.warn(
-					`[${this.deviceId || this.host}] This DTU encrypts its local messages, so the cloud relay ` +
-						`cannot forward RealData — the cloud would not be able to decrypt it. Relay uploads are ` +
-						`skipped; local states are unaffected.`,
-				);
-			}
-			return;
-		}
 		this.cloudRelay.updateRealData(message);
+	}
+
+	/**
+	 * Prepare a local frame for the wire: encrypt it when the DTU demands encryption (firmware
+	 * V01.01.01+), pass it through unchanged for a plain-talking DTU. `Encryption.encryptFrame`
+	 * leaves the InfoData request plain by itself, so this can wrap every local send.
+	 *
+	 * @param frame - Plain HM frame from the protobuf handler
+	 */
+	private wireFrame(frame: Buffer): Buffer {
+		return this.encryptionRequired && this.encryption ? this.encryption.encryptFrame(frame) : frame;
 	}
 
 	// --- State management ---
@@ -1645,7 +1657,7 @@ class DeviceContext {
 			`[${this.deviceId || this.host}] Binding Shelly meter ${anonymize(mac)} as ` +
 				`${devType === SHELLY_DEV_TYPE_GRID ? "grid device (zero export)" : "meter only"}`,
 		);
-		return this.connection.send(frame);
+		return this.connection.send(this.wireFrame(frame));
 	}
 
 	/** Create the `shelly` channel and its states. Called once, on the first frame with a meter. */
@@ -1876,6 +1888,9 @@ class DeviceContext {
 			this.adapter.log[logLevel](
 				`[${this.host}] Device info: DTU SN=${info.dtuSn}, devices=${info.deviceNumber}, PVs=${info.pvNumber}`,
 			);
+			// Before anything is awaited: from this frame on the DTU may encrypt (firmware
+			// V01.01.01+), and the framer must know that before the next frame arrives.
+			this.setupEncryption(info);
 
 			// Initialize device ID from DTU serial if not yet known
 			if (!this.deviceId && info.dtuSn) {
@@ -1910,7 +1925,6 @@ class DeviceContext {
 			}
 
 			await this.updateDtuStates(info);
-			this.setupEncryption(info);
 			await this.updateInverterVersions(info);
 			await this.initCloudRelay(info.dtuSn);
 			this.startPollingIfReady();
@@ -1944,7 +1958,7 @@ class DeviceContext {
 
 	private setupEncryption(info: ReturnType<ProtobufHandler["decodeInfoData"]>): void {
 		// BLE frames are already decrypted by the transport (GCM/SN-CBC); DeviceContext must not
-		// layer its own CBC decryption on top.
+		// layer its own encryption on top.
 		if (this.transport === "ble") {
 			this.encryptionRequired = false;
 			return;
@@ -1954,17 +1968,27 @@ class DeviceContext {
 		}
 		const di = info.dtuInfo;
 		if (Encryption.isRequired(di.dfs)) {
-			this.adapter.log.info(`[${this.deviceId}] DTU requires encrypted communication`);
+			// DTU firmware V01.01.01+: AES-128-GCM on every local frame except InfoData, keyed by
+			// the enc_rand the DTU just sent. enc_rand changes with every DTU restart, so it is
+			// taken fresh from each InfoData response.
+			if (!this.encryptionRequired) {
+				this.adapter.log.info(
+					`[${this.deviceId || this.host}] DTU requires encrypted communication (firmware V01.01.01+)`,
+				);
+			}
 			this.encryptionRequired = true;
 			if (di.encRand) {
 				this.encryption = new Encryption(di.encRand);
-				this.adapter.log.info(`[${this.deviceId}] Encryption initialized with enc_rand from DTU`);
+				this.adapter.log.debug(`[${this.deviceId || this.host}] Encryption initialized with enc_rand from DTU`);
 			} else {
-				this.adapter.log.warn(`[${this.deviceId}] Encryption required but no enc_rand received`);
+				this.adapter.log.warn(`[${this.deviceId || this.host}] Encryption required but no enc_rand received`);
 			}
 		} else {
-			this.adapter.log.debug(`[${this.deviceId}] DTU does not require encryption`);
+			this.adapter.log.debug(`[${this.deviceId || this.host}] DTU does not require encryption`);
 			this.encryptionRequired = false;
+		}
+		if (this.connection instanceof DtuConnection) {
+			this.connection.setEncryptedFrames(this.encryptionRequired);
 		}
 	}
 
@@ -2009,18 +2033,35 @@ class DeviceContext {
 			const serverPort = (portState?.val as number) || 10081;
 			if (serverDomain) {
 				this.cloudRelayInitializing = true;
-				const relay = new CloudRelay(serverDomain, serverPort, this.adapter);
+				// The relay goes where the DTU is configured to go. On the TLS port (10083, the
+				// default of firmware V01.01.01+) it wraps the connection in TLS like the DTU does;
+				// on 10081 it talks plain HM like older firmware.
+				const useTls = serverPort === CLOUD_RELAY_TLS_PORT;
+				let warnedTls = false;
+				const relay = new CloudRelay(serverDomain, serverPort, this.adapter, { tls: useTls });
 				relay.configure(this.protobuf, dtuSn);
 				this.cloudRelay = relay;
 				this.cloudRelay.on("connected", () => {
-					this.adapter.log.info(`[${this.deviceId}] Cloud relay connected to ${serverDomain}:${serverPort}`);
+					warnedTls = false;
+					this.adapter.log.info(
+						`[${this.deviceId}] Cloud relay connected to ${serverDomain}:${serverPort}${useTls ? " (TLS)" : ""}`,
+					);
 				});
 				this.cloudRelay.on("disconnected", () => {
 					const msg = this.cloudRelay?.paused ? "paused" : "disconnected, will reconnect";
 					this.adapter.log.warn(`[${this.deviceId}] Cloud relay ${msg}`);
 				});
 				this.cloudRelay.on("error", (err: Error) => {
-					this.adapter.log.debug(`[${this.deviceId}] Cloud relay: ${err.message}`);
+					// A refused certificate would repeat on every reconnect and never heal by itself —
+					// that one deserves a warning, once; everything else stays in the debug log.
+					if (/certificate|handshake|ssl|tls/i.test(err.message) && !warnedTls) {
+						warnedTls = true;
+						this.adapter.log.warn(
+							`[${this.deviceId}] Cloud relay TLS to ${serverDomain}:${serverPort} failed: ${err.message}`,
+						);
+					} else {
+						this.adapter.log.debug(`[${this.deviceId}] Cloud relay: ${err.message}`);
+					}
 				});
 				this.cloudRelay.on("heartbeatSent", (seq: number) => {
 					this.adapter.log.debug(`[${this.deviceId}] Cloud relay heartbeat sent (seq=${seq})`);
@@ -2053,7 +2094,7 @@ class DeviceContext {
 			if (this.protobuf && this.connection?.connected && this.transport !== "ble") {
 				this.adapter.log.info(`[${this.host}] Enabling performance data mode`);
 				const ts = unixSeconds();
-				void this.connection.send(this.protobuf.encodePerformanceDataMode(ts)).catch(e => {
+				void this.connection.send(this.wireFrame(this.protobuf.encodePerformanceDataMode(ts))).catch(e => {
 					this.adapter.log.debug(`[${this.deviceId}] PerformanceDataMode send failed: ${errorMessage(e)}`);
 				});
 			}
@@ -2198,7 +2239,7 @@ class DeviceContext {
 		// More packages outstanding → request the next one and wait for it.
 		if (now + 1 < total) {
 			this.connection
-				?.send(this.protobuf.encodeWarnDataRequest(unixSeconds(), now + 1))
+				?.send(this.wireFrame(this.protobuf.encodeWarnDataRequest(unixSeconds(), now + 1)))
 				.catch(e =>
 					this.adapter.log.debug(`[${this.deviceId || this.host}] warn next-pkg failed: ${errorMessage(e)}`),
 				);
@@ -2333,7 +2374,7 @@ class DeviceContext {
 				this.histPage++;
 				const next = this.protobuf.encodeHistPowerRequest(unixSeconds(), this.histPage);
 				void this.connection
-					.send(next)
+					.send(this.wireFrame(next))
 					.catch(err =>
 						this.adapter.log.debug(
 							`[${this.deviceId}] HistPower page ${this.histPage} request failed: ${errorMessage(err)}`,
@@ -2390,7 +2431,11 @@ class DeviceContext {
 			// More packages outstanding → request the next one and wait for it
 			if (pkg + 1 < total) {
 				this.connection
-					?.send(this.protobuf.encodeDevConfigFetch(unixSeconds(), this.dtuSerial, this.inverterSn, pkg + 1))
+					?.send(
+						this.wireFrame(
+							this.protobuf.encodeDevConfigFetch(unixSeconds(), this.dtuSerial, this.inverterSn, pkg + 1),
+						),
+					)
 					.catch(e =>
 						this.adapter.log.debug(`[${this.deviceId}] grid profile next-pkg failed: ${errorMessage(e)}`),
 					);

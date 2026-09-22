@@ -86,6 +86,12 @@ export const SCALE_WH_TO_KWH = 1000;
 // Protocol magic bytes ("HM")
 export const HM_MAGIC_0 = 0x48;
 export const HM_MAGIC_1 = 0x4d;
+/** Size of the HM frame header: magic(2) tag(2) seq(2) crc(2) totalLen(2). */
+export const HM_HEADER_SIZE = 10;
+/** AES-GCM authentication tag the DTU appends beyond `totalLen` on encrypted local frames (firmware V01.01.01+). */
+export const LOCAL_GCM_TAG_LEN = 16;
+/** Cloud port on which DTUs (firmware V01.01.01+) speak TLS; 10081 stays plain HM. */
+export const CLOUD_RELAY_TLS_PORT = 10083;
 
 // Discovery
 export const DISCOVERY_TIMEOUT_MS = 1500;

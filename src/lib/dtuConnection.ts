@@ -1,9 +1,10 @@
 import type * as net from "node:net";
 import TcpConnection, { type TimerScheduler } from "./tcpConnection.js";
-import { HM_MAGIC_0, HM_MAGIC_1 } from "./constants.js";
+import { HM_HEADER_SIZE, HM_MAGIC_0, HM_MAGIC_1 } from "./constants.js";
+import Encryption from "./encryption.js";
 
 const MAGIC_HEADER = Buffer.from([HM_MAGIC_0, HM_MAGIC_1]);
-const HEADER_SIZE = 10;
+const HEADER_SIZE = HM_HEADER_SIZE;
 const HEARTBEAT_TIMEOUT = 20000; // 20s idle → send heartbeat (app sends at ~20s idle, DTU native HB is 60s)
 const RECONNECT_DELAY_MIN = 1000;
 const RECONNECT_DELAY_MAX = 300000;
@@ -23,6 +24,11 @@ class DtuConnection extends TcpConnection {
 	private idleTimer: ioBroker.Timeout | undefined;
 	private lastRequestTime: number;
 	private consecutiveFailedSends: number;
+	/**
+	 * Whether the DTU encrypts its frames (firmware V01.01.01+). An encrypted frame carries a
+	 * 16-byte authentication tag beyond `totalLen`, so the framer has to take it along.
+	 */
+	private encryptedFrames: boolean;
 
 	/**
 	 * @param host - DTU IP address
@@ -40,6 +46,17 @@ class DtuConnection extends TcpConnection {
 		this.idleTimer = undefined;
 		this.lastRequestTime = 0;
 		this.consecutiveFailedSends = 0;
+		this.encryptedFrames = false;
+	}
+
+	/**
+	 * Tell the framer whether the DTU encrypts its frames. Set once the InfoData response shows
+	 * `dfs` bit 25; from then on every encrypted frame is delivered including its 16-byte tag.
+	 *
+	 * @param active - true while the DTU encrypts, false for a plain-talking DTU
+	 */
+	setEncryptedFrames(active: boolean): void {
+		this.encryptedFrames = active;
 	}
 
 	/** @inheritdoc */
@@ -145,15 +162,17 @@ class DtuConnection extends TcpConnection {
 				this.receiveBufferLen -= 1;
 				continue;
 			}
-			if (this.receiveBufferLen < totalLen) {
+			// An encrypted frame is longer than its header says: the authentication tag follows.
+			const frameLen = Encryption.wireLength(this.receiveBuffer, this.encryptedFrames);
+			if (this.receiveBufferLen < frameLen) {
 				break;
 			}
 
 			// Extract complete message (copy since buffer will be reused)
-			const message = Buffer.from(this.receiveBuffer.subarray(0, totalLen));
+			const message = Buffer.from(this.receiveBuffer.subarray(0, frameLen));
 			// Compact: shift remaining data to front
-			this.receiveBuffer.copy(this.receiveBuffer, 0, totalLen, this.receiveBufferLen);
-			this.receiveBufferLen -= totalLen;
+			this.receiveBuffer.copy(this.receiveBuffer, 0, frameLen, this.receiveBufferLen);
+			this.receiveBufferLen -= frameLen;
 			this.emit("message", message);
 		}
 	}

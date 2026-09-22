@@ -68,6 +68,8 @@ Ein Hoymiles-**Hybrid-Wechselrichter** im S-Miles-Konto — Referenzanlage: **HA
 | **Mindestabstand Leistungslimit** | 60 s | Kürzester Abstand zwischen zwei Schreibvorgängen des Leistungslimits. 0 = aus. |
 | **Cloud-Relay** | an | Echtzeitdaten im Namen der DTU an die Hoymiles Cloud weiterleiten. Ohne diese Option blockiert die lokale TCP-Verbindung den Cloud-Upload der DTU. |
 
+> **DTU-Firmware ab V01.01.01 verschlüsselt die lokale Verbindung.** Der Adapter erkennt das an der ersten Antwort der DTU und schaltet von selbst auf AES-128-GCM um — nichts einzustellen. Eine solche DTU spricht auch mit der Cloud per TLS (Port 10083), und das Cloud-Relay zieht mit: Es verbindet sich immer mit dem Server und Port, die in der DTU selbst konfiguriert sind (`config.serverDomain` / `config.serverPort`), auf Port 10083 per TLS, auf Port 10081 per Klartext-TCP. Ältere Firmware (bis V01.00.07) funktioniert unverändert weiter.
+
 ### Cloud-Verbindung (S-Miles)
 
 | Einstellung | Standard | Beschreibung |
@@ -96,7 +98,7 @@ Login ist ein einzelner v3-Flow plus anschließender Profil-Probe (`region_c →
   - probe akzeptiert → **installer**-Profil — das Konto funktioniert auf `global.hoymiles.com` und nutzt die volle `/pvm/...`-Web-API inkl. `latitude`/`longitude`/`address`/`local_time`/`status`/`warn_data` und Firmware-Versionsstrings.
   - probe abgelehnt (Server: *„can only be used for logging in to the S-Miles Home app"*) → **home**-Profil — vom Server auf `/pvmc/.../*_c` beschränkt. Diese Surface liefert die obigen Felder nicht, dafür aber Rückspeise-/Eigenverbrauchs-Energie und Strom-Tarif. Für die fehlenden Felder legt der Adapter **keine** States an — sie erscheinen nur, wenn die jeweilige Antwort den Wert tatsächlich enthält. `latitude` / `longitude` / `address` werden für Home-Konten zusätzlich über den `pvm-ext/station-ak/find`-Endpoint nachgeladen, den auch die S-Miles-Home-App selbst nutzt — damit funktioniert die Wetter-Abfrage.
 
-> **Hinweis:** `dataeu.hoymiles.com:10081` ist der EU-Cloud-Relay-Server, an den DTUs ihre Daten pushen — **kein** User-Login-Server. Der Adapter regelt das Cloud-Relay automatisch (siehe *Cloud-Relay*).
+> **Hinweis:** `dataeu.hoymiles.com:10081` (Klartext, ältere Firmware) und `dataeu.hoymiles.com:10083` (TLS, Firmware ab V01.01.01) sind die EU-Cloud-Relay-Server, an die DTUs ihre Daten pushen — **keine** User-Login-Server. Der Adapter regelt das Cloud-Relay automatisch (siehe *Cloud-Relay*).
 
 #### Cloud-Login testen
 
@@ -229,6 +231,12 @@ BLE-Geräte (HMS-800-2WB) arbeiten nach demselben Prinzip, aber in gröberen Stu
 > (HMS-800-2WB) hat keinen lokalen TCP-Port; der Adapter nimmt ihm seine Cloud-Verbindung nie
 > weg, es lädt weiterhin selbst hoch. Für BLE-Geräte startet der Adapter deshalb **kein**
 > Relay — es würde einen zweiten Datenstrom unter derselben Seriennummer erzeugen.
+>
+> Das Relay verbindet sich mit dem Server und Port aus der Konfiguration der DTU. Auf Port 10083
+> (Standard der Firmware ab V01.01.01) spricht es TLS und prüft den Server gegen die Hoymiles-eigene
+> CA, genau wie die DTU; auf Port 10081 spricht es Klartext-HM wie ältere Firmware. Die Rahmen darin
+> sind in beiden Fällen dieselben — die DTU weist sich der Cloud gegenüber allein über ihre
+> Seriennummer aus, nicht über ein Zertifikat.
 
 Solange das Relay läuft, antwortet der Cloud-Server auf die Uploads und schickt gelegentlich
 Befehle. Der Adapter ordnet **jede** dieser Nachrichten ihrem Firmware-Namen zu:

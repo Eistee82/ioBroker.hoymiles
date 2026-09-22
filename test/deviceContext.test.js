@@ -2413,12 +2413,12 @@ describe("deviceContext – handleResponse", function () {
 	});
 
 	// The relay re-frames the RealData payload verbatim under a cloud tag and its own sequence
-	// number. With encryption active, key and IV come from enc_rand + msgId + seqNum, so the
-	// re-framed message would be undecryptable for the cloud — it must not be uploaded at all.
+	// number. A DTU that encrypts its local frames (firmware V01.01.01+) still sends plain frames
+	// to the cloud, so the relay gets the decrypted payload under the original header.
 	async function realDataRelayCtx(encryptionRequired) {
 		const { adapter, warnMsgs } = createTrackingAdapter();
 		const mockProtobuf = {
-			parseResponse: () => ({ cmdHigh: 0xa2, cmdLow: 0x11, payload: Buffer.alloc(0) }),
+			parseResponse: () => ({ cmdHigh: 0xa2, cmdLow: 0x11, payload: Buffer.alloc(0), totalLen: 10 }),
 			decodeRealDataNew: () => ({ dtuPower: 0, dtuDailyEnergy: 0, sgs: [], pv: [], meter: [] }),
 		};
 		const ctx = new DeviceContext({
@@ -2448,14 +2448,29 @@ describe("deviceContext – handleResponse", function () {
 		assert.strictEqual(relayed.length, 1, "plain RealData must reach the relay");
 	});
 
-	it("does not relay RealData when the DTU encrypts its messages", async function () {
-		const { ctx, msg, relayed, warnMsgs } = await realDataRelayCtx(true);
-		ctx["handleResponse"](msg);
+	it("relays the decrypted RealData when the DTU encrypts its messages", async function () {
+		const { ctx, relayed, warnMsgs } = await realDataRelayCtx(true);
+		// ciphertext (2 bytes, totalLen 12) followed by the 16-byte tag beyond totalLen
+		ctx.protobuf.parseResponse = () => ({
+			cmdHigh: 0xa2,
+			cmdLow: 0x11,
+			payload: Buffer.from([0x01, 0x02]),
+			totalLen: 12,
+		});
+		ctx.encryption = { decrypt: () => Buffer.from([0xde, 0xad, 0xbe]) };
+		const msg = Buffer.alloc(28);
+		msg[0] = 0x48;
+		msg[1] = 0x4d;
+		msg[2] = 0xa2;
+		msg[3] = 0x11;
+		msg[9] = 12;
 		ctx["handleResponse"](msg);
 		await new Promise(r => setTimeout(r, 10));
-		assert.strictEqual(relayed.length, 0, "encrypted RealData must not be re-framed for the cloud");
-		const warns = warnMsgs.filter(m => m.includes("cloud relay"));
-		assert.strictEqual(warns.length, 1, "the skip must be warned about exactly once, not per frame");
+		assert.strictEqual(relayed.length, 1, "decrypted RealData must reach the relay");
+		assert.strictEqual(relayed[0].length, 13, "original 10-byte header + plain payload");
+		assert.ok(Buffer.compare(relayed[0].subarray(0, 10), msg.subarray(0, 10)) === 0, "header kept");
+		assert.deepStrictEqual([...relayed[0].subarray(10)], [0xde, 0xad, 0xbe], "payload is the plaintext");
+		assert.strictEqual(warnMsgs.filter(m => m.includes("cloud relay")).length, 0, "nothing to warn about");
 	});
 
 	it("dispatches 0xa201 to handleInfoData", async function () {
@@ -2775,8 +2790,9 @@ describe("deviceContext – handleResponse", function () {
 	it("decrypts payload when encryption is required", async function () {
 		const { adapter } = createTrackingAdapter();
 		let decryptedPayload = null;
+		let decryptArgs = null;
 		const mockProtobuf = {
-			parseResponse: () => ({ cmdHigh: 0xa2, cmdLow: 0x11, payload: Buffer.from([0x01, 0x02]) }),
+			parseResponse: () => ({ cmdHigh: 0xa2, cmdLow: 0x11, payload: Buffer.from([0x01, 0x02]), totalLen: 12 }),
 			decodeRealDataNew: buf => {
 				decryptedPayload = buf;
 				return { dtuPower: 0, dtuDailyEnergy: 0, sgs: [], pv: [], meter: [] };
@@ -2797,19 +2813,92 @@ describe("deviceContext – handleResponse", function () {
 
 		ctx.encryptionRequired = true;
 		ctx.encryption = {
-			decrypt: (_payload, _msgId, _seqNum) => Buffer.from([0xde, 0xad]),
+			decrypt: (body, msgId, seqNum) => {
+				decryptArgs = { body, msgId, seqNum };
+				return Buffer.from([0xde, 0xad]);
+			},
 		};
 
-		const msg = Buffer.alloc(20);
+		// header(10) + ciphertext(2) + tag(16): the tag lies beyond totalLen
+		const msg = Buffer.alloc(28, 0xcc);
 		msg[2] = 0xa2;
 		msg[3] = 0x11;
 		msg[4] = 0x00;
 		msg[5] = 0x01;
+		msg[8] = 0x00;
+		msg[9] = 12;
 		ctx["handleResponse"](msg);
 		await new Promise(r => setTimeout(r, 10));
 		assert.ok(decryptedPayload, "Should pass decrypted payload");
 		assert.strictEqual(decryptedPayload[0], 0xde);
 		assert.strictEqual(decryptedPayload[1], 0xad);
+		assert.strictEqual(decryptArgs.msgId, 0xa211, "msgId = frame tag");
+		assert.strictEqual(decryptArgs.seqNum, 1, "seq from the header");
+		assert.strictEqual(decryptArgs.body.length, 18, "ciphertext plus the 16-byte tag");
+	});
+
+	it("refuses an encrypted frame that arrived without its tag", async function () {
+		const { adapter, warnMsgs } = createTrackingAdapter();
+		let decoded = false;
+		const mockProtobuf = {
+			parseResponse: () => ({ cmdHigh: 0xa2, cmdLow: 0x11, payload: Buffer.from([0x01, 0x02]), totalLen: 12 }),
+			decodeRealDataNew: () => {
+				decoded = true;
+				return { dtuPower: 0, dtuDailyEnergy: 0, sgs: [], pv: [], meter: [] };
+			},
+		};
+		const ctx = new DeviceContext({
+			adapter,
+			protobuf: mockProtobuf,
+			host: "192.168.1.1",
+			enableLocal: false,
+			enableCloud: false,
+			enableCloudRelay: false,
+			dataInterval: 15,
+			slowPollFactor: 6,
+		});
+		await ctx.initFromSerial("TEST1234");
+		ctx.encryptionRequired = true;
+		ctx.encryption = { decrypt: () => Buffer.from([0xde]) };
+
+		const msg = Buffer.alloc(12); // totalLen only, no tag
+		msg[2] = 0xa2;
+		msg[3] = 0x11;
+		msg[9] = 12;
+		ctx["handleResponse"](msg);
+		await new Promise(r => setTimeout(r, 10));
+		assert.strictEqual(decoded, false, "must not decode an unverified frame");
+		assert.ok(warnMsgs.some(m => m.includes("without its authentication tag")));
+	});
+
+	it("does not decrypt a frame with an empty payload", async function () {
+		const { adapter } = createTrackingAdapter();
+		const mockProtobuf = {
+			parseResponse: () => ({ cmdHigh: 0xa2, cmdLow: 0x11, payload: Buffer.alloc(0), totalLen: 10 }),
+			decodeRealDataNew: () => ({ dtuPower: 0, dtuDailyEnergy: 0, sgs: [], pv: [], meter: [] }),
+		};
+		const ctx = new DeviceContext({
+			adapter,
+			protobuf: mockProtobuf,
+			host: "192.168.1.1",
+			enableLocal: false,
+			enableCloud: false,
+			enableCloudRelay: false,
+			dataInterval: 15,
+			slowPollFactor: 6,
+		});
+		await ctx.initFromSerial("TEST1234");
+		ctx.encryptionRequired = true;
+		ctx.encryption = {
+			decrypt: () => {
+				throw new Error("empty frames carry no tag");
+			},
+		};
+		const msg = Buffer.alloc(10);
+		msg[2] = 0xa2;
+		msg[3] = 0x11;
+		msg[9] = 10;
+		assert.doesNotThrow(() => ctx["handleResponse"](msg));
 	});
 
 	it("skips decryption for InfoData (0xa201) even when encryption is required", async function () {
@@ -2855,7 +2944,7 @@ describe("deviceContext – handleResponse", function () {
 	it("logs warning when decryption fails", function () {
 		const { warnMsgs, adapter } = createTrackingAdapter();
 		const mockProtobuf = {
-			parseResponse: () => ({ cmdHigh: 0xa2, cmdLow: 0x11, payload: Buffer.from([0x01]) }),
+			parseResponse: () => ({ cmdHigh: 0xa2, cmdLow: 0x11, payload: Buffer.from([0x01]), totalLen: 11 }),
 		};
 
 		const ctx = new DeviceContext({
@@ -6024,5 +6113,99 @@ describe("deviceContext – cleanupObsoleteObjects", function () {
 		await ctx["cleanupObsoleteObjects"]();
 
 		assert.deepStrictEqual(deleted, ["hoymiles.0.TESTDTU.gridMeter"]);
+	});
+});
+
+// ============================================================
+// deviceContext – every local send goes through wireFrame() once the DTU encrypts
+// ============================================================
+describe("deviceContext – encrypted sends", function () {
+	function trackingAdapter() {
+		return {
+			log: { info: () => {}, warn: () => {}, debug: () => {}, error: () => {} },
+			setStateAsync: async () => {},
+			extendObjectAsync: async () => {},
+			setObjectNotExistsAsync: async () => {},
+			getStateAsync: async () => null,
+			setInterval: () => undefined,
+			clearInterval: () => {},
+			setTimeout: () => undefined,
+			clearTimeout: () => {},
+			subscribeStates: () => {},
+			unsubscribeStates: () => {},
+			devices: new Map(),
+			matchLocalDeviceToCloud: () => {},
+			onRelayDataSent: () => {},
+			onLocalConnected: () => {},
+			onLocalDisconnected: () => {},
+			onSendTimeUpdated: () => {},
+			updateConnectionState: async () => {},
+		};
+	}
+
+	const PLAIN = Buffer.from([0x48, 0x4d, 0xa3, 0x07, 0, 1, 0, 0, 0, 12, 1, 2]);
+	const MARK = Buffer.from("ENC");
+
+	async function encryptingCtx(protobuf) {
+		const sent = [];
+		const ctx = new DeviceContext({
+			adapter: trackingAdapter(),
+			protobuf,
+			host: "192.168.1.1",
+			enableLocal: true,
+			enableCloud: false,
+			enableCloudRelay: false,
+			dataInterval: 15,
+			slowPollFactor: 6,
+		});
+		await ctx.initFromSerial("TEST1234");
+		ctx.inverterSn = "INV1";
+		ctx.connection = { connected: true, send: f => (sent.push(f), Promise.resolve(true)) };
+		ctx.encryptionRequired = true;
+		ctx.encryption = { encryptFrame: f => Buffer.concat([f, MARK]) };
+		return { ctx, sent };
+	}
+
+	function assertEncrypted(sent, what) {
+		assert.strictEqual(sent.length, 1, `${what}: exactly one frame sent`);
+		assert.ok(sent[0].subarray(-3).equals(MARK), `${what}: frame must pass through wireFrame()`);
+	}
+
+	it("encrypts the grid-profile read", async function () {
+		const { ctx, sent } = await encryptingCtx({ encodeDevConfigFetch: () => PLAIN });
+		ctx["requestGridProfile"]();
+		assertEncrypted(sent, "DevConfigFetch");
+	});
+
+	it("encrypts the next grid-profile package", async function () {
+		const { ctx, sent } = await encryptingCtx({
+			encodeDevConfigFetch: () => PLAIN,
+			getType: () => ({
+				decode: () => ({}),
+				toObject: () => ({ data: new Uint8Array([1]), currentPackage: 0, totalPackages: 3 }),
+			}),
+		});
+		ctx["handleDevConfigFetch"](Buffer.alloc(1));
+		assertEncrypted(sent, "DevConfigFetch page 1");
+	});
+
+	it("encrypts the next alarm page", async function () {
+		const { ctx, sent } = await encryptingCtx({
+			encodeWarnDataRequest: () => PLAIN,
+			decodeAlarmData: () => {
+				throw new Error("not the AlarmData format");
+			},
+			decodeWarnData: () => ({ packageNub: 2, packageNow: 0, warnings: [] }),
+		});
+		await ctx["handleAlarmData"](Buffer.alloc(1));
+		assertEncrypted(sent, "WarnData page 1");
+	});
+
+	it("does not touch the frames of a plain-talking DTU", async function () {
+		const { ctx, sent } = await encryptingCtx({ encodeDevConfigFetch: () => PLAIN });
+		ctx.encryptionRequired = false;
+		ctx["requestGridProfile"]();
+		assert.strictEqual(sent.length, 1);
+		assert.ok(sent[0].equals(PLAIN), "plain DTU: frame unchanged");
 	});
 });
