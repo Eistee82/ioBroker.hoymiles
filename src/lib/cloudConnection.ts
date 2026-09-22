@@ -24,7 +24,7 @@ import {
 } from "./constants.js";
 import type { CloudGridProfileParam } from "./gridProfile.js";
 import { SETTING_ACTION_BATTERY_MODE_READ } from "./hybridCloud.js";
-import type { BatterySettingsResult, RealIndicatorData } from "./hybridCloud.js";
+import type { BatterySettingsResult, EnergyStatsResult, RealIndicatorData } from "./hybridCloud.js";
 import {
 	errorMessage,
 	withTimeout,
@@ -1172,6 +1172,42 @@ class CloudConnection {
 			return result.data ?? null;
 		} catch (err) {
 			this.log(`[diag] Real indicators (type ${String(selector.type)}) error: ${errorMessage(err)}`);
+			return null;
+		}
+	}
+
+	/**
+	 * Energy balance of a plant with a meter or a battery over one period — what the portal's
+	 * "historical data" panel shows. Endpoint: /pvm-data/api/0/station/data_fd/stat_g_a. A pure
+	 * cloud read. `mode` 1 = day, 3 = month, 4 = year, 5 = lifetime; `date` is any day within
+	 * the period (station-local). A plain PV plant answers with `last_data_time` only.
+	 *
+	 * @param stationId - Cloud station ID.
+	 * @param mode - Period selector (see above).
+	 * @param date - A date inside the period, `YYYY-MM-DD`.
+	 * @returns The decoded `data` object, or null when unavailable.
+	 */
+	async getStationEnergyStats(stationId: number, mode: number, date: string): Promise<EnergyStatsResult | null> {
+		this.assertStationId(stationId);
+		await this.ensureToken();
+		if (this.profile === "home") {
+			return null;
+		}
+		try {
+			const result = await this._post<EnergyStatsResult>("/pvm-data/api/0/station/data_fd/stat_g_a", {
+				sid: stationId,
+				mode,
+				date,
+				type: 1,
+			});
+			this.logResponseSample(`energy-stats-${mode}`, result);
+			if (result.status !== "0") {
+				this.log(`[diag] Energy stats (mode ${mode}) failed: ${result.message}`);
+				return null;
+			}
+			return result.data ?? null;
+		} catch (err) {
+			this.log(`[diag] Energy stats (mode ${mode}) error: ${errorMessage(err)}`);
 			return null;
 		}
 	}

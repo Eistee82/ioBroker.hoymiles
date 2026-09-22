@@ -38,6 +38,8 @@ function makeMockCloud() {
 		getModuleRealtimeData: async () => ({}),
 		getMicroPortRules: async () => new Map(),
 		getRealIndicators: async () => null,
+		// Default: no period balance (a plain PV plant answers with last_data_time only).
+		getStationEnergyStats: async () => null,
 		// Default: no battery settings on tap — most tests never poll a storage plant far enough to
 		// reach it, and those that do override this explicitly.
 		readBatterySettings: async () => ({}),
@@ -3390,6 +3392,105 @@ describe("CloudPoller – hybrid inverter", function () {
 // ============================================================
 // CloudPoller – pollStationIndicators (station-level measuring points)
 // ============================================================
+describe("CloudPoller – energy stats (period balance)", function () {
+	// Recorded live: mode 4 (year 2026) of a plant with meter and battery.
+	const YEAR = {
+		meter_in_eq: 2963800,
+		pv_eq: 4189600,
+		last_data_time: "2026-09-22 07:37:30",
+		meter_out_eq: 1545600,
+		bms_in_eq: 2141800,
+		bms_out_eq: 1890100,
+		consumption_eq: 5330400,
+	};
+	const storage = () => ({
+		real_power: "0",
+		today_eq: "0",
+		month_eq: "0",
+		year_eq: "0",
+		total_eq: "0",
+		co2_emission_reduction: "0",
+		plant_tree: "0",
+		reflux_station_data: { icon_bms: 1, icon_grid: 1, bms_soc: "25" },
+	});
+
+	it("reads month, year and lifetime on a slow poll and writes them under period-suffixed ids", async function () {
+		const calls = [];
+		const writes = [];
+		const cloud = makeMockCloud();
+		cloud.getStationRealtime = async () => storage();
+		cloud.getStationEnergyStats = async (sid, mode, date) => {
+			calls.push({ sid, mode, date });
+			return mode === 4 ? YEAR : { last_data_time: "x" };
+		};
+		const adapter = makeMockAdapter();
+		adapter.setStateAsync = async (id, val) => {
+			writes.push([id, val]);
+		};
+		const poller = makePoller({ cloud, adapter, stationDevices: new Set([1]), slowPollFactor: 1 });
+		await poller.poll();
+		poller.stop();
+		assert.deepStrictEqual(
+			calls.map(x => x.mode),
+			[3, 4, 5],
+			"month, year, lifetime",
+		);
+		assert.ok(
+			calls.every(x => x.sid === 1 && /^\d{4}-\d{2}-\d{2}$/.test(x.date)),
+			"a station-local date",
+		);
+		const byId = Object.fromEntries(writes.map(([id, v]) => [id, v]));
+		assert.deepStrictEqual(byId["station-1.grid.gridImportYear"], { val: 2963.8, ack: true, q: 0x00 });
+		assert.deepStrictEqual(byId["station-1.grid.batteryDischargeYear"], { val: 1890.1, ack: true, q: 0x00 });
+		assert.strictEqual(
+			byId["station-1.grid.gridImportMonth"],
+			undefined,
+			"a period without a balance writes nothing",
+		);
+	});
+
+	it("does not read the balance for a plain PV plant, nor on a fast poll", async function () {
+		let calls = 0;
+		const cloud = makeMockCloud();
+		cloud.getStationEnergyStats = async () => {
+			calls++;
+			return null;
+		};
+		// Plain plant, slow poll: no storage block → no request.
+		const plain = makePoller({ cloud, stationDevices: new Set([1]), slowPollFactor: 1 });
+		await plain.poll();
+		plain.stop();
+		assert.strictEqual(calls, 0);
+		// Storage plant, fast poll: the balance is slow-poll work only.
+		cloud.getStationRealtime = async () => storage();
+		const fast = makePoller({ cloud, stationDevices: new Set([1]), slowPollFactor: 6 });
+		await fast.poll(); // poll #1 of 6 is a fast one
+		assert.strictEqual(calls, 0, "no read on a fast poll");
+		await fast.poll(true); // forced slow poll
+		assert.strictEqual(calls, 3);
+		await fast.poll();
+		fast.stop();
+		assert.strictEqual(calls, 3, "no read on the following fast poll");
+	});
+
+	it("survives a throwing stats read and still finishes the poll", async function () {
+		const cloud = makeMockCloud();
+		cloud.getStationRealtime = async () => storage();
+		cloud.getStationEnergyStats = async () => {
+			throw new Error("boom");
+		};
+		let weather = 0;
+		cloud.getWeather = async () => {
+			weather++;
+			return {};
+		};
+		const poller = makePoller({ cloud, stationDevices: new Set([1]), slowPollFactor: 1 });
+		await poller.poll();
+		poller.stop();
+		assert.ok(weather >= 0, "poll completed");
+	});
+});
+
 describe("CloudPoller – pollStationIndicators", function () {
 	function baseRealtime() {
 		return {

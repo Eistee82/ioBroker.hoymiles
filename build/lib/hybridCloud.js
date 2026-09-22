@@ -316,14 +316,6 @@ export function mapStorageStationData(block) {
     add(result.energy, "grid.consumptionToday", rf.use_eq_total, 1000);
     add(result.energy, "grid.gridImportToday", rf.efg_total, 1000);
     add(result.energy, "grid.gridExportToday", rf.e2g_total, 1000);
-    for (const [period, key] of [
-        ["Month", "month_eq"],
-        ["Year", "year_eq"],
-        ["Total", "total_eq"],
-    ]) {
-        add(result.energy, `grid.gridImport${period}`, rf.mb_in_eq?.[key], 1000);
-        add(result.energy, `grid.gridExport${period}`, rf.mb_out_eq?.[key], 1000);
-    }
     if (hasBattery) {
         add(result.energy, "grid.batteryChargeToday", rf.e2b_total, 1000);
         add(result.energy, "grid.batteryDischargeToday", rf.efb_total, 1000);
@@ -345,7 +337,31 @@ export function mapBatterySettings(result) {
     if (reserve !== null) {
         values.push({ suffix: "battery.reserveSoc", val: reserve });
     }
-    values.push({ suffix: "battery.settingsJson", val: JSON.stringify({ mode, data: result.data ?? {} }) });
+    values.push({ suffix: "battery.settingsJson", val: JSON.stringify(result) });
     return values;
+}
+export const ENERGY_STATS_MODES = [
+    { mode: 3, period: "Month" },
+    { mode: 4, period: "Year" },
+    { mode: 5, period: "Total" },
+];
+export function mapEnergyStats(period, result) {
+    if (!result || typeof result !== "object") {
+        return [];
+    }
+    const out = [];
+    for (const [key, name] of [
+        ["meter_in_eq", "gridImport"],
+        ["meter_out_eq", "gridExport"],
+        ["consumption_eq", "consumption"],
+        ["bms_in_eq", "batteryCharge"],
+        ["bms_out_eq", "batteryDischarge"],
+    ]) {
+        const val = toNumber(result[key]);
+        if (val !== null) {
+            out.push({ suffix: `grid.${name}${period}`, val: Math.round(val) / 1000 });
+        }
+    }
+    return out;
 }
 //# sourceMappingURL=hybridCloud.js.map

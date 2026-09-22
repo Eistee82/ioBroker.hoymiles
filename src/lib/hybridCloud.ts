@@ -491,24 +491,6 @@ export interface StorageStationData {
 	efg_total?: string | number;
 	/** Today's energy fed into the grid, Wh. */
 	e2g_total?: string | number;
-	/**
-	 * Meter-based grid import / export counters, Wh. Verified live: `mb_in_eq.today_eq` equals
-	 * `efg_total` (today's import) while `grid_in_eq.today_eq` stays 0 all morning — so these two
-	 * blocks are the ones that continue today's balance over month, year and lifetime.
-	 */
-	mb_in_eq?: {
-		today_eq?: string | number;
-		month_eq?: string | number;
-		year_eq?: string | number;
-		total_eq?: string | number;
-	};
-	/** Meter-based export counters, Wh — see `mb_in_eq`. */
-	mb_out_eq?: {
-		today_eq?: string | number;
-		month_eq?: string | number;
-		year_eq?: string | number;
-		total_eq?: string | number;
-	};
 	/** Today's energy charged into the battery, Wh. */
 	e2b_total?: string | number;
 	/** Today's energy discharged from the battery, Wh. */
@@ -577,14 +559,6 @@ export function mapStorageStationData(block: unknown): MappedStorageStation | nu
 	add(result.energy, "grid.consumptionToday", rf.use_eq_total, 1000);
 	add(result.energy, "grid.gridImportToday", rf.efg_total, 1000);
 	add(result.energy, "grid.gridExportToday", rf.e2g_total, 1000);
-	for (const [period, key] of [
-		["Month", "month_eq"],
-		["Year", "year_eq"],
-		["Total", "total_eq"],
-	] as const) {
-		add(result.energy, `grid.gridImport${period}`, rf.mb_in_eq?.[key], 1000);
-		add(result.energy, `grid.gridExport${period}`, rf.mb_out_eq?.[key], 1000);
-	}
 	if (hasBattery) {
 		add(result.energy, "grid.batteryChargeToday", rf.e2b_total, 1000);
 		add(result.energy, "grid.batteryDischargeToday", rf.efb_total, 1000);
@@ -629,6 +603,64 @@ export function mapBatterySettings(
 	if (reserve !== null) {
 		values.push({ suffix: "battery.reserveSoc", val: reserve });
 	}
-	values.push({ suffix: "battery.settingsJson", val: JSON.stringify({ mode, data: result.data ?? {} }) });
+	// The whole answer, not just mode and parameters: the S-Miles app also reads `emspara` (forced
+	// discharge, peak shaving, time-of-use) and `relay` (dry-contact mode) out of this response
+	// when the plant has them configured.
+	values.push({ suffix: "battery.settingsJson", val: JSON.stringify(result) });
 	return values;
+}
+
+/** `mode` values of `station/data_fd/stat_g_a`: the period the balance is summed over. */
+export const ENERGY_STATS_MODES: ReadonlyArray<{ mode: number; period: "Month" | "Year" | "Total" }> = [
+	{ mode: 3, period: "Month" },
+	{ mode: 4, period: "Year" },
+	{ mode: 5, period: "Total" },
+];
+
+/** Response of `station/data_fd/stat_g_a`, Wh. A plant without a balance only returns `last_data_time`. */
+export interface EnergyStatsResult {
+	/** Drawn from the grid. */
+	meter_in_eq?: string | number;
+	/** Fed into the grid. */
+	meter_out_eq?: string | number;
+	/** Consumed. */
+	consumption_eq?: string | number;
+	/** Charged into the battery. */
+	bms_in_eq?: string | number;
+	/** Discharged from the battery. */
+	bms_out_eq?: string | number;
+	/** PV yield — the station's `monthEnergy` / `yearEnergy` / `totalEnergy` already carry it. */
+	pv_eq?: string | number;
+	[key: string]: unknown;
+}
+
+/**
+ * Translate one period's energy balance into station states (kWh). This is the source behind the
+ * portal's "historical data" panel; checked live: its month import matches the dashboard's monthly
+ * cost at the plant's tariff, and its day values match the `reflux_station_data` day counters.
+ *
+ * @param period - Period the result was summed over.
+ * @param result - Decoded `data` of the request.
+ */
+export function mapEnergyStats(
+	period: "Month" | "Year" | "Total",
+	result: EnergyStatsResult | null | undefined,
+): Array<{ suffix: string; val: number }> {
+	if (!result || typeof result !== "object") {
+		return [];
+	}
+	const out: Array<{ suffix: string; val: number }> = [];
+	for (const [key, name] of [
+		["meter_in_eq", "gridImport"],
+		["meter_out_eq", "gridExport"],
+		["consumption_eq", "consumption"],
+		["bms_in_eq", "batteryCharge"],
+		["bms_out_eq", "batteryDischarge"],
+	] as const) {
+		const val = toNumber(result[key]);
+		if (val !== null) {
+			out.push({ suffix: `grid.${name}${period}`, val: Math.round(val) / 1000 });
+		}
+	}
+	return out;
 }

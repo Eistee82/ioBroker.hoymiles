@@ -679,16 +679,23 @@ const stationStates: StateDefinition[] = [
 	n("grid.consumptionToday", "Consumption today", "Verbrauch heute", "value.energy", "kWh"),
 	n("grid.gridImportToday", "Grid import today", "Netzbezug heute", "value.energy", "kWh"),
 	n("grid.gridExportToday", "Grid export today", "Netzeinspeisung heute", "value.energy", "kWh"),
-	// The same two counters over month, year and lifetime (`mb_in_eq` / `mb_out_eq`, meter-based;
-	// their `today_eq` equals `efg_total` / `e2g_total`, verified live).
-	n("grid.gridImportMonth", "Grid import this month", "Netzbezug diesen Monat", "value.energy", "kWh"),
-	n("grid.gridImportYear", "Grid import this year", "Netzbezug dieses Jahr", "value.energy", "kWh"),
-	n("grid.gridImportTotal", "Grid import total", "Netzbezug gesamt", "value.energy", "kWh"),
-	n("grid.gridExportMonth", "Grid export this month", "Netzeinspeisung diesen Monat", "value.energy", "kWh"),
-	n("grid.gridExportYear", "Grid export this year", "Netzeinspeisung dieses Jahr", "value.energy", "kWh"),
-	n("grid.gridExportTotal", "Grid export total", "Netzeinspeisung gesamt", "value.energy", "kWh"),
 	n("grid.batteryChargeToday", "Battery charged today", "Batterieladung heute", "value.energy", "kWh"),
 	n("grid.batteryDischargeToday", "Battery discharged today", "Batterieentladung heute", "value.energy", "kWh"),
+	// The same balance over month, year and lifetime, from the portal's statistics endpoint
+	// (`data_fd/stat_g_a`, modes 3/4/5). Read on the slow poll.
+	...(
+		[
+			["Month", "this month", "diesen Monat"],
+			["Year", "this year", "dieses Jahr"],
+			["Total", "total", "gesamt"],
+		] as const
+	).flatMap(([p, en, de]) => [
+		n(`grid.gridImport${p}`, `Grid import ${en}`, `Netzbezug ${de}`, "value.energy", "kWh"),
+		n(`grid.gridExport${p}`, `Grid export ${en}`, `Netzeinspeisung ${de}`, "value.energy", "kWh"),
+		n(`grid.consumption${p}`, `Consumption ${en}`, `Verbrauch ${de}`, "value.energy", "kWh"),
+		n(`grid.batteryCharge${p}`, `Battery charged ${en}`, `Batterieladung ${de}`, "value.energy", "kWh"),
+		n(`grid.batteryDischarge${p}`, `Battery discharged ${en}`, `Batterieentladung ${de}`, "value.energy", "kWh"),
+	]),
 	n("grid.dailyEnergy", "Daily energy", "Tagesenergie", "value.energy", "kWh"),
 	n("grid.monthEnergy", "Month energy", "Monatsenergie", "value.energy", "kWh"),
 	n("grid.yearEnergy", "Year energy", "Jahresenergie", "value.energy", "kWh"),

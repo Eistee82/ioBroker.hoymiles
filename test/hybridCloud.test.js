@@ -17,8 +17,10 @@ import {
 	mapStorageStationData,
 	stationIndicatorTypes,
 	inverterHasPv,
+	ENERGY_STATS_MODES,
+	mapEnergyStats,
 } from "../build/lib/hybridCloud.js";
-import { hybridStateMap, stationIndicatorStateMap, states } from "../build/lib/stateDefinitions.js";
+import { hybridStateMap, stationIndicatorStateMap, stationStates, states } from "../build/lib/stateDefinitions.js";
 
 // Responses as the S-Miles web portal received them for a HAT-6.0HV-EUG1 with battery and
 // three-phase grid meter, taken at night (no PV entries in the inverter list). Extended with a
@@ -646,6 +648,55 @@ describe("hybridCloud – directedPower", function () {
 	});
 });
 
+describe("hybridCloud – mapEnergyStats", function () {
+	// Recorded live (mode 4 = year 2026): meter_in matches the month/year counters the portal's
+	// cost calculation is based on.
+	const YEAR = {
+		meter_in_eq: 2963800,
+		pv_eq: 4189600,
+		last_data_time: "2026-09-22 07:37:30",
+		meter_out_eq: 1545600,
+		bms_in_eq: 2141800,
+		bms_out_eq: 1890100,
+		consumption_eq: 5330400,
+	};
+
+	it("uses the portal's mode numbers", function () {
+		assert.deepStrictEqual(ENERGY_STATS_MODES, [
+			{ mode: 3, period: "Month" },
+			{ mode: 4, period: "Year" },
+			{ mode: 5, period: "Total" },
+		]);
+	});
+
+	it("converts a period's balance from Wh to kWh under period-suffixed ids", function () {
+		assert.deepStrictEqual(mapEnergyStats("Year", YEAR), [
+			{ suffix: "grid.gridImportYear", val: 2963.8 },
+			{ suffix: "grid.gridExportYear", val: 1545.6 },
+			{ suffix: "grid.consumptionYear", val: 5330.4 },
+			{ suffix: "grid.batteryChargeYear", val: 2141.8 },
+			{ suffix: "grid.batteryDischargeYear", val: 1890.1 },
+		]);
+		assert.strictEqual(mapEnergyStats("Total", { meter_in_eq: "7001600" })[0].val, 7001.6);
+	});
+
+	it("maps nothing for a plant without a balance (only last_data_time) or no data", function () {
+		assert.deepStrictEqual(mapEnergyStats("Month", { last_data_time: "2026-09-22 07:37:30" }), []);
+		assert.deepStrictEqual(mapEnergyStats("Month", null), []);
+		assert.deepStrictEqual(mapEnergyStats("Month", undefined), []);
+	});
+
+	it("only targets states that exist, in the type they declare", function () {
+		const known = new Map(stationStates.map(d => [d.id, d]));
+		for (const period of ["Month", "Year", "Total"]) {
+			for (const v of mapEnergyStats(period, YEAR)) {
+				assert.ok(known.has(v.suffix), `${v.suffix} has no state definition`);
+				assert.strictEqual(known.get(v.suffix).type, "number");
+			}
+		}
+	});
+});
+
 describe("hybridCloud – inverterHasPv", function () {
 	it("is false only when the station explicitly reports icon_pv 0", function () {
 		assert.strictEqual(inverterHasPv({ icon_pv: 0, icon_pvi: 1 }), false);
@@ -671,9 +722,6 @@ describe("hybridCloud – mapStorageStationData", function () {
 		e2g_total: "3000",
 		e2b_total: "7800",
 		efb_total: "5400",
-		// Recorded: today_eq of mb_in_eq equals efg_total of the same sample.
-		mb_in_eq: { today_eq: "6500", month_eq: "119700", year_eq: "1840700", total_eq: "4729100" },
-		mb_out_eq: { today_eq: "3000", month_eq: "400", year_eq: "700600", total_eq: "1270400" },
 	};
 	const toObject = list => Object.fromEntries(list.map(e => [e.suffix, e.val]));
 
@@ -682,81 +730,9 @@ describe("hybridCloud – mapStorageStationData", function () {
 			"grid.consumptionToday": 14.3,
 			"grid.gridImportToday": 6.5,
 			"grid.gridExportToday": 3,
-			"grid.gridImportMonth": 119.7,
-			"grid.gridExportMonth": 0.4,
-			"grid.gridImportYear": 1840.7,
-			"grid.gridExportYear": 700.6,
-			"grid.gridImportTotal": 4729.1,
-			"grid.gridExportTotal": 1270.4,
 			"grid.batteryChargeToday": 7.8,
 			"grid.batteryDischargeToday": 5.4,
 		});
-	});
-
-	it("leaves the long-term grid counters out when the block does not carry them", function () {
-		const { mb_in_eq: _in, mb_out_eq: _out, ...withoutCounters } = BLOCK;
-		const ids = Object.keys(toObject(mapStorageStationData(withoutCounters).energy));
-		assert.ok(!ids.some(id => /Month|Year|Total/.test(id)), ids.join(","));
-		const partial = mapStorageStationData({ ...withoutCounters, mb_in_eq: { total_eq: "12000" } });
-		assert.deepStrictEqual(
-			Object.keys(toObject(partial.energy)).filter(id => /Month|Year|Total/.test(id)),
-			["grid.gridImportTotal"],
-		);
-	});
-
-	it("delivers the live flow in watts — no state-of-charge entry (that is device-only now)", function () {
-		assert.deepStrictEqual(toObject(mapStorageStationData(BLOCK).flow), {
-			"grid.gridPower": 0,
-			"grid.loadPower": 567,
-			"grid.batteryPower": 567,
-		});
-		assert.ok(!mapStorageStationData(BLOCK).flow.some(f => f.suffix.endsWith(".soc")));
-	});
-
-	// Measured on a storage plant with an empty battery at night: load 386 W, PV 0, battery 0 — the
-	// 386 W came from the grid, and this block said -386 while the burst says +gp for import.
-	it("turns the grid power round so that import is positive, like the burst that shares the state", function () {
-		const gridPowerOf = raw =>
-			toObject(mapStorageStationData({ ...BLOCK, grid_power: raw }).flow)["grid.gridPower"];
-		assert.strictEqual(gridPowerOf("-386.0"), 386, "import arrives negative and must become positive");
-		assert.strictEqual(gridPowerOf("120"), -120, "export arrives positive and must become negative");
-		assert.ok(Object.is(gridPowerOf("0.0"), 0), "zero must stay +0, not become -0");
-		assert.strictEqual(gridPowerOf("x"), undefined, "a non-numeric value is skipped");
-	});
-
-	// Recorded at night with an empty battery: the grid (node 2) feeds the load (node 1).
-	it("takes the direction from the flow graph when the block carries one", function () {
-		const recorded = { ...BLOCK, grid_power: "-276.0", bms_power: "0.0", flows: [{ out: 2, in: 1, v: 0 }] };
-		assert.deepStrictEqual(toObject(mapStorageStationData(recorded).flow), {
-			"grid.gridPower": 276,
-			"grid.loadPower": 567,
-			"grid.batteryPower": 0,
-		});
-		// PV surplus: PV (4) feeds the load, charges the battery (10) and exports to the grid (2).
-		// Whatever sign the raw numbers carry, a sink is negative.
-		const surplus = [
-			{ out: 4, in: 1 },
-			{ out: 4, in: 10 },
-			{ out: 4, in: 2 },
-		];
-		for (const [grid, battery] of [
-			["800", "1500"],
-			["-800", "-1500"],
-		]) {
-			const flow = toObject(
-				mapStorageStationData({ ...BLOCK, grid_power: grid, bms_power: battery, flows: surplus }).flow,
-			);
-			assert.strictEqual(flow["grid.gridPower"], -800, `feed-in must be negative (raw ${grid})`);
-			assert.strictEqual(flow["grid.batteryPower"], -1500, `charging must be negative (raw ${battery})`);
-		}
-		// Discharging into the load: the battery is a source.
-		const discharging = mapStorageStationData({ ...BLOCK, bms_power: "567.0", flows: [{ out: 10, in: 1 }] });
-		assert.strictEqual(toObject(discharging.flow)["grid.batteryPower"], 567);
-	});
-
-	it("tolerates a malformed flow graph", function () {
-		const mapped = mapStorageStationData({ ...BLOCK, grid_power: "-50", flows: [null, {}, { out: "x" }] });
-		assert.strictEqual(toObject(mapped.flow)["grid.gridPower"], 50, "falls back to the block's own sign");
 	});
 
 	it("leaves the battery values out on a station with a meter but no battery", function () {
@@ -766,12 +742,6 @@ describe("hybridCloud – mapStorageStationData", function () {
 			"grid.consumptionToday",
 			"grid.gridImportToday",
 			"grid.gridExportToday",
-			"grid.gridImportMonth",
-			"grid.gridExportMonth",
-			"grid.gridImportYear",
-			"grid.gridExportYear",
-			"grid.gridImportTotal",
-			"grid.gridExportTotal",
 		]);
 		assert.deepStrictEqual(mapped.battery, []);
 	});
@@ -860,7 +830,10 @@ describe("hybridCloud – mapBatterySettings", function () {
 		const byId = Object.fromEntries(values.map(v => [v.suffix, v.val]));
 		assert.strictEqual(byId["battery.workMode"], 1);
 		assert.strictEqual(byId["battery.reserveSoc"], 15);
-		assert.strictEqual(byId["battery.settingsJson"], JSON.stringify({ mode: 1, data: RESULT.data }));
+		assert.strictEqual(byId["battery.settingsJson"], JSON.stringify(RESULT));
+		// The S-Miles app reads `emspara` and `relay` out of the same answer — passed through whole.
+		const withExtras = mapBatterySettings({ ...RESULT, emspara: { tou: 1 }, relay: { mode: 2 } });
+		assert.ok(withExtras.find(v => v.suffix === "battery.settingsJson").val.includes('"relay":{"mode":2}'));
 	});
 
 	it("omits battery.reserveSoc when the active mode has none (mode 4 → k_4: {})", function () {
@@ -879,12 +852,12 @@ describe("hybridCloud – mapBatterySettings", function () {
 		assert.deepStrictEqual(mapBatterySettings({ mode: -1 }), []);
 	});
 
-	it("still emits settingsJson (as data: {}) when mode is present but data is missing", function () {
+	it("still emits settingsJson when mode is present but data is missing", function () {
 		const values = mapBatterySettings({ mode: 1 });
 		const byId = Object.fromEntries(values.map(v => [v.suffix, v.val]));
 		assert.strictEqual(byId["battery.workMode"], 1);
 		assert.strictEqual(byId["battery.reserveSoc"], undefined);
-		assert.strictEqual(byId["battery.settingsJson"], JSON.stringify({ mode: 1, data: {} }));
+		assert.strictEqual(byId["battery.settingsJson"], JSON.stringify({ mode: 1 }));
 	});
 
 	it("only targets states that exist, with the value type the target state declares", function () {

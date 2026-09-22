@@ -5,7 +5,7 @@ import { formatDtuVersion, formatSwVersion } from "./protobufHandler.js";
 import { anonymize, deriveStationTzOffsetMs, errorMessage, logOnError, mapLimit, stationWallClockToEpoch, } from "./utils.js";
 import { stationStateMap, stationIndicatorStateMap, stationIndicatorChannels, hybridStateMap, hybridChannels, buildStateCommon, } from "./stateDefinitions.js";
 import { mapCloudGridProfile } from "./gridProfile.js";
-import { CLOUD_DEV_TYPE_BATTERY, CLOUD_DEV_TYPE_BATTERY_PACK, CLOUD_DEV_TYPE_HYBRID_INVERTER, REAL_INDICATOR_TYPE_PV, mapBatterySettings, inverterHasPv, mapRealIndicators, mapStorageStationData, stationIndicatorTypes, } from "./hybridCloud.js";
+import { CLOUD_DEV_TYPE_BATTERY, CLOUD_DEV_TYPE_BATTERY_PACK, CLOUD_DEV_TYPE_HYBRID_INVERTER, REAL_INDICATOR_TYPE_PV, mapBatterySettings, ENERGY_STATS_MODES, inverterHasPv, mapEnergyStats, mapRealIndicators, mapStorageStationData, stationIndicatorTypes, } from "./hybridCloud.js";
 const num = (v) => parseFloat(v) || 0;
 const WEATHER_DESCRIPTIONS = {
     "01d": { en: "Clear sky", de: "Klarer Himmel" },
@@ -31,6 +31,7 @@ const hybridChannelMap = new Map(hybridChannels.map(c => [c.id, c]));
 const stationIndicatorChannelMap = new Map(stationIndicatorChannels.map(c => [c.id, c]));
 const isHybridInverter = (node) => node.type === CLOUD_DEV_TYPE_HYBRID_INVERTER;
 const BATTERY_SETTINGS_MAX_ATTEMPTS = 3;
+const storageBlockOf = (data) => mapStorageStationData(data.reflux_station_data) !== null;
 class CloudPoller {
     static PORT_COUNT_RE = /(\d+)\s*(?:T|WB)$/i;
     cloud;
@@ -303,6 +304,9 @@ class CloudPoller {
         await this.setStationRealtimeStates(stationId, deviceId, data, online);
         await this.pollStationIndicators(stationId, deviceId, data.reflux_station_data, online);
         if (slowPoll) {
+            if (storageBlockOf(data)) {
+                await this.pollEnergyStats(stationId, deviceId, online);
+            }
             await this.pollWeather(stationId, deviceId);
             if (this.firmwareCheckDue(stationId)) {
                 await this.pollFirmwareStatus(stationId);
@@ -799,6 +803,27 @@ class CloudPoller {
             const mapped = mapRealIndicators(data);
             this.reportUnknownKeys(data?.title, mapped.unknownKeys);
             const results = await Promise.allSettled(mapped.values.map(v => this.writeStationState(deviceId, v.id, v.val, quality)));
+            for (const r of results) {
+                if (r.status === "rejected") {
+                    this.adapter.log.warn(`Cloud state write failed: ${errorMessage(r.reason)}`);
+                }
+            }
+        }
+    }
+    async pollEnergyStats(stationId, deviceId, online) {
+        const offsetMs = this.stationTzOffsetMs.get(stationId) ?? 0;
+        const today = new Date(Date.now() + offsetMs).toISOString().substring(0, 10);
+        const quality = online ? 0x00 : 0x42;
+        for (const { mode, period } of ENERGY_STATS_MODES) {
+            let values;
+            try {
+                values = mapEnergyStats(period, await this.cloud.getStationEnergyStats(stationId, mode, today));
+            }
+            catch (err) {
+                this.adapter.log.debug(`Energy stats (${period}) failed for station ${stationId}: ${errorMessage(err)}`);
+                continue;
+            }
+            const results = await Promise.allSettled(values.map(v => this.writeStationState(deviceId, v.suffix, v.val, quality)));
             for (const r of results) {
                 if (r.status === "rejected") {
                     this.adapter.log.warn(`Cloud state write failed: ${errorMessage(r.reason)}`);

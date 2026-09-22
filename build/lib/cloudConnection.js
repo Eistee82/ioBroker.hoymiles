@@ -517,6 +517,31 @@ class CloudConnection {
             return null;
         }
     }
+    async getStationEnergyStats(stationId, mode, date) {
+        this.assertStationId(stationId);
+        await this.ensureToken();
+        if (this.profile === "home") {
+            return null;
+        }
+        try {
+            const result = await this._post("/pvm-data/api/0/station/data_fd/stat_g_a", {
+                sid: stationId,
+                mode,
+                date,
+                type: 1,
+            });
+            this.logResponseSample(`energy-stats-${mode}`, result);
+            if (result.status !== "0") {
+                this.log(`[diag] Energy stats (mode ${mode}) failed: ${result.message}`);
+                return null;
+            }
+            return result.data ?? null;
+        }
+        catch (err) {
+            this.log(`[diag] Energy stats (mode ${mode}) error: ${errorMessage(err)}`);
+            return null;
+        }
+    }
     async readBatterySettings(stationId) {
         this.assertStationId(stationId);
         const result = await this.runDeviceTask(PVM_CTL_SETTING_READ_PATH, { action: SETTING_ACTION_BATTERY_MODE_READ, data: { sid: stationId } }, PVM_CTL_SETTING_STATUS_PATH);

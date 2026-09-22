@@ -380,6 +380,9 @@ The adapter determines how many there are, in this order:
 | `grid.gridExportToday` | number | kWh | Energy fed into the grid today — plants with battery or grid meter only |
 | `grid.gridImportMonth` / `gridImportYear` / `gridImportTotal` | number | kWh | Energy drawn from the grid this month / this year / in total — plants with battery or grid meter only |
 | `grid.gridExportMonth` / `gridExportYear` / `gridExportTotal` | number | kWh | Energy fed into the grid this month / this year / in total — plants with battery or grid meter only |
+| `grid.consumptionMonth` / `consumptionYear` / `consumptionTotal` | number | kWh | Consumption this month / this year / in total — plants with battery or grid meter only |
+| `grid.batteryChargeMonth` / `batteryChargeYear` / `batteryChargeTotal` | number | kWh | Energy charged into the battery this month / this year / in total — battery systems only |
+| `grid.batteryDischargeMonth` / `batteryDischargeYear` / `batteryDischargeTotal` | number | kWh | Energy discharged from the battery this month / this year / in total — battery systems only |
 | `grid.batteryChargeToday` | number | kWh | Energy charged into the battery today — battery systems only |
 | `grid.batteryDischargeToday` | number | kWh | Energy discharged from the battery today — battery systems only |
 | `grid.monthEnergy` | number | kWh | Monthly energy |
