@@ -313,6 +313,14 @@ export function mapStorageStationData(block) {
     add(result.energy, "grid.consumptionToday", rf.use_eq_total, 1000);
     add(result.energy, "grid.gridImportToday", rf.efg_total, 1000);
     add(result.energy, "grid.gridExportToday", rf.e2g_total, 1000);
+    for (const [period, key] of [
+        ["Month", "month_eq"],
+        ["Year", "year_eq"],
+        ["Total", "total_eq"],
+    ]) {
+        add(result.energy, `grid.gridImport${period}`, rf.mb_in_eq?.[key], 1000);
+        add(result.energy, `grid.gridExport${period}`, rf.mb_out_eq?.[key], 1000);
+    }
     if (hasBattery) {
         add(result.energy, "grid.batteryChargeToday", rf.e2b_total, 1000);
         add(result.energy, "grid.batteryDischargeToday", rf.efb_total, 1000);

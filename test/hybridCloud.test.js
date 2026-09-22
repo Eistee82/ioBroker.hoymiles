@@ -660,6 +660,9 @@ describe("hybridCloud – mapStorageStationData", function () {
 		e2g_total: "3000",
 		e2b_total: "7800",
 		efb_total: "5400",
+		// Recorded: today_eq of mb_in_eq equals efg_total of the same sample.
+		mb_in_eq: { today_eq: "6500", month_eq: "119700", year_eq: "1840700", total_eq: "4729100" },
+		mb_out_eq: { today_eq: "3000", month_eq: "400", year_eq: "700600", total_eq: "1270400" },
 	};
 	const toObject = list => Object.fromEntries(list.map(e => [e.suffix, e.val]));
 
@@ -668,9 +671,26 @@ describe("hybridCloud – mapStorageStationData", function () {
 			"grid.consumptionToday": 14.3,
 			"grid.gridImportToday": 6.5,
 			"grid.gridExportToday": 3,
+			"grid.gridImportMonth": 119.7,
+			"grid.gridExportMonth": 0.4,
+			"grid.gridImportYear": 1840.7,
+			"grid.gridExportYear": 700.6,
+			"grid.gridImportTotal": 4729.1,
+			"grid.gridExportTotal": 1270.4,
 			"grid.batteryChargeToday": 7.8,
 			"grid.batteryDischargeToday": 5.4,
 		});
+	});
+
+	it("leaves the long-term grid counters out when the block does not carry them", function () {
+		const { mb_in_eq: _in, mb_out_eq: _out, ...withoutCounters } = BLOCK;
+		const ids = Object.keys(toObject(mapStorageStationData(withoutCounters).energy));
+		assert.ok(!ids.some(id => /Month|Year|Total/.test(id)), ids.join(","));
+		const partial = mapStorageStationData({ ...withoutCounters, mb_in_eq: { total_eq: "12000" } });
+		assert.deepStrictEqual(
+			Object.keys(toObject(partial.energy)).filter(id => /Month|Year|Total/.test(id)),
+			["grid.gridImportTotal"],
+		);
 	});
 
 	it("delivers the live flow in watts — no state-of-charge entry (that is device-only now)", function () {
@@ -735,6 +755,12 @@ describe("hybridCloud – mapStorageStationData", function () {
 			"grid.consumptionToday",
 			"grid.gridImportToday",
 			"grid.gridExportToday",
+			"grid.gridImportMonth",
+			"grid.gridExportMonth",
+			"grid.gridImportYear",
+			"grid.gridExportYear",
+			"grid.gridImportTotal",
+			"grid.gridExportTotal",
 		]);
 		assert.deepStrictEqual(mapped.battery, []);
 	});

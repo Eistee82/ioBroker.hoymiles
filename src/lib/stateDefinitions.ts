@@ -679,6 +679,14 @@ const stationStates: StateDefinition[] = [
 	n("grid.consumptionToday", "Consumption today", "Verbrauch heute", "value.energy", "kWh"),
 	n("grid.gridImportToday", "Grid import today", "Netzbezug heute", "value.energy", "kWh"),
 	n("grid.gridExportToday", "Grid export today", "Netzeinspeisung heute", "value.energy", "kWh"),
+	// The same two counters over month, year and lifetime (`mb_in_eq` / `mb_out_eq`, meter-based;
+	// their `today_eq` equals `efg_total` / `e2g_total`, verified live).
+	n("grid.gridImportMonth", "Grid import this month", "Netzbezug diesen Monat", "value.energy", "kWh"),
+	n("grid.gridImportYear", "Grid import this year", "Netzbezug dieses Jahr", "value.energy", "kWh"),
+	n("grid.gridImportTotal", "Grid import total", "Netzbezug gesamt", "value.energy", "kWh"),
+	n("grid.gridExportMonth", "Grid export this month", "Netzeinspeisung diesen Monat", "value.energy", "kWh"),
+	n("grid.gridExportYear", "Grid export this year", "Netzeinspeisung dieses Jahr", "value.energy", "kWh"),
+	n("grid.gridExportTotal", "Grid export total", "Netzeinspeisung gesamt", "value.energy", "kWh"),
 	n("grid.batteryChargeToday", "Battery charged today", "Batterieladung heute", "value.energy", "kWh"),
 	n("grid.batteryDischargeToday", "Battery discharged today", "Batterieentladung heute", "value.energy", "kWh"),
 	n("grid.dailyEnergy", "Daily energy", "Tagesenergie", "value.energy", "kWh"),

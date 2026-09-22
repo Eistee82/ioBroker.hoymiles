@@ -381,6 +381,8 @@ Die Anzahl ermittelt der Adapter in dieser Reihenfolge:
 | `grid.consumptionToday` | number | kWh | Verbrauch heute — nur bei Anlagen mit Batterie oder Netzzähler |
 | `grid.gridImportToday` | number | kWh | Heute aus dem Netz bezogene Energie — nur bei Anlagen mit Batterie oder Netzzähler |
 | `grid.gridExportToday` | number | kWh | Heute ins Netz eingespeiste Energie — nur bei Anlagen mit Batterie oder Netzzähler |
+| `grid.gridImportMonth` / `gridImportYear` / `gridImportTotal` | number | kWh | Aus dem Netz bezogene Energie diesen Monat / dieses Jahr / gesamt — nur bei Anlagen mit Batterie oder Netzzähler |
+| `grid.gridExportMonth` / `gridExportYear` / `gridExportTotal` | number | kWh | Ins Netz eingespeiste Energie diesen Monat / dieses Jahr / gesamt — nur bei Anlagen mit Batterie oder Netzzähler |
 | `grid.batteryChargeToday` | number | kWh | Heute in die Batterie geladene Energie — nur bei Batteriesystemen |
 | `grid.batteryDischargeToday` | number | kWh | Heute aus der Batterie entladene Energie — nur bei Batteriesystemen |
 | `grid.monthEnergy` | number | kWh | Monatsenergie |

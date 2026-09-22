@@ -476,6 +476,24 @@ export interface StorageStationData {
 	efg_total?: string | number;
 	/** Today's energy fed into the grid, Wh. */
 	e2g_total?: string | number;
+	/**
+	 * Meter-based grid import / export counters, Wh. Verified live: `mb_in_eq.today_eq` equals
+	 * `efg_total` (today's import) while `grid_in_eq.today_eq` stays 0 all morning — so these two
+	 * blocks are the ones that continue today's balance over month, year and lifetime.
+	 */
+	mb_in_eq?: {
+		today_eq?: string | number;
+		month_eq?: string | number;
+		year_eq?: string | number;
+		total_eq?: string | number;
+	};
+	/** Meter-based export counters, Wh — see `mb_in_eq`. */
+	mb_out_eq?: {
+		today_eq?: string | number;
+		month_eq?: string | number;
+		year_eq?: string | number;
+		total_eq?: string | number;
+	};
 	/** Today's energy charged into the battery, Wh. */
 	e2b_total?: string | number;
 	/** Today's energy discharged from the battery, Wh. */
@@ -544,6 +562,14 @@ export function mapStorageStationData(block: unknown): MappedStorageStation | nu
 	add(result.energy, "grid.consumptionToday", rf.use_eq_total, 1000);
 	add(result.energy, "grid.gridImportToday", rf.efg_total, 1000);
 	add(result.energy, "grid.gridExportToday", rf.e2g_total, 1000);
+	for (const [period, key] of [
+		["Month", "month_eq"],
+		["Year", "year_eq"],
+		["Total", "total_eq"],
+	] as const) {
+		add(result.energy, `grid.gridImport${period}`, rf.mb_in_eq?.[key], 1000);
+		add(result.energy, `grid.gridExport${period}`, rf.mb_out_eq?.[key], 1000);
+	}
 	if (hasBattery) {
 		add(result.energy, "grid.batteryChargeToday", rf.e2b_total, 1000);
 		add(result.energy, "grid.batteryDischargeToday", rf.efb_total, 1000);
