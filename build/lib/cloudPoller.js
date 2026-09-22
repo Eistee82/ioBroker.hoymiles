@@ -30,6 +30,7 @@ const WEATHER_DESCRIPTIONS = {
 const hybridChannelMap = new Map(hybridChannels.map(c => [c.id, c]));
 const stationIndicatorChannelMap = new Map(stationIndicatorChannels.map(c => [c.id, c]));
 const isHybridInverter = (node) => node.type === CLOUD_DEV_TYPE_HYBRID_INVERTER;
+const BATTERY_SETTINGS_MAX_ATTEMPTS = 3;
 class CloudPoller {
     static PORT_COUNT_RE = /(\d+)\s*(?:T|WB)$/i;
     cloud;
@@ -57,7 +58,7 @@ class CloudPoller {
     hybridObjects = new Map();
     reportedUnknownKeys = new Set();
     multiBatteryReported = new Set();
-    batterySettingsRead = new Set();
+    batterySettingsAttempts = new Map();
     constructor(options) {
         this.cloud = options.cloud;
         this.adapter = options.adapter;
@@ -310,7 +311,8 @@ class CloudPoller {
         if (online && mapStorageStationData(data.reflux_station_data)?.battery.length) {
             const hybrids = this.hybridDevicesOf(stationId);
             await this.ensureBatteryControls(hybrids);
-            if (hybrids.length > 0 && !this.batterySettingsRead.has(stationId)) {
+            const attempts = this.batterySettingsAttempts.get(stationId) ?? 0;
+            if (hybrids.length > 0 && attempts < BATTERY_SETTINGS_MAX_ATTEMPTS) {
                 void this.readBatterySettings(stationId);
             }
         }
@@ -817,10 +819,12 @@ class CloudPoller {
         }
     }
     async readBatterySettings(stationId) {
-        this.batterySettingsRead.add(stationId);
+        const attempts = (this.batterySettingsAttempts.get(stationId) ?? 0) + 1;
+        this.batterySettingsAttempts.set(stationId, attempts);
         const serials = this.hybridDevicesOf(stationId);
         try {
             const values = mapBatterySettings(await this.cloud.readBatterySettings(stationId));
+            this.batterySettingsAttempts.set(stationId, BATTERY_SETTINGS_MAX_ATTEMPTS);
             if (values.length === 0) {
                 this.adapter.log.debug(`Battery settings of station ${stationId}: the device returned no mode`);
                 return;
@@ -834,7 +838,10 @@ class CloudPoller {
             this.adapter.log.debug(`Battery settings of station ${stationId} read`);
         }
         catch (err) {
-            this.adapter.log.warn(`Reading the battery settings of station ${stationId} failed: ${errorMessage(err)}`);
+            const again = attempts < BATTERY_SETTINGS_MAX_ATTEMPTS
+                ? " — will try again on a later poll"
+                : ` — giving up for this adapter run after ${attempts} attempts; press battery.readSettings to try again`;
+            this.adapter.log.warn(`Reading the battery settings of station ${stationId} failed: ${errorMessage(err)}${again}`);
         }
         finally {
             for (const sn of serials) {

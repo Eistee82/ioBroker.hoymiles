@@ -83,6 +83,9 @@ const stationIndicatorChannelMap = new Map(stationIndicatorChannels.map(c => [c.
  */
 const isHybridInverter = (node: CloudTreeNode): boolean => node.type === CLOUD_DEV_TYPE_HYBRID_INVERTER;
 
+/** Automatic attempts to read a station's battery settings per adapter run (see `batterySettingsAttempts`). */
+const BATTERY_SETTINGS_MAX_ATTEMPTS = 3;
+
 /** Cloud polling states that determine what data is fetched and at what interval. */
 type CloudPollState = "POLLING_ACTIVE" | "RELAY_TRIGGERED" | "NIGHT_MODE";
 
@@ -175,8 +178,13 @@ class CloudPoller {
 	private readonly reportedUnknownKeys: Set<string> = new Set();
 	/** DTU serials whose surplus batteries were already reported. */
 	private readonly multiBatteryReported: Set<string> = new Set();
-	/** Stations whose battery settings were read (or are being read) in this adapter run. */
-	private readonly batterySettingsRead: Set<number> = new Set();
+	/**
+	 * Attempts made to read a station's battery settings in this adapter run. The cloud refuses the
+	 * read while another task is queued for the device ("[Load grid profile] pending"), so a failed
+	 * attempt is retried on a later poll — a few times, not forever, since every attempt is a
+	 * request that travels down to the device. A successful read counts as all attempts used.
+	 */
+	private readonly batterySettingsAttempts: Map<number, number> = new Map();
 
 	/**
 	 * @param options - Cloud poller configuration
@@ -546,11 +554,13 @@ class CloudPoller {
 		await this.pollDevicesAndInverters(stationId, slowPoll, online);
 
 		// Battery settings: once per adapter run, in the background (the device takes seconds to
-		// answer). After that only when the user presses `<dtuSerial>.battery.readSettings`.
+		// answer), retried on a later poll when the cloud was busy with the device. After that only
+		// when the user presses `<dtuSerial>.battery.readSettings`.
 		if (online && mapStorageStationData(data.reflux_station_data)?.battery.length) {
 			const hybrids = this.hybridDevicesOf(stationId);
 			await this.ensureBatteryControls(hybrids);
-			if (hybrids.length > 0 && !this.batterySettingsRead.has(stationId)) {
+			const attempts = this.batterySettingsAttempts.get(stationId) ?? 0;
+			if (hybrids.length > 0 && attempts < BATTERY_SETTINGS_MAX_ATTEMPTS) {
 				void this.readBatterySettings(stationId);
 			}
 		}
@@ -1329,10 +1339,14 @@ class CloudPoller {
 	 * @param stationId - Cloud station id.
 	 */
 	async readBatterySettings(stationId: number): Promise<void> {
-		this.batterySettingsRead.add(stationId);
+		// Counted before the request goes out, so a poll during the read does not start a second one.
+		const attempts = (this.batterySettingsAttempts.get(stationId) ?? 0) + 1;
+		this.batterySettingsAttempts.set(stationId, attempts);
 		const serials = this.hybridDevicesOf(stationId);
 		try {
 			const values = mapBatterySettings(await this.cloud.readBatterySettings(stationId));
+			// Done for this adapter run — from here on only the button reads again.
+			this.batterySettingsAttempts.set(stationId, BATTERY_SETTINGS_MAX_ATTEMPTS);
 			if (values.length === 0) {
 				this.adapter.log.debug(`Battery settings of station ${stationId}: the device returned no mode`);
 				return;
@@ -1345,7 +1359,13 @@ class CloudPoller {
 			}
 			this.adapter.log.debug(`Battery settings of station ${stationId} read`);
 		} catch (err) {
-			this.adapter.log.warn(`Reading the battery settings of station ${stationId} failed: ${errorMessage(err)}`);
+			const again =
+				attempts < BATTERY_SETTINGS_MAX_ATTEMPTS
+					? " — will try again on a later poll"
+					: ` — giving up for this adapter run after ${attempts} attempts; press battery.readSettings to try again`;
+			this.adapter.log.warn(
+				`Reading the battery settings of station ${stationId} failed: ${errorMessage(err)}${again}`,
+			);
 		} finally {
 			for (const sn of serials) {
 				await this.boundSetState(`${sn}.battery.readSettings`, false, true).catch(() => {});

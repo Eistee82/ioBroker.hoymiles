@@ -3693,6 +3693,77 @@ describe("CloudPoller – battery settings", function () {
 		assert.deepStrictEqual(subscribed, [], "must not subscribe again");
 	});
 
+	// Seen live: the cloud answered "[Load grid profile] pending, please wait." because another
+	// task was queued for the device. A transient refusal must not cost the whole adapter run.
+	it("retries a failed settings read on later polls, at most three times, and stops after a success", async function () {
+		const outcomes = [];
+		const cloud = makeMockCloud();
+		cloud.getStationRealtime = async () => storageRealtime();
+		cloud.getDeviceTree = async () => [];
+		cloud.readBatterySettings = async () => {
+			const next = outcomes.shift();
+			if (next instanceof Error) {
+				throw next;
+			}
+			return next;
+		};
+		const warns = [];
+		const adapter = makeMockAdapter();
+		adapter.log.warn = m => warns.push(m);
+		const devices = new Map([["DTU_A", hybridDev("DTU_A")]]);
+		const poller = makePoller({ cloud, adapter, devices, stationDevices: new Set([1]), slowPollFactor: 1 });
+		const pollOnce = async () => {
+			poller.lastRealtimeFetch.set("DTU_A", 0);
+			await poller.poll();
+			await flushMicrotasks();
+		};
+
+		// Fails, is retried, succeeds, and is then left alone.
+		outcomes.push(new Error("[Load grid profile] pending, please wait."), {
+			mode: 1,
+			data: { k_1: { reserve_soc: 15 } },
+		});
+		let reads = 0;
+		const counting = cloud.readBatterySettings;
+		cloud.readBatterySettings = async () => {
+			reads++;
+			return counting();
+		};
+		await pollOnce();
+		assert.strictEqual(reads, 1);
+		assert.ok(
+			warns.some(w => w.includes("will try again on a later poll")),
+			"the warning must announce the retry",
+		);
+		await pollOnce();
+		assert.strictEqual(reads, 2, "the failed read must be retried on the next poll");
+		await pollOnce();
+		await pollOnce();
+		assert.strictEqual(reads, 2, "after a success no further automatic read");
+
+		// A fresh poller: three failures in a row, then no more automatic attempts.
+		outcomes.length = 0;
+		outcomes.push(new Error("busy"), new Error("busy"), new Error("busy"), new Error("busy"));
+		reads = 0;
+		warns.length = 0;
+		const poller2 = makePoller({
+			cloud,
+			adapter,
+			devices: new Map([["DTU_A", hybridDev("DTU_A")]]),
+			stationDevices: new Set([1]),
+			slowPollFactor: 1,
+		});
+		for (let i = 0; i < 5; i++) {
+			poller2.lastRealtimeFetch.set("DTU_A", 0);
+			await poller2.poll();
+			await flushMicrotasks();
+		}
+		poller.stop();
+		poller2.stop();
+		assert.strictEqual(reads, 3, "at most three automatic attempts per adapter run");
+		assert.ok(warns.at(-1).includes("giving up for this adapter run"), "the last warning must say it gave up");
+	});
+
 	it("never reads and never subscribes for a station without a battery, even with a hybrid device registered", async function () {
 		const subscribed = [];
 		let readCalls = 0;
