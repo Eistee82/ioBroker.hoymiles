@@ -11,6 +11,7 @@ import {
 	hybridStates,
 	hybridStateMap,
 	batterySettingStates,
+	hybridExtraStates,
 	stationIndicatorChannels,
 	stationIndicatorStates,
 	stationIndicatorStateMap,
@@ -194,6 +195,22 @@ describe("stateDefinitions – station", function () {
 		}
 	});
 
+	it("carries the cloud's own income/cost accounting (grid.monthIncome etc.), next to the existing today/total income", function () {
+		const ids = stationStates.map(s => s.id);
+		for (const id of [
+			"grid.todayIncome",
+			"grid.totalIncome",
+			"grid.monthIncome",
+			"grid.yearIncome",
+			"grid.todayCost",
+			"grid.monthCost",
+			"grid.yearCost",
+			"grid.totalCost",
+		]) {
+			assert.ok(ids.includes(id), `Missing ${id}`);
+		}
+	});
+
 	it("carries the battery's day energy balance again (grid.batteryChargeToday/DischargeToday)", function () {
 		const ids = stationStates.map(s => s.id);
 		assert.ok(ids.includes("grid.batteryChargeToday"), "Missing grid.batteryChargeToday");
@@ -316,8 +333,8 @@ describe("stateDefinitions – hybrid inverter states", function () {
 		assert.strictEqual(hybridStateMap.size, hybridStates.length);
 	});
 
-	it("hybridChannels is only eps + battery — the grid meter moved to the station", function () {
-		assert.deepStrictEqual(hybridChannels.map(c => c.id).sort(), ["battery", "eps"]);
+	it("hybridChannels is eps, battery, dryContact, history — the grid meter moved to the station", function () {
+		assert.deepStrictEqual(hybridChannels.map(c => c.id).sort(), ["battery", "dryContact", "eps", "history"]);
 	});
 
 	it("no longer contains battery.chargeToday / battery.dischargeToday (they live in stationStates now)", function () {
@@ -334,9 +351,9 @@ describe("stateDefinitions – hybrid inverter states", function () {
 		}
 	});
 
-	it("battery.readSettings is the ONLY writable hybrid state", function () {
+	it("battery.readSettings and dryContact.readSettings are the ONLY writable hybrid states", function () {
 		const writable = hybridStates.filter(s => s.write).map(s => s.id);
-		assert.deepStrictEqual(writable, ["battery.readSettings"]);
+		assert.deepStrictEqual(writable.sort(), ["battery.readSettings", "dryContact.readSettings"]);
 	});
 
 	it("battery.readSettings is a button", function () {
@@ -356,6 +373,29 @@ describe("stateDefinitions – hybrid inverter states", function () {
 				.sort((a, b) => a - b),
 			[1, 2, 3, 4, 5, 6, 7, 8],
 		);
+	});
+
+	it("contains every hybridExtraStates entry (they are pushed into hybridStates)", function () {
+		const ids = new Set(hybridStates.map(s => s.id));
+		for (const def of hybridExtraStates) {
+			assert.ok(ids.has(def.id), `${def.id} missing from hybridStates`);
+			assert.strictEqual(hybridStateMap.get(def.id), def);
+		}
+	});
+
+	it("dryContact.readSettings is a button", function () {
+		const def = hybridStates.find(s => s.id === "dryContact.readSettings");
+		assert.ok(def, "dryContact.readSettings must exist");
+		assert.strictEqual(def.type, "boolean");
+		assert.strictEqual(def.role, "button");
+	});
+
+	it("every hybridExtraStates suffix belongs to a known hybrid or device channel", function () {
+		const channelIds = new Set([...channels, ...hybridChannels].map(c => c.id));
+		for (const s of hybridExtraStates) {
+			const channelId = s.id.split(".")[0];
+			assert.ok(channelIds.has(channelId), `${s.id} belongs to undefined channel "${channelId}"`);
+		}
 	});
 });
 

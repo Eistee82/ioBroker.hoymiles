@@ -4,6 +4,7 @@ import { execSync } from "node:child_process";
 import { mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
+import protobuf from "protobufjs";
 import CloudConnection, { CloudAuthError } from "../build/lib/cloudConnection.js";
 import { HttpError, initAgent } from "../build/lib/httpClient.js";
 
@@ -1071,6 +1072,316 @@ describe("cloudConnection – getRealIndicators", function () {
 		};
 		const result = await cloud.getRealIndicators(1, { type: 2 });
 		assert.strictEqual(result, null);
+	});
+});
+
+// ============================================================
+// cloudConnection – getIncomeStats
+// ============================================================
+describe("cloudConnection – getIncomeStats", function () {
+	let originalPost;
+
+	beforeEach(function () {
+		originalPost = CloudConnection.prototype._post;
+	});
+
+	afterEach(function () {
+		CloudConnection.prototype._post = originalPost;
+	});
+
+	it("throws 'Invalid stationId' for 0", async function () {
+		const cloud = new CloudConnection("u", "p");
+		await assert.rejects(() => cloud.getIncomeStats(0), { message: "Invalid stationId" });
+	});
+
+	it("posts {sid} to /eps/api/0/record/stat_a and returns data on status 0", async function () {
+		const cloud = new CloudConnection("u", "p");
+		cloud.token = "fake-token";
+		cloud.tokenTime = Date.now();
+		let calledPath;
+		let calledBody;
+		CloudConnection.prototype._post = async function (apiPath, body) {
+			calledPath = apiPath;
+			calledBody = body;
+			return { status: "0", data: { today_profit: 0.034, total_spend: 2381.564 } };
+		};
+		const result = await cloud.getIncomeStats(42);
+		assert.strictEqual(calledPath, "/eps/api/0/record/stat_a");
+		assert.deepStrictEqual(calledBody, { sid: 42 });
+		assert.deepStrictEqual(result, { today_profit: 0.034, total_spend: 2381.564 });
+	});
+
+	it("returns null when the server reports a non-zero status", async function () {
+		const cloud = new CloudConnection("u", "p");
+		cloud.token = "fake-token";
+		cloud.tokenTime = Date.now();
+		CloudConnection.prototype._post = async function () {
+			return { status: "1", message: "no tariff configured" };
+		};
+		const result = await cloud.getIncomeStats(1);
+		assert.strictEqual(result, null);
+	});
+
+	it("returns null when the request throws", async function () {
+		const cloud = new CloudConnection("u", "p");
+		cloud.token = "fake-token";
+		cloud.tokenTime = Date.now();
+		CloudConnection.prototype._post = async function () {
+			throw new Error("network error");
+		};
+		const result = await cloud.getIncomeStats(1);
+		assert.strictEqual(result, null);
+	});
+});
+
+// ============================================================
+// cloudConnection – getCloudAlarms
+// ============================================================
+describe("cloudConnection – getCloudAlarms", function () {
+	let originalPost;
+
+	beforeEach(function () {
+		originalPost = CloudConnection.prototype._post;
+	});
+
+	afterEach(function () {
+		CloudConnection.prototype._post = originalPost;
+	});
+
+	it("throws 'Invalid stationId' for 0", async function () {
+		const cloud = new CloudConnection("u", "p");
+		await assert.rejects(() => cloud.getCloudAlarms(0, "SN1", "flesw"), { message: "Invalid stationId" });
+	});
+
+	it("returns null without any HTTP call for profile 'home'", async function () {
+		const cloud = new CloudConnection("u", "p");
+		cloud.token = "fake-token";
+		cloud.tokenTime = Date.now();
+		cloud.profile = "home";
+		let called = false;
+		CloudConnection.prototype._post = async function () {
+			called = true;
+			return { status: "0", data: { total: 0, list: [] } };
+		};
+		const result = await cloud.getCloudAlarms(1, "SN1", "flesw");
+		assert.strictEqual(result, null);
+		assert.strictEqual(called, false, "a home-profile account must not hit the network for this endpoint");
+	});
+
+	it("returns null without any HTTP call for an empty serial", async function () {
+		const cloud = new CloudConnection("u", "p");
+		cloud.token = "fake-token";
+		cloud.tokenTime = Date.now();
+		cloud.profile = "installer";
+		let called = false;
+		CloudConnection.prototype._post = async function () {
+			called = true;
+			return { status: "0", data: { total: 0, list: [] } };
+		};
+		const result = await cloud.getCloudAlarms(1, "", "flesw");
+		assert.strictEqual(result, null);
+		assert.strictEqual(called, false);
+	});
+
+	it("posts {sid, sn, page:1, page_size:50} to /monitor/api/0/ng/dev/<kind>", async function () {
+		const cloud = new CloudConnection("u", "p");
+		cloud.token = "fake-token";
+		cloud.tokenTime = Date.now();
+		cloud.profile = "installer";
+		let calledPath;
+		let calledBody;
+		CloudConnection.prototype._post = async function (apiPath, body) {
+			calledPath = apiPath;
+			calledBody = body;
+			return { status: "0", data: { total: 1, list: [{ sn: "SN1", warns: [] }] } };
+		};
+		const result = await cloud.getCloudAlarms(42, "SN1", "flesw");
+		assert.strictEqual(calledPath, "/monitor/api/0/ng/dev/flesw");
+		assert.deepStrictEqual(calledBody, { sid: 42, sn: "SN1", page: 1, page_size: 50 });
+		assert.deepStrictEqual(result, { total: 1, list: [{ sn: "SN1", warns: [] }] });
+	});
+
+	it("uses the given kind for the DTU alarm endpoint (fldw)", async function () {
+		const cloud = new CloudConnection("u", "p");
+		cloud.token = "fake-token";
+		cloud.tokenTime = Date.now();
+		cloud.profile = "installer";
+		let calledPath;
+		CloudConnection.prototype._post = async function (apiPath) {
+			calledPath = apiPath;
+			return { status: "0", data: {} };
+		};
+		await cloud.getCloudAlarms(42, "DTU1", "fldw");
+		assert.strictEqual(calledPath, "/monitor/api/0/ng/dev/fldw");
+	});
+
+	it("returns null when the server reports a non-zero status", async function () {
+		const cloud = new CloudConnection("u", "p");
+		cloud.token = "fake-token";
+		cloud.tokenTime = Date.now();
+		cloud.profile = "installer";
+		CloudConnection.prototype._post = async function () {
+			return { status: "1", message: "device not found" };
+		};
+		const result = await cloud.getCloudAlarms(1, "SN1", "flesw");
+		assert.strictEqual(result, null);
+	});
+
+	it("returns null when the request throws", async function () {
+		const cloud = new CloudConnection("u", "p");
+		cloud.token = "fake-token";
+		cloud.tokenTime = Date.now();
+		cloud.profile = "installer";
+		CloudConnection.prototype._post = async function () {
+			throw new Error("network error");
+		};
+		const result = await cloud.getCloudAlarms(1, "SN1", "flesw");
+		assert.strictEqual(result, null);
+	});
+});
+
+// ============================================================
+// cloudConnection – getIndicatorDayCurve
+// ============================================================
+describe("cloudConnection – getIndicatorDayCurve", function () {
+	it("throws 'Invalid stationId' for 0", async function () {
+		const cloud = new CloudConnection("u", "p");
+		await assert.rejects(() => cloud.getIndicatorDayCurve(0, 6, [{ id: 1, sn: "X" }], "p_total", "2026-09-22"), {
+			message: "Invalid stationId",
+		});
+	});
+
+	it("returns null without any HTTP call for profile 'home'", async function () {
+		const cloud = new CloudConnection("u", "p");
+		cloud.token = "fake-token";
+		cloud.tokenTime = Date.now();
+		cloud.profile = "home";
+		let called = false;
+		cloud._postBinary = async () => {
+			called = true;
+			return Buffer.alloc(0);
+		};
+		const result = await cloud.getIndicatorDayCurve(1, 6, [{ id: 1, sn: "X" }], "p_total", "2026-09-22");
+		assert.strictEqual(result, null);
+		assert.strictEqual(called, false, "a home-profile account must not hit the network for this endpoint");
+	});
+
+	it("posts the expected body to indicators/data/cid_g_a and decodes the response", async function () {
+		const cloud = new CloudConnection("u", "p");
+		cloud.token = "fake-token";
+		cloud.tokenTime = Date.now();
+		cloud.profile = "installer";
+		let calledPath;
+		let calledBody;
+		// A minimal encoded day curve — 1 series, 1 sample — built the same way
+		// test/chartParser.test.js builds its fixtures.
+		const inner = new protobuf.Writer();
+		const minutesBuf = new protobuf.Writer().uint32(0).finish();
+		const valueBuf = Buffer.alloc(8);
+		valueBuf.writeDoubleLE(123.4, 0);
+		inner.uint32(34).bytes(minutesBuf);
+		inner.uint32(42).bytes(valueBuf);
+		const outer = new protobuf.Writer().uint32(10).bytes(inner.finish()).finish();
+
+		cloud._postBinary = async (apiPath, body) => {
+			calledPath = apiPath;
+			calledBody = body;
+			return Buffer.from(outer);
+		};
+		const devList = [{ id: 135250, sn: "INV_HAT" }];
+		const result = await cloud.getIndicatorDayCurve(42, 6, devList, "p_total", "2026-09-22");
+		assert.strictEqual(calledPath, "/pvm-data/api/0/indicators/data/cid_g_a");
+		assert.deepStrictEqual(calledBody, {
+			sid: 42,
+			dev_type: 6,
+			date: "2026-09-22",
+			dev_list: devList,
+			ind_list: ["p_total"],
+			pb_ver: 1,
+		});
+		assert.deepStrictEqual(result, { minutes: [0], values: [123.4] });
+	});
+
+	it("returns null when the request throws", async function () {
+		const cloud = new CloudConnection("u", "p");
+		cloud.token = "fake-token";
+		cloud.tokenTime = Date.now();
+		cloud.profile = "installer";
+		cloud._postBinary = async () => {
+			throw new Error("network error");
+		};
+		const result = await cloud.getIndicatorDayCurve(1, 6, [{ id: 1, sn: "X" }], "p_total", "2026-09-22");
+		assert.strictEqual(result, null);
+	});
+});
+
+// ============================================================
+// cloudConnection – readDryContactSettings (retries SETTING_ACTIONS_DRY_CONTACT_READ while the
+// cloud reports "Not Supported"; runDeviceTask itself polls with real timers, so it is stubbed
+// out here the same way _post/_postBinary are stubbed elsewhere in this file — the retry/rethrow
+// logic is what is under test, not the polling loop).
+// ============================================================
+describe("cloudConnection – readDryContactSettings", function () {
+	it("throws 'Invalid stationId' for 0", async function () {
+		const cloud = new CloudConnection("u", "p");
+		await assert.rejects(() => cloud.readDryContactSettings(0), { message: "Invalid stationId" });
+	});
+
+	it("returns the result of the first action code that succeeds (1014)", async function () {
+		const cloud = new CloudConnection("u", "p");
+		const calls = [];
+		cloud["runDeviceTask"] = async (startPath, startBody) => {
+			calls.push(startBody.action);
+			return { data: { mode: 2 } };
+		};
+		const result = await cloud.readDryContactSettings(1);
+		assert.deepStrictEqual(calls, [1014]);
+		assert.deepStrictEqual(result, { mode: 2 });
+	});
+
+	it("tries the next action code when the cloud reports 'Not Supported', and returns its result", async function () {
+		const cloud = new CloudConnection("u", "p");
+		const calls = [];
+		cloud["runDeviceTask"] = async (startPath, startBody) => {
+			calls.push(startBody.action);
+			if (startBody.action === 1014) {
+				throw new Error("Device task ... failed: Not Supported");
+			}
+			return { data: { mode: 0 } };
+		};
+		const result = await cloud.readDryContactSettings(1);
+		assert.deepStrictEqual(calls, [1014, 1024]);
+		assert.deepStrictEqual(result, { mode: 0 });
+	});
+
+	it("returns null when every action code is 'Not Supported'", async function () {
+		const cloud = new CloudConnection("u", "p");
+		const calls = [];
+		cloud["runDeviceTask"] = async (startPath, startBody) => {
+			calls.push(startBody.action);
+			throw new Error("Not Supported");
+		};
+		const result = await cloud.readDryContactSettings(1);
+		assert.deepStrictEqual(calls, [1014, 1024]);
+		assert.strictEqual(result, null);
+	});
+
+	it("rethrows immediately on any other error, without trying the next action code", async function () {
+		const cloud = new CloudConnection("u", "p");
+		const calls = [];
+		cloud["runDeviceTask"] = async (startPath, startBody) => {
+			calls.push(startBody.action);
+			throw new Error("network error");
+		};
+		await assert.rejects(() => cloud.readDryContactSettings(1), { message: "network error" });
+		assert.deepStrictEqual(calls, [1014]);
+	});
+
+	it("returns {} (not null) when the succeeding task carries no data", async function () {
+		const cloud = new CloudConnection("u", "p");
+		cloud["runDeviceTask"] = async () => ({});
+		const result = await cloud.readDryContactSettings(1);
+		assert.deepStrictEqual(result, {});
 	});
 });
 

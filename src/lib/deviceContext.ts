@@ -82,6 +82,8 @@ export interface HoymilesAdapter extends ioBroker.Adapter {
 	sendCloudDeviceCommand(devSn: string, dtuSn: string, action: number, devType?: number): Promise<void>;
 	/** Batterie-Einstellungen einer Speicheranlage vom Gerät lesen (nur lesend). */
 	readBatterySettings(stationId: number): Promise<void>;
+	/** Trockenkontakt-Einstellungen einer Speicheranlage vom Gerät lesen (nur lesend). */
+	readDryContactSettings(stationId: number): Promise<void>;
 }
 
 interface DeviceContextOptions {
@@ -2527,9 +2529,13 @@ class DeviceContext {
 		}
 		// Not a command either: the button asks the cloud to read the battery settings. It changes
 		// nothing on the device, and the poller releases it again once the read is through.
-		if (stateId === "battery.readSettings") {
+		if (stateId === "battery.readSettings" || stateId === "dryContact.readSettings") {
 			if (state.val && this.cloudStationId != null) {
-				await this.adapter.readBatterySettings(this.cloudStationId);
+				if (stateId === "battery.readSettings") {
+					await this.adapter.readBatterySettings(this.cloudStationId);
+				} else {
+					await this.adapter.readDryContactSettings(this.cloudStationId);
+				}
 			} else {
 				await this.setState(stateId, false, true);
 			}

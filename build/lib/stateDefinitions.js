@@ -58,6 +58,8 @@ export const meterMeasurementStates = [
 export const hybridChannels = [
     { id: "eps", name: { en: "Backup (EPS) output", de: "Notstrom-Ausgang (EPS)" }, source: "cloud" },
     { id: "battery", name: { en: "Battery", de: "Batterie" }, source: "cloud" },
+    { id: "dryContact", name: { en: "Dry contacts (relay)", de: "Trockenkontakte (Relais)" }, source: "cloud" },
+    { id: "history", name: { en: "Power history", de: "Leistungsverlauf" }, source: "cloud" },
 ];
 export const hybridStates = [
     ...[1, 2, 3].flatMap(p => [
@@ -177,6 +179,30 @@ export const batterySettingStates = [
     }),
 ];
 hybridStates.push(...batterySettingStates);
+export const hybridExtraStates = [
+    n("dryContact.mode", "Relay mode", "Relaismodus", "value", "", { source: "cloud" }),
+    s("dryContact.settingsJson", "Relay settings (JSON)", "Relais-Einstellungen (JSON)", "json", { source: "cloud" }),
+    n("dryContact.settingsUpdated", "Settings last read", "Einstellungen zuletzt gelesen", "value.time", "", {
+        source: "cloud",
+    }),
+    b("dryContact.readSettings", "Read relay settings", "Relais-Einstellungen lesen", "button", {
+        source: "cloud",
+        write: true,
+    }),
+    n("alarms.cloudActiveCount", "Active alarms (cloud)", "Aktive Alarme (Cloud)", "value", "", { source: "cloud" }),
+    s("alarms.cloudActiveJson", "Active alarms (cloud, JSON)", "Aktive Alarme (Cloud, JSON)", "json", {
+        source: "cloud",
+    }),
+    s("history.powerJson", "Power history (JSON)", "Leistungsverlauf (JSON)", "json", { source: "cloud" }),
+    s("history.batteryPowerJson", "Battery power history (JSON)", "Batterieleistungsverlauf (JSON)", "json", {
+        source: "cloud",
+    }),
+    s("history.pvPowerJson", "PV power history (JSON)", "PV-Leistungsverlauf (JSON)", "json", { source: "cloud" }),
+    s("history.socJson", "State of charge history (JSON)", "Ladezustandsverlauf (JSON)", "json", { source: "cloud" }),
+    n("history.startTime", "First sample time", "Zeit des ersten Werts", "value.time", "", { source: "cloud" }),
+    n("history.stepTime", "Step between samples", "Abstand der Werte", "value", "s", { source: "cloud" }),
+];
+hybridStates.push(...hybridExtraStates);
 export const hybridStateMap = new Map(hybridStates.map(d => [d.id, d]));
 export const stationIndicatorChannels = [
     { id: "gridMeter", name: { en: "Grid meter", de: "Netzzähler" }, source: "cloud" },
@@ -430,6 +456,12 @@ const stationStates = [
     s("grid.currency", "Currency", "Währung", "text"),
     n("grid.todayIncome", "Today income", "Tagesertrag", "value", ""),
     n("grid.totalIncome", "Total income", "Gesamtertrag", "value", ""),
+    n("grid.monthIncome", "Income this month", "Ertrag diesen Monat", "value", ""),
+    n("grid.yearIncome", "Income this year", "Ertrag dieses Jahr", "value", ""),
+    n("grid.todayCost", "Electricity cost today", "Stromkosten heute", "value", ""),
+    n("grid.monthCost", "Electricity cost this month", "Stromkosten diesen Monat", "value", ""),
+    n("grid.yearCost", "Electricity cost this year", "Stromkosten dieses Jahr", "value", ""),
+    n("grid.totalCost", "Electricity cost total", "Stromkosten gesamt", "value", ""),
     s("info.stationName", "Station name", "Anlagenname", "text"),
     n("info.stationId", "Station ID", "Anlagen-ID", "value", ""),
     n("info.systemCapacity", "System capacity", "Anlagenleistung", "value", "kWp"),

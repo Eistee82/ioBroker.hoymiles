@@ -664,3 +664,167 @@ export function mapEnergyStats(
 	}
 	return out;
 }
+
+/** Income and cost as the cloud accounts them (`eps/api/0/record/stat_a`), in the station's currency. */
+export interface IncomeStats {
+	/** Income today. */
+	today_profit?: number | string;
+	/** Income this month. */
+	monthly_profit?: number | string;
+	/** Income this year. */
+	yearly_profit?: number | string;
+	/** Income in total. */
+	total_profit?: number | string;
+	/** Electricity cost today. */
+	today_spend?: number | string;
+	/** Electricity cost this month. */
+	monthly_spend?: number | string;
+	/** Electricity cost this year. */
+	yearly_spend?: number | string;
+	/** Electricity cost in total. */
+	total_spend?: number | string;
+	[key: string]: unknown;
+}
+
+/**
+ * Translate the cloud's income/cost record into station states, rounded to cents. Income replaces
+ * the adapter's own "yield × price" estimate wherever the cloud delivers one.
+ *
+ * @param result - Decoded `data` of the request.
+ */
+export function mapIncomeStats(result: IncomeStats | null | undefined): Array<{ suffix: string; val: number }> {
+	if (!result || typeof result !== "object") {
+		return [];
+	}
+	const out: Array<{ suffix: string; val: number }> = [];
+	for (const [key, suffix] of [
+		["today_profit", "grid.todayIncome"],
+		["monthly_profit", "grid.monthIncome"],
+		["yearly_profit", "grid.yearIncome"],
+		["total_profit", "grid.totalIncome"],
+		["today_spend", "grid.todayCost"],
+		["monthly_spend", "grid.monthCost"],
+		["yearly_spend", "grid.yearCost"],
+		["total_spend", "grid.totalCost"],
+	] as const) {
+		const val = toNumber(result[key]);
+		if (val !== null) {
+			out.push({ suffix, val: Math.round(val * 100) / 100 });
+		}
+	}
+	return out;
+}
+
+/** One page of a cloud alarm list (`monitor/api/0/ng/dev/flesw` etc.). */
+export interface CloudAlarmList {
+	/** Number of devices with alarms. */
+	total?: number;
+	/** One entry per device, with its active warnings. */
+	list?: Array<{
+		name?: string;
+		sn?: string;
+		track_time?: string;
+		tz?: string;
+		warns?: Array<{ code?: number | string; pre?: unknown; time?: string; [key: string]: unknown }>;
+	} | null>;
+}
+
+/**
+ * Summarize the active cloud alarms of a device: how many there are and a compact JSON list. The
+ * cloud's own alarm dictionary is not applied here — the code stays as delivered.
+ *
+ * @param lists - Alarm lists of the device's sources (inverter, DTU), null where a read failed.
+ */
+export function mapCloudAlarms(lists: Array<CloudAlarmList | null | undefined>): { count: number; json: string } {
+	const alarms: Array<Record<string, unknown>> = [];
+	for (const list of lists) {
+		for (const entry of list?.list ?? []) {
+			for (const warn of entry?.warns ?? []) {
+				if (!warn || typeof warn !== "object") {
+					continue;
+				}
+				alarms.push({
+					code: warn.code,
+					time: warn.time,
+					pre: warn.pre,
+					source: entry?.name,
+					data: [warn.wd1, warn.wd2, warn.wd3, warn.wd4],
+				});
+			}
+		}
+	}
+	return { count: alarms.length, json: JSON.stringify(alarms) };
+}
+
+/** Action codes of the dry-contact (relay) settings read; which one a plant answers depends on its relay hardware. */
+export const SETTING_ACTIONS_DRY_CONTACT_READ: readonly number[] = [1014, 1024];
+
+/** Result of the dry-contact settings read, as far as the adapter reads it. */
+export interface DryContactResult {
+	/** Relay mode, 0 = off. */
+	mode?: number | string;
+	/** Per-mode parameters, keyed `k_<mode>`. */
+	data?: Record<string, unknown>;
+	[key: string]: unknown;
+}
+
+/**
+ * Translate the dry-contact settings read: the mode as a number, everything as JSON. The per-mode
+ * parameters (generator start/stop thresholds, load-control windows, …) differ by mode and carry
+ * no units, so they are passed on untouched.
+ *
+ * @param result - `data` object of the finished setting-read task.
+ */
+export function mapDryContactSettings(
+	result: DryContactResult | null | undefined,
+): Array<{ suffix: string; val: number | string }> {
+	const mode = toNumber(result?.mode);
+	if (!result || mode === null) {
+		return [];
+	}
+	return [
+		{ suffix: "dryContact.mode", val: mode },
+		{ suffix: "dryContact.settingsJson", val: JSON.stringify(result) },
+	];
+}
+
+/** Day curves the adapter reads for a hybrid inverter and its battery. */
+export interface DayCurveSpec {
+	/** Cloud device type the curve is requested for (6 = inverter, 10 = battery). */
+	devType: number;
+	/** Indicator key. */
+	indicator: string;
+	/** State the JSON array goes to. */
+	suffix: string;
+	/** Only worth reading when PV is connected to the inverter. */
+	needsPv?: boolean;
+}
+
+export const DAY_CURVES: readonly DayCurveSpec[] = [
+	{ devType: CLOUD_DEV_TYPE_HYBRID_INVERTER, indicator: "p_total", suffix: "history.powerJson" },
+	{ devType: CLOUD_DEV_TYPE_HYBRID_INVERTER, indicator: "inv_pbat", suffix: "history.batteryPowerJson" },
+	{ devType: CLOUD_DEV_TYPE_HYBRID_INVERTER, indicator: "pv_p_total", suffix: "history.pvPowerJson", needsPv: true },
+	{ devType: CLOUD_DEV_TYPE_BATTERY, indicator: "bms_soc", suffix: "history.socJson" },
+];
+
+/**
+ * Turn a decoded day curve into the adapter's history format: a JSON array of values plus the
+ * epoch of the first sample and the step in seconds — the same shape the local path writes.
+ *
+ * @param curve - Minutes of day + values.
+ * @param dayStartEpochMs - Epoch of the station-local midnight the curve belongs to.
+ */
+export function mapDayCurve(
+	curve: { minutes: number[]; values: number[] } | null | undefined,
+	dayStartEpochMs: number,
+): { json: string; startTime: number; stepTime: number } | null {
+	if (!curve || curve.minutes.length === 0 || curve.minutes.length !== curve.values.length) {
+		return null;
+	}
+	const stepMinutes = curve.minutes.length > 1 ? curve.minutes[1] - curve.minutes[0] : 5;
+	return {
+		json: JSON.stringify(curve.values.map(v => Math.round(v * 10) / 10)),
+		startTime: dayStartEpochMs + curve.minutes[0] * 60_000,
+		stepTime: Math.max(stepMinutes, 1) * 60,
+	};
+}

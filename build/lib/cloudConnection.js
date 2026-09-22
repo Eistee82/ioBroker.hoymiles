@@ -1,7 +1,7 @@
 import { postJson, postBinary, HttpError } from "./httpClient.js";
-import { parseChartResponse } from "./chartParser.js";
+import { decodeIndicatorDayCurve, parseChartResponse } from "./chartParser.js";
 import { TOKEN_MAX_AGE_MS, ENSURE_TOKEN_TIMEOUT_MS, CLOUD_HOST_DEFAULT, CLOUD_HOST_EU, CLOUD_DC_HOSTS, IAM_PRE_INSPECT_PATH, IAM_LOGIN_V3_PATH, IAM_REGION_PATH, PROFILE_PROBE_PATH, STATION_AK_FIND_PATH, PVM_CTL_SETTING_READ_PATH, PVM_CTL_SETTING_STATUS_PATH, DEVICE_SETTING_ACTION_GRID_READ, PVM_CTL_COMMAND_PUT_PATH, PVM_CTL_COMMAND_STATUS_PATH, DEVICE_SETTING_POLL_INTERVAL_MS, DEVICE_SETTING_POLL_MAX, APP_USER_AGENT_PREFIX, APP_VERSION, APP_TID, } from "./constants.js";
-import { SETTING_ACTION_BATTERY_MODE_READ } from "./hybridCloud.js";
+import { SETTING_ACTION_BATTERY_MODE_READ, SETTING_ACTIONS_DRY_CONTACT_READ } from "./hybridCloud.js";
 import { errorMessage, withTimeout, buildCredentialChallenges, buildArgon2Challenge, anonymize, sanitizeForLog, safeJsonStringify, } from "./utils.js";
 const EU_WEATHER_URL = `${CLOUD_HOST_EU}/tpa/api/0/weather/get`;
 function assertData(data, label) {
@@ -541,6 +541,80 @@ class CloudConnection {
             this.log(`[diag] Energy stats (mode ${mode}) error: ${errorMessage(err)}`);
             return null;
         }
+    }
+    async getIncomeStats(stationId) {
+        this.assertStationId(stationId);
+        await this.ensureToken();
+        try {
+            const result = await this._post("/eps/api/0/record/stat_a", { sid: stationId });
+            this.logResponseSample("income-stats", result);
+            return result.status === "0" ? (result.data ?? null) : null;
+        }
+        catch (err) {
+            this.log(`[diag] Income stats error: ${errorMessage(err)}`);
+            return null;
+        }
+    }
+    async getCloudAlarms(stationId, sn, kind) {
+        this.assertStationId(stationId);
+        await this.ensureToken();
+        if (this.profile === "home" || !sn) {
+            return null;
+        }
+        try {
+            const result = await this._post(`/monitor/api/0/ng/dev/${kind}`, {
+                sid: stationId,
+                sn,
+                page: 1,
+                page_size: 50,
+            });
+            this.logResponseSample(`alarms-${kind}`, result);
+            return result.status === "0" ? (result.data ?? null) : null;
+        }
+        catch (err) {
+            this.log(`[diag] Cloud alarms (${kind}) error: ${errorMessage(err)}`);
+            return null;
+        }
+    }
+    async getIndicatorDayCurve(stationId, devType, devList, indicator, date) {
+        this.assertStationId(stationId);
+        await this.ensureToken();
+        if (this.profile === "home") {
+            return null;
+        }
+        try {
+            const rawBuf = await this._postBinary("/pvm-data/api/0/indicators/data/cid_g_a", {
+                sid: stationId,
+                dev_type: devType,
+                date,
+                dev_list: devList,
+                ind_list: [indicator],
+                pb_ver: 1,
+            });
+            return decodeIndicatorDayCurve(rawBuf);
+        }
+        catch (err) {
+            this.log(`[diag] Day curve (${indicator}) error: ${errorMessage(err)}`);
+            return null;
+        }
+    }
+    async readDryContactSettings(stationId) {
+        this.assertStationId(stationId);
+        let lastError = null;
+        for (const action of SETTING_ACTIONS_DRY_CONTACT_READ) {
+            try {
+                const result = await this.runDeviceTask(PVM_CTL_SETTING_READ_PATH, { action, data: { sid: stationId } }, PVM_CTL_SETTING_STATUS_PATH);
+                return result.data ?? {};
+            }
+            catch (err) {
+                if (!/not supported/i.test(errorMessage(err))) {
+                    throw err;
+                }
+                lastError = err;
+            }
+        }
+        this.log(`[diag] Dry-contact read: no supported action code (${errorMessage(lastError)})`);
+        return null;
     }
     async readBatterySettings(stationId) {
         this.assertStationId(stationId);

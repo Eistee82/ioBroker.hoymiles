@@ -33,9 +33,14 @@ import {
 	CLOUD_DEV_TYPE_HYBRID_INVERTER,
 	REAL_INDICATOR_TYPE_PV,
 	mapBatterySettings,
+	DAY_CURVES,
 	ENERGY_STATS_MODES,
 	inverterHasPv,
+	mapCloudAlarms,
+	mapDayCurve,
+	mapDryContactSettings,
 	mapEnergyStats,
+	mapIncomeStats,
 	mapRealIndicators,
 	mapStorageStationData,
 	stationIndicatorTypes,
@@ -197,6 +202,8 @@ class CloudPoller {
 	 * request that travels down to the device. A successful read counts as all attempts used.
 	 */
 	private readonly batterySettingsAttempts: Map<number, number> = new Map();
+	/** Attempts to read a station's dry-contact settings in this run (same rules as the battery settings). */
+	private readonly dryContactAttempts: Map<number, number> = new Map();
 	/** Stations whose hybrid inverter has no PV on its own inputs (AC-coupled plant) — no PV states, no PV request. */
 	private readonly inverterWithoutPv: Set<number> = new Set();
 
@@ -561,6 +568,7 @@ class CloudPoller {
 			if (storageBlockOf(data)) {
 				await this.pollEnergyStats(stationId, deviceId, online);
 			}
+			await this.pollIncome(stationId, deviceId);
 			await this.pollWeather(stationId, deviceId);
 			if (this.firmwareCheckDue(stationId)) {
 				await this.pollFirmwareStatus(stationId);
@@ -579,6 +587,10 @@ class CloudPoller {
 			const attempts = this.batterySettingsAttempts.get(stationId) ?? 0;
 			if (hybrids.length > 0 && attempts < BATTERY_SETTINGS_MAX_ATTEMPTS) {
 				void this.readBatterySettings(stationId);
+			}
+			const relayAttempts = this.dryContactAttempts.get(stationId) ?? 0;
+			if (hybrids.length > 0 && relayAttempts < BATTERY_SETTINGS_MAX_ATTEMPTS) {
+				void this.readDryContactSettings(stationId);
 			}
 		}
 
@@ -818,6 +830,7 @@ class CloudPoller {
 		// DTU/inverter versions (slow poll only)
 		if (isSlowPoll && deviceTree.length > 0) {
 			await this.updateDeviceVersions(deviceTree);
+			await this.pollHybridExtras(stationId, deviceTree, online);
 			// Read the grid profile of cloud-only DTUs once (after versions so the micro serial is cached).
 			await this.pollGridProfiles(deviceTree);
 		}
@@ -1378,12 +1391,151 @@ class CloudPoller {
 	 */
 	private async ensureBatteryControls(serials: string[]): Promise<void> {
 		for (const sn of serials) {
-			const fullId = `${sn}.battery.readSettings`;
-			if (this.hybridObjects.has(fullId)) {
+			for (const suffix of ["battery.readSettings", "dryContact.readSettings"]) {
+				const fullId = `${sn}.${suffix}`;
+				if (this.hybridObjects.has(fullId)) {
+					continue;
+				}
+				await this.writeHybridState(sn, suffix, false, 0x00);
+				this.adapter.subscribeStates(fullId);
+			}
+		}
+	}
+
+	/**
+	 * Read the dry-contact (relay) settings from the device and write them to
+	 * `<dtuSerial>.dryContact.*` of the station's hybrid devices. Same rules as the battery
+	 * settings: once per run with a few retries, then on the button; a plant whose relay hardware
+	 * answers none of the known action codes is left alone for the rest of the run.
+	 *
+	 * @param stationId - Cloud station id.
+	 */
+	async readDryContactSettings(stationId: number): Promise<void> {
+		const attempts = (this.dryContactAttempts.get(stationId) ?? 0) + 1;
+		this.dryContactAttempts.set(stationId, attempts);
+		const serials = this.hybridDevicesOf(stationId);
+		try {
+			const result = await this.cloud.readDryContactSettings(stationId);
+			this.dryContactAttempts.set(stationId, BATTERY_SETTINGS_MAX_ATTEMPTS);
+			const values = mapDryContactSettings(result);
+			if (values.length === 0) {
+				this.adapter.log.debug(`Dry-contact settings of station ${stationId}: nothing to read`);
+				return;
+			}
+			for (const sn of serials) {
+				for (const v of values) {
+					await this.writeHybridState(sn, v.suffix, v.val, 0x00);
+				}
+				await this.writeHybridState(sn, "dryContact.settingsUpdated", Date.now(), 0x00);
+			}
+			this.adapter.log.debug(`Dry-contact settings of station ${stationId} read`);
+		} catch (err) {
+			const again =
+				attempts < BATTERY_SETTINGS_MAX_ATTEMPTS
+					? " — will try again on a later poll"
+					: ` — giving up for this adapter run after ${attempts} attempts; press dryContact.readSettings to try again`;
+			this.adapter.log.warn(
+				`Reading the dry-contact settings of station ${stationId} failed: ${errorMessage(err)}${again}`,
+			);
+		} finally {
+			for (const sn of serials) {
+				await this.boundSetState(`${sn}.dryContact.readSettings`, false, true).catch(() => {});
+			}
+		}
+	}
+
+	/**
+	 * Income and cost as the cloud accounts them, for any plant with a tariff. Replaces the
+	 * adapter's own "yield × price" estimate where the cloud has a figure.
+	 *
+	 * @param stationId - Cloud station id.
+	 * @param deviceId - `station-<id>`.
+	 */
+	private async pollIncome(stationId: number, deviceId: string): Promise<void> {
+		let values: ReturnType<typeof mapIncomeStats>;
+		try {
+			values = mapIncomeStats(await this.cloud.getIncomeStats(stationId));
+		} catch (err) {
+			this.adapter.log.debug(`Income stats failed for station ${stationId}: ${errorMessage(err)}`);
+			return;
+		}
+		for (const r of await Promise.allSettled(values.map(v => this.writeStationState(deviceId, v.suffix, v.val)))) {
+			if (r.status === "rejected") {
+				this.adapter.log.warn(`Cloud state write failed: ${errorMessage(r.reason)}`);
+			}
+		}
+	}
+
+	/**
+	 * Slow-poll extras of every hybrid inverter of a station: the cloud's alarm lists (inverter +
+	 * DTU) and the day curves of power, battery power, state of charge and — with PV connected —
+	 * PV power. All pure cloud reads.
+	 *
+	 * @param stationId - Cloud station id.
+	 * @param deviceTree - Device tree from `getDeviceTree()`.
+	 * @param online - Whether the station's last upload is fresh.
+	 */
+	private async pollHybridExtras(stationId: number, deviceTree: CloudTreeNode[], online: boolean): Promise<void> {
+		const q: ioBroker.STATE_QUALITY[keyof ioBroker.STATE_QUALITY] = online ? 0x00 : 0x42;
+		const offsetMs = this.stationTzOffsetMs.get(stationId) ?? 0;
+		const today = new Date(Date.now() + offsetMs).toISOString().substring(0, 10);
+		const dayStart = stationWallClockToEpoch(`${today} 00:00:00`, offsetMs) ?? Date.now();
+		for (const dtu of deviceTree) {
+			const dev = this.devices.get(dtu.sn);
+			if (!dev?.dtuSerial || dev.connection?.connected) {
 				continue;
 			}
-			await this.writeHybridState(sn, "battery.readSettings", false, 0x00);
-			this.adapter.subscribeStates(fullId);
+			const sn = dev.dtuSerial;
+			for (const inv of (dtu.children ?? []).filter(isHybridInverter)) {
+				const writes: Array<Promise<void>> = [];
+				try {
+					const alarms = mapCloudAlarms([
+						await this.cloud.getCloudAlarms(stationId, inv.sn, "flesw"),
+						await this.cloud.getCloudAlarms(stationId, dtu.sn, "fldw"),
+					]);
+					writes.push(this.writeHybridState(sn, "alarms.cloudActiveCount", alarms.count, q));
+					writes.push(this.writeHybridState(sn, "alarms.cloudActiveJson", alarms.json, q));
+
+					const battery = (inv.children ?? []).find(child => child.type === CLOUD_DEV_TYPE_BATTERY);
+					let stepWritten = false;
+					for (const spec of DAY_CURVES) {
+						if (spec.needsPv && this.inverterWithoutPv.has(stationId)) {
+							continue;
+						}
+						// The battery's curve is addressed by the INVERTER it hangs on (verified live: the
+						// battery's own id/sn returns nothing), so the device list is always the inverter.
+						if ((spec.devType === CLOUD_DEV_TYPE_BATTERY && !battery) || !inv.id || !inv.sn) {
+							continue;
+						}
+						const curve = mapDayCurve(
+							await this.cloud.getIndicatorDayCurve(
+								stationId,
+								spec.devType,
+								[{ id: inv.id, sn: inv.sn }],
+								spec.indicator,
+								today,
+							),
+							dayStart,
+						);
+						if (!curve) {
+							continue;
+						}
+						writes.push(this.writeHybridState(sn, spec.suffix, curve.json, q));
+						if (!stepWritten) {
+							stepWritten = true;
+							writes.push(this.writeHybridState(sn, "history.startTime", curve.startTime, q));
+							writes.push(this.writeHybridState(sn, "history.stepTime", curve.stepTime, q));
+						}
+					}
+				} catch (err) {
+					this.adapter.log.debug(`Hybrid extras failed for ${anonymize(sn, "dtu")}: ${errorMessage(err)}`);
+				}
+				for (const r of await Promise.allSettled(writes)) {
+					if (r.status === "rejected") {
+						this.adapter.log.warn(`Cloud state write failed: ${errorMessage(r.reason)}`);
+					}
+				}
+			}
 		}
 	}
 

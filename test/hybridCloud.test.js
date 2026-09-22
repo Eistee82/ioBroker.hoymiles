@@ -19,6 +19,12 @@ import {
 	inverterHasPv,
 	ENERGY_STATS_MODES,
 	mapEnergyStats,
+	mapIncomeStats,
+	mapCloudAlarms,
+	SETTING_ACTIONS_DRY_CONTACT_READ,
+	mapDryContactSettings,
+	DAY_CURVES,
+	mapDayCurve,
 } from "../build/lib/hybridCloud.js";
 import { hybridStateMap, stationIndicatorStateMap, stationStates, states } from "../build/lib/stateDefinitions.js";
 
@@ -869,5 +875,208 @@ describe("hybridCloud – mapBatterySettings", function () {
 				assert.strictEqual(typeof v.val, def.type, `${v.suffix}: ${typeof v.val}`);
 			}
 		}
+	});
+});
+
+describe("hybridCloud – mapIncomeStats", function () {
+	// Real recorded result of /eps/api/0/record/stat_a.
+	const RESULT = {
+		sid: 1,
+		unit: "EUR(€)",
+		today_profit: 0.034,
+		monthly_profit: 93.574,
+		yearly_profit: 1235.754,
+		total_profit: 2576.398,
+		today_spend: 1.632,
+		monthly_spend: 68.476,
+		yearly_spend: 1008.712,
+		total_spend: 2381.564,
+	};
+
+	it("maps the recorded result, rounded to 2 decimals", function () {
+		const byId = Object.fromEntries(mapIncomeStats(RESULT).map(v => [v.suffix, v.val]));
+		assert.strictEqual(byId["grid.todayIncome"], 0.03);
+		assert.strictEqual(byId["grid.monthIncome"], 93.57);
+		assert.strictEqual(byId["grid.yearIncome"], 1235.75);
+		assert.strictEqual(byId["grid.totalIncome"], 2576.4);
+		assert.strictEqual(byId["grid.todayCost"], 1.63);
+		assert.strictEqual(byId["grid.monthCost"], 68.48);
+		assert.strictEqual(byId["grid.yearCost"], 1008.71);
+		assert.strictEqual(byId["grid.totalCost"], 2381.56);
+	});
+
+	it("ignores non-numeric fields (sid, unit) without throwing", function () {
+		const ids = mapIncomeStats(RESULT).map(v => v.suffix);
+		assert.ok(!ids.some(id => id.includes("sid")));
+		assert.ok(!ids.some(id => id.includes("unit")));
+	});
+
+	it("returns [] for null or undefined", function () {
+		assert.deepStrictEqual(mapIncomeStats(null), []);
+		assert.deepStrictEqual(mapIncomeStats(undefined), []);
+	});
+
+	it("skips a non-numeric value for one key, keeping the rest", function () {
+		const mapped = mapIncomeStats({ ...RESULT, today_profit: "N/A" });
+		const byId = Object.fromEntries(mapped.map(v => [v.suffix, v.val]));
+		assert.strictEqual(byId["grid.todayIncome"], undefined);
+		assert.strictEqual(byId["grid.monthIncome"], 93.57);
+	});
+
+	it("only targets states that exist, with the value type the target state declares", function () {
+		const defs = new Map(stationStates.map(s => [s.id, s]));
+		for (const v of mapIncomeStats(RESULT)) {
+			const def = defs.get(v.suffix);
+			assert.ok(def, `${v.suffix} has no state definition`);
+			assert.strictEqual(typeof v.val, def.type, `${v.suffix}: ${typeof v.val}`);
+		}
+	});
+});
+
+describe("hybridCloud – mapCloudAlarms", function () {
+	const LISTS = [
+		{
+			total: 1,
+			list: [
+				{
+					name: "Inverter123",
+					sn: "INV1",
+					warns: [{ code: 209, time: "2026-09-20 10:00:00", pre: "L3", wd1: 1, wd2: 0, wd3: 0, wd4: 0 }],
+				},
+			],
+		},
+		{
+			total: 1,
+			list: [{ name: "DTU1", sn: "DTU1", warns: [{ code: 5, time: "2026-09-20 09:00:00", wd1: 2 }] }],
+		},
+	];
+
+	it("counts every warning across all lists and builds a flat JSON array with code/time/pre/source/data", function () {
+		const mapped = mapCloudAlarms(LISTS);
+		assert.strictEqual(mapped.count, 2);
+		const alarms = JSON.parse(mapped.json);
+		assert.strictEqual(alarms.length, 2);
+		assert.deepStrictEqual(alarms[0], {
+			code: 209,
+			time: "2026-09-20 10:00:00",
+			pre: "L3",
+			source: "Inverter123",
+			data: [1, 0, 0, 0],
+		});
+		// No "pre" in the source warn at all — JSON.stringify drops an undefined object property
+		// (unlike an array element, which becomes null; that still shows up in "data" below).
+		assert.deepStrictEqual(alarms[1], {
+			code: 5,
+			time: "2026-09-20 09:00:00",
+			source: "DTU1",
+			data: [2, null, null, null],
+		});
+	});
+
+	it("returns count:0 and json:'[]' for an empty input", function () {
+		assert.deepStrictEqual(mapCloudAlarms([]), { count: 0, json: "[]" });
+	});
+
+	it("tolerates null lists, null entries, null/missing warns, and malformed warn entries", function () {
+		const mapped = mapCloudAlarms([
+			null,
+			undefined,
+			{ list: null },
+			{ list: [null, { warns: null }, { warns: [null, "not-an-object", { code: 1 }] }] },
+		]);
+		assert.strictEqual(mapped.count, 1);
+		// time/pre/source are all undefined here and get dropped by JSON.stringify.
+		assert.deepStrictEqual(JSON.parse(mapped.json), [{ code: 1, data: [null, null, null, null] }]);
+	});
+});
+
+describe("hybridCloud – SETTING_ACTIONS_DRY_CONTACT_READ / mapDryContactSettings", function () {
+	it("tries 1014 then 1024", function () {
+		assert.deepStrictEqual(SETTING_ACTIONS_DRY_CONTACT_READ, [1014, 1024]);
+	});
+
+	// Real recorded result: mode 0 is a legitimate answer (relay off), not a missing value.
+	const RESULT = { mode: 0, data: { k_1: {}, k_3: { threshold: 50 }, k_2: { mode: 2, threshold: 80 } } };
+
+	it("maps the recorded result: mode 0 is valid, settingsJson is the whole result", function () {
+		const values = mapDryContactSettings(RESULT);
+		const byId = Object.fromEntries(values.map(v => [v.suffix, v.val]));
+		assert.strictEqual(byId["dryContact.mode"], 0);
+		assert.strictEqual(byId["dryContact.settingsJson"], JSON.stringify(RESULT));
+	});
+
+	it("returns [] when mode is missing, null, undefined, or non-numeric", function () {
+		assert.deepStrictEqual(mapDryContactSettings(null), []);
+		assert.deepStrictEqual(mapDryContactSettings(undefined), []);
+		assert.deepStrictEqual(mapDryContactSettings({}), []);
+		assert.deepStrictEqual(mapDryContactSettings({ mode: "x" }), []);
+	});
+
+	it("only targets states that exist, with the value type the target state declares", function () {
+		const defs = new Map([...states.map(s => [s.id, s]), ...hybridStateMap]);
+		for (const v of mapDryContactSettings(RESULT)) {
+			const def = defs.get(v.suffix);
+			assert.ok(def, `${v.suffix} has no state definition`);
+			assert.strictEqual(typeof v.val, def.type, `${v.suffix}: ${typeof v.val}`);
+		}
+	});
+});
+
+describe("hybridCloud – DAY_CURVES", function () {
+	it("has the 4 documented specs (inverter power/battery power/PV power, battery soc)", function () {
+		assert.deepStrictEqual(DAY_CURVES, [
+			{ devType: CLOUD_DEV_TYPE_HYBRID_INVERTER, indicator: "p_total", suffix: "history.powerJson" },
+			{ devType: CLOUD_DEV_TYPE_HYBRID_INVERTER, indicator: "inv_pbat", suffix: "history.batteryPowerJson" },
+			{
+				devType: CLOUD_DEV_TYPE_HYBRID_INVERTER,
+				indicator: "pv_p_total",
+				suffix: "history.pvPowerJson",
+				needsPv: true,
+			},
+			{ devType: CLOUD_DEV_TYPE_BATTERY, indicator: "bms_soc", suffix: "history.socJson" },
+		]);
+	});
+
+	it("only targets states that exist, and every suffix lives under the history channel", function () {
+		for (const spec of DAY_CURVES) {
+			assert.ok(hybridStateMap.has(spec.suffix), `${spec.suffix} has no state definition`);
+			assert.ok(spec.suffix.startsWith("history."), `${spec.suffix} does not live under history.*`);
+		}
+	});
+});
+
+describe("hybridCloud – mapDayCurve", function () {
+	const DAY_START = Date.UTC(2026, 8, 22, 0, 0, 0); // station-local midnight, as an epoch
+
+	it("converts minutes/values into json (rounded to 1 decimal), startTime and stepTime", function () {
+		const mapped = mapDayCurve({ minutes: [0, 5, 10], values: [100.123, 150.456, 120] }, DAY_START);
+		assert.deepStrictEqual(mapped, {
+			json: JSON.stringify([100.1, 150.5, 120]),
+			startTime: DAY_START,
+			stepTime: 300,
+		});
+	});
+
+	it("offsets startTime by the first sample's minute-of-day", function () {
+		const mapped = mapDayCurve({ minutes: [10, 15], values: [1, 2] }, DAY_START);
+		assert.strictEqual(mapped.startTime, DAY_START + 10 * 60_000);
+	});
+
+	it("defaults the step to 5 minutes when there is only a single sample", function () {
+		const mapped = mapDayCurve({ minutes: [10], values: [55] }, DAY_START);
+		assert.strictEqual(mapped.stepTime, 300);
+		assert.strictEqual(mapped.startTime, DAY_START + 10 * 60_000);
+	});
+
+	it("floors the step at 60s (1 minute) even if two samples share the same minute", function () {
+		const mapped = mapDayCurve({ minutes: [10, 10, 20], values: [1, 2, 3] }, DAY_START);
+		assert.strictEqual(mapped.stepTime, 60);
+	});
+
+	it("returns null for a missing, empty, or length-mismatched curve", function () {
+		assert.strictEqual(mapDayCurve(null, DAY_START), null);
+		assert.strictEqual(mapDayCurve(undefined, DAY_START), null);
+		assert.strictEqual(mapDayCurve({ minutes: [], values: [] }, DAY_START), null);
+		assert.strictEqual(mapDayCurve({ minutes: [0, 5], values: [1] }, DAY_START), null);
 	});
 });

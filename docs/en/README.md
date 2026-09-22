@@ -394,8 +394,8 @@ The adapter determines how many there are, in this order:
 | `grid.currency` | string | — | Currency code |
 | `grid.isBalance` | boolean | — | Zero export active |
 | `grid.isReflux` | boolean | — | Feed-in active |
-| `grid.todayIncome` | number | — | Today's income |
-| `grid.totalIncome` | number | — | Total income |
+| `grid.todayIncome` / `monthIncome` / `yearIncome` / `totalIncome` | number | — | Income today / this month / this year / in total. Where the cloud keeps its own accounting (plants with a tariff), its figures are used; otherwise today/total are estimated as yield × price |
+| `grid.todayCost` / `monthCost` / `yearCost` / `totalCost` | number | — | Electricity cost today / this month / this year / in total, from the cloud's accounting — plants with a tariff only |
 
 ### `station-<id>.info.*` — Station Information (cloud)
 
@@ -699,6 +699,12 @@ Created only when the cloud reports a hybrid inverter below the DTU; all of them
 | `battery.reserveSoc` | number | % | Reserved state of charge of the active working mode (from the settings read) |
 | `battery.settingsJson` | string (JSON) | — | The complete settings as the device reports them: active mode plus the parameters of every mode (`k_1`…`k_8`: reserve SoC, power limits, time windows, tariffs). Passed on untouched — the parameters carry no units and differ by mode |
 | `battery.settingsUpdated` | number | — | When the settings were last read |
+| `dryContact.readSettings` | boolean (button) | — | Reads the dry-contact (relay) settings from the device — generator start/stop thresholds, load-control windows, SoC limits. **Reads only**; like the battery settings it travels down to the device, so it runs once per adapter start and then on this button. A plant whose relay hardware answers none of the known action codes is left alone |
+| `dryContact.mode` | number | — | Relay mode (0 = off) |
+| `dryContact.settingsJson` | string (JSON) | — | The complete relay settings as the device reports them, untouched |
+| `dryContact.settingsUpdated` | number | — | When the relay settings were last read |
+| `alarms.cloudActiveCount` / `alarms.cloudActiveJson` | number / string (JSON) | — | Active alarms of the inverter and its DTU as the cloud lists them (`code`, `time`, `source`, raw data words), refreshed on the slow poll |
+| `history.powerJson` / `batteryPowerJson` / `socJson` / `pvPowerJson` | string (JSON) | W / W / % / W | Today's curves of AC power, battery power, state of charge and — with PV on the inverter — PV power, one value per 5 minutes; `history.startTime` (ms) and `history.stepTime` (s) as for the local curve. Refreshed on the slow poll |
 | `battery.maxChargeCurrent` / `maxDischargeCurrent` | number | A | Current limits the battery allows |
 | `battery.chargeCutoffVoltage` / `dischargeCutoffVoltage` | number | V | Voltage limits of the battery |
 | `battery.cellTempMax` / `cellTempMin` | number | °C | Hottest / coldest cell |

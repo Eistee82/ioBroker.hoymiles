@@ -1,5 +1,6 @@
 import { postJson, postBinary, HttpError } from "./httpClient.js";
-import { parseChartResponse } from "./chartParser.js";
+import { decodeIndicatorDayCurve, parseChartResponse } from "./chartParser.js";
+import type { IndicatorDayCurve } from "./chartParser.js";
 import {
 	TOKEN_MAX_AGE_MS,
 	ENSURE_TOKEN_TIMEOUT_MS,
@@ -23,8 +24,15 @@ import {
 	APP_TID,
 } from "./constants.js";
 import type { CloudGridProfileParam } from "./gridProfile.js";
-import { SETTING_ACTION_BATTERY_MODE_READ } from "./hybridCloud.js";
-import type { BatterySettingsResult, EnergyStatsResult, RealIndicatorData } from "./hybridCloud.js";
+import { SETTING_ACTION_BATTERY_MODE_READ, SETTING_ACTIONS_DRY_CONTACT_READ } from "./hybridCloud.js";
+import type {
+	BatterySettingsResult,
+	CloudAlarmList,
+	DryContactResult,
+	EnergyStatsResult,
+	IncomeStats,
+	RealIndicatorData,
+} from "./hybridCloud.js";
 import {
 	errorMessage,
 	withTimeout,
@@ -1210,6 +1218,124 @@ class CloudConnection {
 			this.log(`[diag] Energy stats (mode ${mode}) error: ${errorMessage(err)}`);
 			return null;
 		}
+	}
+
+	/**
+	 * Income and cost as the cloud accounts them. Endpoint: /eps/api/0/record/stat_a — a pure cloud
+	 * read that works for any plant with a tariff.
+	 *
+	 * @param stationId - Cloud station ID.
+	 */
+	async getIncomeStats(stationId: number): Promise<IncomeStats | null> {
+		this.assertStationId(stationId);
+		await this.ensureToken();
+		try {
+			const result = await this._post<IncomeStats>("/eps/api/0/record/stat_a", { sid: stationId });
+			this.logResponseSample("income-stats", result);
+			return result.status === "0" ? (result.data ?? null) : null;
+		} catch (err) {
+			this.log(`[diag] Income stats error: ${errorMessage(err)}`);
+			return null;
+		}
+	}
+
+	/**
+	 * Active alarms of one device as the cloud lists them. Endpoint family /monitor/api/0/ng/dev/…:
+	 * `flesw` for a storage inverter, `fldw` for a DTU (`flmw` microinverter, `flmew` meter). Pure
+	 * cloud read; unknown on the home profile.
+	 *
+	 * @param stationId - Cloud station ID.
+	 * @param sn - Device serial.
+	 * @param kind - Endpoint suffix, e.g. `flesw`.
+	 */
+	async getCloudAlarms(stationId: number, sn: string, kind: string): Promise<CloudAlarmList | null> {
+		this.assertStationId(stationId);
+		await this.ensureToken();
+		if (this.profile === "home" || !sn) {
+			return null;
+		}
+		try {
+			const result = await this._post<CloudAlarmList>(`/monitor/api/0/ng/dev/${kind}`, {
+				sid: stationId,
+				sn,
+				page: 1,
+				page_size: 50,
+			});
+			this.logResponseSample(`alarms-${kind}`, result);
+			return result.status === "0" ? (result.data ?? null) : null;
+		} catch (err) {
+			this.log(`[diag] Cloud alarms (${kind}) error: ${errorMessage(err)}`);
+			return null;
+		}
+	}
+
+	/**
+	 * Day curve of one indicator of a storage-plant device. Endpoint:
+	 * /pvm-data/api/0/indicators/data/cid_g_a (protobuf). Pure cloud read; unknown on the home profile.
+	 *
+	 * @param stationId - Cloud station ID.
+	 * @param devType - Cloud device type (6 inverter, 10 battery).
+	 * @param devList - Devices, `[{id, sn}]`.
+	 * @param indicator - Indicator key, e.g. `p_total`.
+	 * @param date - Station-local day, `YYYY-MM-DD`.
+	 */
+	async getIndicatorDayCurve(
+		stationId: number,
+		devType: number,
+		devList: Array<{ id: number; sn: string }>,
+		indicator: string,
+		date: string,
+	): Promise<IndicatorDayCurve | null> {
+		this.assertStationId(stationId);
+		await this.ensureToken();
+		if (this.profile === "home") {
+			return null;
+		}
+		try {
+			const rawBuf = await this._postBinary("/pvm-data/api/0/indicators/data/cid_g_a", {
+				sid: stationId,
+				dev_type: devType,
+				date,
+				dev_list: devList,
+				ind_list: [indicator],
+				pb_ver: 1,
+			});
+			return decodeIndicatorDayCurve(rawBuf);
+		} catch (err) {
+			this.log(`[diag] Day curve (${indicator}) error: ${errorMessage(err)}`);
+			return null;
+		}
+	}
+
+	/**
+	 * Read the dry-contact (relay) settings of a storage plant from the device. Like the battery
+	 * settings a request that travels down to the device; which action code a plant answers
+	 * depends on its relay hardware, so the codes are tried in turn while the cloud says
+	 * "Not Supported". Only reads.
+	 *
+	 * @param stationId - Cloud station ID.
+	 * @returns The result, or null when no code is supported.
+	 */
+	async readDryContactSettings(stationId: number): Promise<DryContactResult | null> {
+		this.assertStationId(stationId);
+		let lastError: unknown = null;
+		for (const action of SETTING_ACTIONS_DRY_CONTACT_READ) {
+			try {
+				const result = await this.runDeviceTask<{ code?: number; data?: DryContactResult }>(
+					PVM_CTL_SETTING_READ_PATH,
+					{ action, data: { sid: stationId } },
+					PVM_CTL_SETTING_STATUS_PATH,
+				);
+				return result.data ?? {};
+			} catch (err) {
+				if (!/not supported/i.test(errorMessage(err))) {
+					throw err;
+				}
+				lastError = err;
+			}
+		}
+		this.log(`[diag] Dry-contact read: no supported action code (${errorMessage(lastError)})`);
+		return null;
 	}
 
 	/**

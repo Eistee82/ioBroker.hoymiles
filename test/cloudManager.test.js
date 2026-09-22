@@ -324,6 +324,43 @@ describe("CloudManager – event delegation", function () {
 		assert.strictEqual(typeof manager.handleStationStateChange, "undefined");
 	});
 
+	it("readDryContactSettings does not throw when no poller exists yet", async function () {
+		const manager = new CloudManager({
+			adapter: makeMockAdapter(),
+			protobuf: makeMockProtobuf(),
+			cloudUser: "test@example.com",
+			cloudPassword: "password123",
+			enableLocal: false,
+			enableCloudRelay: false,
+			dataInterval: 5,
+			slowPollFactor: 6,
+			localContexts: [],
+		});
+		await assert.doesNotReject(() => manager.readDryContactSettings(1));
+	});
+
+	it("readDryContactSettings delegates to the cloud poller with the same station id", async function () {
+		const manager = new CloudManager({
+			adapter: makeMockAdapter(),
+			protobuf: makeMockProtobuf(),
+			cloudUser: "test@example.com",
+			cloudPassword: "password123",
+			enableLocal: false,
+			enableCloudRelay: false,
+			dataInterval: 5,
+			slowPollFactor: 6,
+			localContexts: [],
+		});
+		const calls = [];
+		manager.cloudPoller = {
+			readDryContactSettings: async stationId => {
+				calls.push(stationId);
+			},
+		};
+		await manager.readDryContactSettings(42);
+		assert.deepStrictEqual(calls, [42]);
+	});
+
 	it("onLocalDisconnected does not throw on fresh manager", function () {
 		const manager = new CloudManager({
 			adapter: makeMockAdapter(),

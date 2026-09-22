@@ -364,4 +364,74 @@ export function mapEnergyStats(period, result) {
     }
     return out;
 }
+export function mapIncomeStats(result) {
+    if (!result || typeof result !== "object") {
+        return [];
+    }
+    const out = [];
+    for (const [key, suffix] of [
+        ["today_profit", "grid.todayIncome"],
+        ["monthly_profit", "grid.monthIncome"],
+        ["yearly_profit", "grid.yearIncome"],
+        ["total_profit", "grid.totalIncome"],
+        ["today_spend", "grid.todayCost"],
+        ["monthly_spend", "grid.monthCost"],
+        ["yearly_spend", "grid.yearCost"],
+        ["total_spend", "grid.totalCost"],
+    ]) {
+        const val = toNumber(result[key]);
+        if (val !== null) {
+            out.push({ suffix, val: Math.round(val * 100) / 100 });
+        }
+    }
+    return out;
+}
+export function mapCloudAlarms(lists) {
+    const alarms = [];
+    for (const list of lists) {
+        for (const entry of list?.list ?? []) {
+            for (const warn of entry?.warns ?? []) {
+                if (!warn || typeof warn !== "object") {
+                    continue;
+                }
+                alarms.push({
+                    code: warn.code,
+                    time: warn.time,
+                    pre: warn.pre,
+                    source: entry?.name,
+                    data: [warn.wd1, warn.wd2, warn.wd3, warn.wd4],
+                });
+            }
+        }
+    }
+    return { count: alarms.length, json: JSON.stringify(alarms) };
+}
+export const SETTING_ACTIONS_DRY_CONTACT_READ = [1014, 1024];
+export function mapDryContactSettings(result) {
+    const mode = toNumber(result?.mode);
+    if (!result || mode === null) {
+        return [];
+    }
+    return [
+        { suffix: "dryContact.mode", val: mode },
+        { suffix: "dryContact.settingsJson", val: JSON.stringify(result) },
+    ];
+}
+export const DAY_CURVES = [
+    { devType: CLOUD_DEV_TYPE_HYBRID_INVERTER, indicator: "p_total", suffix: "history.powerJson" },
+    { devType: CLOUD_DEV_TYPE_HYBRID_INVERTER, indicator: "inv_pbat", suffix: "history.batteryPowerJson" },
+    { devType: CLOUD_DEV_TYPE_HYBRID_INVERTER, indicator: "pv_p_total", suffix: "history.pvPowerJson", needsPv: true },
+    { devType: CLOUD_DEV_TYPE_BATTERY, indicator: "bms_soc", suffix: "history.socJson" },
+];
+export function mapDayCurve(curve, dayStartEpochMs) {
+    if (!curve || curve.minutes.length === 0 || curve.minutes.length !== curve.values.length) {
+        return null;
+    }
+    const stepMinutes = curve.minutes.length > 1 ? curve.minutes[1] - curve.minutes[0] : 5;
+    return {
+        json: JSON.stringify(curve.values.map(v => Math.round(v * 10) / 10)),
+        startTime: dayStartEpochMs + curve.minutes[0] * 60_000,
+        stepTime: Math.max(stepMinutes, 1) * 60,
+    };
+}
 //# sourceMappingURL=hybridCloud.js.map

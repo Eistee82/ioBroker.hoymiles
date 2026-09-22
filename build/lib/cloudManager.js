@@ -95,6 +95,9 @@ class CloudManager {
     async readBatterySettings(stationId) {
         await this.cloudPoller?.readBatterySettings(stationId);
     }
+    async readDryContactSettings(stationId) {
+        await this.cloudPoller?.readDryContactSettings(stationId);
+    }
     async sendDeviceCommand(devSn, dtuSn, action, devType) {
         await this.cloud.sendDeviceCommand(action, devSn, dtuSn, devType);
     }

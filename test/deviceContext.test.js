@@ -3198,6 +3198,7 @@ describe("deviceContext – handleStateChange", function () {
 				cloudCalls.push({ devSn, dtuSn, action, devType });
 			},
 			readBatterySettings: async () => {},
+			readDryContactSettings: async () => {},
 			...overrides,
 		};
 		const ctx = new DeviceContext({
@@ -3348,6 +3349,85 @@ describe("deviceContext – handleStateChange", function () {
 		assert.deepStrictEqual(readCalls, []);
 		assert.strictEqual(cloudCalls.length, 0);
 		assert.deepStrictEqual(stateWrites, [["DTU9999.battery.readSettings", false, true]]);
+	});
+
+	it("dryContact.readSettings with a truthy value and a known station calls adapter.readDryContactSettings(cloudStationId), never a command path", async function () {
+		const readCalls = [];
+		const { ctx, cloudCalls, stateWrites } = makeCloudFallbackCtx({
+			readDryContactSettings: async stationId => {
+				readCalls.push(stationId);
+			},
+		});
+		await ctx.initFromSerial("DTU9999");
+		ctx.cloudStationId = 42;
+
+		await ctx.handleStateChange("dryContact.readSettings", button(true));
+
+		assert.deepStrictEqual(readCalls, [42]);
+		assert.strictEqual(cloudCalls.length, 0, "must never reach sendCloudDeviceCommand");
+		// The poller (via readDryContactSettings) releases the button, not handleStateChange itself.
+		assert.deepStrictEqual(
+			stateWrites.filter(([id]) => id.endsWith(".dryContact.readSettings")),
+			[],
+		);
+	});
+
+	it("dryContact.readSettings with a falsy value just acks false, no read", async function () {
+		const readCalls = [];
+		const { ctx, cloudCalls, stateWrites } = makeCloudFallbackCtx({
+			readDryContactSettings: async stationId => {
+				readCalls.push(stationId);
+			},
+		});
+		await ctx.initFromSerial("DTU9999");
+		ctx.cloudStationId = 42;
+		stateWrites.length = 0; // discard the initFromSerial noise (gridProfile defaults etc.)
+
+		await ctx.handleStateChange("dryContact.readSettings", button(false));
+
+		assert.deepStrictEqual(readCalls, []);
+		assert.strictEqual(cloudCalls.length, 0);
+		assert.deepStrictEqual(stateWrites, [["DTU9999.dryContact.readSettings", false, true]]);
+	});
+
+	it("dryContact.readSettings with a truthy value but no known cloudStationId just acks false, no read, no command", async function () {
+		const readCalls = [];
+		const { ctx, cloudCalls, stateWrites } = makeCloudFallbackCtx({
+			readDryContactSettings: async stationId => {
+				readCalls.push(stationId);
+			},
+		});
+		await ctx.initFromSerial("DTU9999"); // cloudStationId stays null
+		stateWrites.length = 0;
+
+		await ctx.handleStateChange("dryContact.readSettings", button(true));
+
+		assert.deepStrictEqual(readCalls, []);
+		assert.strictEqual(cloudCalls.length, 0);
+		assert.deepStrictEqual(stateWrites, [["DTU9999.dryContact.readSettings", false, true]]);
+	});
+
+	it("battery.readSettings and dryContact.readSettings never cross-trigger each other", async function () {
+		const batteryReads = [];
+		const dryReads = [];
+		const { ctx } = makeCloudFallbackCtx({
+			readBatterySettings: async stationId => {
+				batteryReads.push(stationId);
+			},
+			readDryContactSettings: async stationId => {
+				dryReads.push(stationId);
+			},
+		});
+		await ctx.initFromSerial("DTU9999");
+		ctx.cloudStationId = 42;
+
+		await ctx.handleStateChange("battery.readSettings", button(true));
+		assert.deepStrictEqual(batteryReads, [42]);
+		assert.deepStrictEqual(dryReads, []);
+
+		await ctx.handleStateChange("dryContact.readSettings", button(true));
+		assert.deepStrictEqual(batteryReads, [42]);
+		assert.deepStrictEqual(dryReads, [42]);
 	});
 });
 

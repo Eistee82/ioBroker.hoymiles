@@ -139,6 +139,15 @@ class CloudManager {
 	}
 
 	/**
+	 * Read the dry-contact (relay) settings of a storage plant from the device (read-only, on demand).
+	 *
+	 * @param stationId - Cloud station id.
+	 */
+	async readDryContactSettings(stationId: number): Promise<void> {
+		await this.cloudPoller?.readDryContactSettings(stationId);
+	}
+
+	/**
 	 * Send a device control command over the cloud connection. Used as the fallback path for
 	 * writable command states on cloud-only devices (no local TCP link).
 	 *

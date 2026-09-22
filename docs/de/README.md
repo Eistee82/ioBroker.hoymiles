@@ -397,8 +397,8 @@ Die Anzahl ermittelt der Adapter in dieser Reihenfolge:
 | `grid.currency` | string | — | Währungscode |
 | `grid.isBalance` | boolean | — | Nulleinspeisung aktiv |
 | `grid.isReflux` | boolean | — | Rückspeisung aktiv |
-| `grid.todayIncome` | number | — | Tagesertrag |
-| `grid.totalIncome` | number | — | Gesamtertrag |
+| `grid.todayIncome` / `monthIncome` / `yearIncome` / `totalIncome` | number | — | Ertrag heute / diesen Monat / dieses Jahr / gesamt. Wo die Cloud eine eigene Abrechnung führt (Anlagen mit Tarif), werden deren Zahlen verwendet; sonst werden heute/gesamt als Ertrag × Preis geschätzt |
+| `grid.todayCost` / `monthCost` / `yearCost` / `totalCost` | number | — | Stromkosten heute / diesen Monat / dieses Jahr / gesamt aus der Abrechnung der Cloud — nur bei Anlagen mit Tarif |
 
 ### `station-<id>.info.*` — Stationsinformation (Cloud)
 
@@ -704,6 +704,12 @@ Wird nur angelegt, wenn die Cloud unter der DTU einen Hybrid-Wechselrichter meld
 | `battery.reserveSoc` | number | % | Reservierter Ladezustand des aktiven Betriebsmodus (aus dem Einstellungs-Abruf) |
 | `battery.settingsJson` | string (JSON) | — | Die kompletten Einstellungen, wie das Gerät sie meldet: aktiver Modus plus die Parameter aller Modi (`k_1`…`k_8`: Reserve-SoC, Leistungsgrenzen, Zeitfenster, Tarife). Unverändert durchgereicht — die Parameter tragen keine Einheiten und unterscheiden sich je Modus |
 | `battery.settingsUpdated` | number | — | Zeitpunkt des letzten Einstellungs-Abrufs |
+| `dryContact.readSettings` | boolean (Button) | — | Liest die Trockenkontakt-(Relais-)Einstellungen vom Gerät — Generator-Start/Stopp-Schwellen, Lastregelungs-Zeitfenster, SoC-Grenzen. **Liest nur**; geht wie die Batterie-Einstellungen bis zum Gerät hinunter, läuft deshalb einmal pro Adapterstart und danach über diesen Button. Eine Anlage, deren Relais-Hardware keinen der bekannten Aktionscodes beantwortet, wird in Ruhe gelassen |
+| `dryContact.mode` | number | — | Relaismodus (0 = aus) |
+| `dryContact.settingsJson` | string (JSON) | — | Die kompletten Relais-Einstellungen, wie das Gerät sie meldet, unverändert |
+| `dryContact.settingsUpdated` | number | — | Zeitpunkt des letzten Relais-Abrufs |
+| `alarms.cloudActiveCount` / `alarms.cloudActiveJson` | number / string (JSON) | — | Aktive Alarme des Wechselrichters und seiner DTU, wie die Cloud sie listet (`code`, `time`, `source`, Rohdatenworte), beim Slow-Poll aktualisiert |
+| `history.powerJson` / `batteryPowerJson` / `socJson` / `pvPowerJson` | string (JSON) | W / W / % / W | Tageskurven von AC-Leistung, Batterieleistung, Ladezustand und — bei PV am Wechselrichter — PV-Leistung, ein Wert je 5 Minuten; `history.startTime` (ms) und `history.stepTime` (s) wie bei der lokalen Kurve. Beim Slow-Poll aktualisiert |
 | `battery.maxChargeCurrent` / `maxDischargeCurrent` | number | A | Stromgrenzen, die die Batterie zulässt |
 | `battery.chargeCutoffVoltage` / `dischargeCutoffVoltage` | number | V | Spannungsgrenzen der Batterie |
 | `battery.cellTempMax` / `cellTempMin` | number | °C | Wärmste / kälteste Zelle |

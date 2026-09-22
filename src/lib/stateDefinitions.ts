@@ -122,6 +122,8 @@ export const meterMeasurementStates: StateDefinition[] = [
 export const hybridChannels: ChannelDefinition[] = [
 	{ id: "eps", name: { en: "Backup (EPS) output", de: "Notstrom-Ausgang (EPS)" }, source: "cloud" },
 	{ id: "battery", name: { en: "Battery", de: "Batterie" }, source: "cloud" },
+	{ id: "dryContact", name: { en: "Dry contacts (relay)", de: "Trockenkontakte (Relais)" }, source: "cloud" },
+	{ id: "history", name: { en: "Power history", de: "Leistungsverlauf" }, source: "cloud" },
 ];
 
 /**
@@ -312,6 +314,35 @@ export const batterySettingStates: StateDefinition[] = [
 	}),
 ];
 hybridStates.push(...batterySettingStates);
+
+/**
+ * Dry-contact (relay) settings, cloud alarm lists and the day curves of a storage plant. Created on
+ * demand like the rest of the hybrid states; `dryContact.readSettings` only reads.
+ */
+export const hybridExtraStates: StateDefinition[] = [
+	n("dryContact.mode", "Relay mode", "Relaismodus", "value", "", { source: "cloud" }),
+	s("dryContact.settingsJson", "Relay settings (JSON)", "Relais-Einstellungen (JSON)", "json", { source: "cloud" }),
+	n("dryContact.settingsUpdated", "Settings last read", "Einstellungen zuletzt gelesen", "value.time", "", {
+		source: "cloud",
+	}),
+	b("dryContact.readSettings", "Read relay settings", "Relais-Einstellungen lesen", "button", {
+		source: "cloud",
+		write: true,
+	}),
+	n("alarms.cloudActiveCount", "Active alarms (cloud)", "Aktive Alarme (Cloud)", "value", "", { source: "cloud" }),
+	s("alarms.cloudActiveJson", "Active alarms (cloud, JSON)", "Aktive Alarme (Cloud, JSON)", "json", {
+		source: "cloud",
+	}),
+	s("history.powerJson", "Power history (JSON)", "Leistungsverlauf (JSON)", "json", { source: "cloud" }),
+	s("history.batteryPowerJson", "Battery power history (JSON)", "Batterieleistungsverlauf (JSON)", "json", {
+		source: "cloud",
+	}),
+	s("history.pvPowerJson", "PV power history (JSON)", "PV-Leistungsverlauf (JSON)", "json", { source: "cloud" }),
+	s("history.socJson", "State of charge history (JSON)", "Ladezustandsverlauf (JSON)", "json", { source: "cloud" }),
+	n("history.startTime", "First sample time", "Zeit des ersten Werts", "value.time", "", { source: "cloud" }),
+	n("history.stepTime", "Step between samples", "Abstand der Werte", "value", "s", { source: "cloud" }),
+];
+hybridStates.push(...hybridExtraStates);
 
 /** Lookup map (suffix → definition) for the on-demand hybrid states. */
 export const hybridStateMap: Map<string, StateDefinition> = new Map(hybridStates.map(d => [d.id, d]));
@@ -708,6 +739,13 @@ const stationStates: StateDefinition[] = [
 	s("grid.currency", "Currency", "Währung", "text"),
 	n("grid.todayIncome", "Today income", "Tagesertrag", "value", ""),
 	n("grid.totalIncome", "Total income", "Gesamtertrag", "value", ""),
+	// From the cloud's own accounting (`eps/api/0/record/stat_a`); created on demand.
+	n("grid.monthIncome", "Income this month", "Ertrag diesen Monat", "value", ""),
+	n("grid.yearIncome", "Income this year", "Ertrag dieses Jahr", "value", ""),
+	n("grid.todayCost", "Electricity cost today", "Stromkosten heute", "value", ""),
+	n("grid.monthCost", "Electricity cost this month", "Stromkosten diesen Monat", "value", ""),
+	n("grid.yearCost", "Electricity cost this year", "Stromkosten dieses Jahr", "value", ""),
+	n("grid.totalCost", "Electricity cost total", "Stromkosten gesamt", "value", ""),
 
 	// Station info
 	s("info.stationName", "Station name", "Anlagenname", "text"),
