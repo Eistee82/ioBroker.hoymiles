@@ -33,6 +33,7 @@ import {
 	CLOUD_DEV_TYPE_HYBRID_INVERTER,
 	REAL_INDICATOR_TYPE_PV,
 	mapBatterySettings,
+	inverterHasPv,
 	mapRealIndicators,
 	mapStorageStationData,
 	stationIndicatorTypes,
@@ -185,6 +186,8 @@ class CloudPoller {
 	 * request that travels down to the device. A successful read counts as all attempts used.
 	 */
 	private readonly batterySettingsAttempts: Map<number, number> = new Map();
+	/** Stations whose hybrid inverter has no PV on its own inputs (AC-coupled plant) — no PV states, no PV request. */
+	private readonly inverterWithoutPv: Set<number> = new Set();
 
 	/**
 	 * @param options - Cloud poller configuration
@@ -635,6 +638,11 @@ class CloudPoller {
 		// Each of these catches its own failure, so it can never take the station's core values
 		// above down with it through the shared Promise.all.
 		const storage = mapStorageStationData(data.reflux_station_data);
+		if (inverterHasPv(data.reflux_station_data)) {
+			this.inverterWithoutPv.delete(stationId);
+		} else {
+			this.inverterWithoutPv.add(stationId);
+		}
 		if (storage) {
 			const ws = (suffix: string, value: number): Promise<void> =>
 				w(suffix, value).catch(err => {
@@ -1159,11 +1167,12 @@ class CloudPoller {
 			writes.push(this.writeHybridState(sn, v.id, v.val, q));
 		}
 
-		// PV inputs are a set of their own, not part of the inverter's. Skipped for an inverter
-		// that reports no inputs at all (e.g. an AC-coupled battery inverter).
+		// PV inputs are a set of their own, not part of the inverter's. Skipped for an inverter that
+		// reports no inputs, and for an AC-coupled plant whose inverter has inputs but nothing on
+		// them (the station says so via `icon_pv`) — the set would only ever deliver zeros.
 		const reportedInputs = typeof invData?.pv_total === "number" ? invData.pv_total : 0;
 		let pvValues = 0;
-		if (reportedInputs > 0) {
+		if (reportedInputs > 0 && !this.inverterWithoutPv.has(stationId)) {
 			const pvData = await this.cloud.getRealIndicators(stationId, {
 				type: REAL_INDICATOR_TYPE_PV,
 				inv_list: [{ id: inv.id, sn: inv.sn, type: CLOUD_DEV_TYPE_HYBRID_INVERTER }],

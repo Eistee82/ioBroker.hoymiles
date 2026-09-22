@@ -5,7 +5,7 @@ import { formatDtuVersion, formatSwVersion } from "./protobufHandler.js";
 import { anonymize, deriveStationTzOffsetMs, errorMessage, logOnError, mapLimit, stationWallClockToEpoch, } from "./utils.js";
 import { stationStateMap, stationIndicatorStateMap, stationIndicatorChannels, hybridStateMap, hybridChannels, buildStateCommon, } from "./stateDefinitions.js";
 import { mapCloudGridProfile } from "./gridProfile.js";
-import { CLOUD_DEV_TYPE_BATTERY, CLOUD_DEV_TYPE_BATTERY_PACK, CLOUD_DEV_TYPE_HYBRID_INVERTER, REAL_INDICATOR_TYPE_PV, mapBatterySettings, mapRealIndicators, mapStorageStationData, stationIndicatorTypes, } from "./hybridCloud.js";
+import { CLOUD_DEV_TYPE_BATTERY, CLOUD_DEV_TYPE_BATTERY_PACK, CLOUD_DEV_TYPE_HYBRID_INVERTER, REAL_INDICATOR_TYPE_PV, mapBatterySettings, inverterHasPv, mapRealIndicators, mapStorageStationData, stationIndicatorTypes, } from "./hybridCloud.js";
 const num = (v) => parseFloat(v) || 0;
 const WEATHER_DESCRIPTIONS = {
     "01d": { en: "Clear sky", de: "Klarer Himmel" },
@@ -59,6 +59,7 @@ class CloudPoller {
     reportedUnknownKeys = new Set();
     multiBatteryReported = new Set();
     batterySettingsAttempts = new Map();
+    inverterWithoutPv = new Set();
     constructor(options) {
         this.cloud = options.cloud;
         this.adapter = options.adapter;
@@ -350,6 +351,12 @@ class CloudPoller {
             writes.push(w("grid.power", num(data.real_power)));
         }
         const storage = mapStorageStationData(data.reflux_station_data);
+        if (inverterHasPv(data.reflux_station_data)) {
+            this.inverterWithoutPv.delete(stationId);
+        }
+        else {
+            this.inverterWithoutPv.add(stationId);
+        }
         if (storage) {
             const ws = (suffix, value) => w(suffix, value).catch(err => {
                 this.adapter.log.warn(`Cloud state write failed: ${errorMessage(err)}`);
@@ -702,7 +709,7 @@ class CloudPoller {
         }
         const reportedInputs = typeof invData?.pv_total === "number" ? invData.pv_total : 0;
         let pvValues = 0;
-        if (reportedInputs > 0) {
+        if (reportedInputs > 0 && !this.inverterWithoutPv.has(stationId)) {
             const pvData = await this.cloud.getRealIndicators(stationId, {
                 type: REAL_INDICATOR_TYPE_PV,
                 inv_list: [{ id: inv.id, sn: inv.sn, type: CLOUD_DEV_TYPE_HYBRID_INVERTER }],

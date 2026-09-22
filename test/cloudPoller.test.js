@@ -2847,6 +2847,42 @@ describe("CloudPoller – hybrid inverter", function () {
 		);
 	});
 
+	// The reference plant is AC-coupled: its PV comes from a separate inverter behind a PV meter,
+	// the hybrid inverter's own two inputs reported 0 V for a whole day, and the station says so
+	// with icon_pv: 0. No PV request and no pvN states for such a plant.
+	it("skips the PV request and the PV states when the station reports no PV on the hybrid inverter (icon_pv 0)", async function () {
+		const selectors = [];
+		let created = false;
+		const cloud = makeMockCloud();
+		cloud.getStationRealtime = async () => ({
+			...baseRealtime(),
+			reflux_station_data: { icon_pv: 0, icon_pvi: 1, icon_grid: 1, icon_bms: 1 },
+		});
+		cloud.getDeviceTree = async () => hatDeviceTree();
+		cloud.getRealIndicators = async (stationId, selector) => {
+			selectors.push(selector.type);
+			if (selector.type === 6) {
+				return { title: "IND_INV", pv_total: 2, list: [{ key: "p_total", val: 10 }] };
+			}
+			return null;
+		};
+		const dev = hatDevice();
+		dev.createPvStates = async () => {
+			created = true;
+		};
+		const poller = makePoller({
+			cloud,
+			adapter: makeMockAdapter(),
+			devices: new Map([["DTU_HAT", dev]]),
+			stationDevices: new Set([1]),
+			slowPollFactor: 1,
+		});
+		await poller.poll();
+		poller.stop();
+		assert.ok(!selectors.includes(4), `no type-4 request, got ${selectors.join(",")}`);
+		assert.strictEqual(created, false, "no PV states");
+	});
+
 	it("creates PV states from pv_total when the indicator list carries no PV entries (e.g. at night)", async function () {
 		let createArgs = null;
 		const cloud = makeMockCloud();

@@ -259,6 +259,9 @@ export function directedPower(raw, node, edges) {
     }
     return raw;
 }
+export function inverterHasPv(block) {
+    return !(block && typeof block === "object" && block.icon_pv === 0);
+}
 export function stationIndicatorTypes(block) {
     if (!block || typeof block !== "object") {
         return [];

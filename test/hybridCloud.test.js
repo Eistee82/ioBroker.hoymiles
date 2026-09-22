@@ -16,6 +16,7 @@ import {
 	mapRealIndicators,
 	mapStorageStationData,
 	stationIndicatorTypes,
+	inverterHasPv,
 } from "../build/lib/hybridCloud.js";
 import { hybridStateMap, stationIndicatorStateMap, states } from "../build/lib/stateDefinitions.js";
 
@@ -642,6 +643,16 @@ describe("hybridCloud – directedPower", function () {
 	it("keeps the reading as delivered when the graph does not mention the node", function () {
 		assert.strictEqual(directedPower(-42, FLOW_NODE_GRID, [{ from: 10, to: 1 }]), -42);
 		assert.strictEqual(directedPower(42, FLOW_NODE_GRID, []), 42);
+	});
+});
+
+describe("hybridCloud – inverterHasPv", function () {
+	it("is false only when the station explicitly reports icon_pv 0", function () {
+		assert.strictEqual(inverterHasPv({ icon_pv: 0, icon_pvi: 1 }), false);
+		assert.strictEqual(inverterHasPv({ icon_pv: 1 }), true);
+		assert.strictEqual(inverterHasPv({}), true, "unknown counts as yes");
+		assert.strictEqual(inverterHasPv(undefined), true);
+		assert.strictEqual(inverterHasPv("x"), true);
 	});
 });
 

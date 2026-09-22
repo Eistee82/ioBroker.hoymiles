@@ -428,6 +428,15 @@ export function directedPower(raw: number, node: number, edges: FlowEdge[]): num
 }
 
 /**
+ * Whether the plant's hybrid inverter has PV connected to its own inputs. Unknown counts as yes.
+ *
+ * @param block - `reflux_station_data` of the station realtime response.
+ */
+export function inverterHasPv(block: unknown): boolean {
+	return !(block && typeof block === "object" && (block as StorageStationData).icon_pv === 0);
+}
+
+/**
  * Which station-level measuring points to read. The cloud answers a request for something the plant
  * does not have with a complete template of zeros, so presence has to come from elsewhere: the
  * `icon_*` flags of the station realtime response, which the portal uses to draw its flow diagram.
@@ -470,6 +479,12 @@ export interface StorageStationData {
 	icon_bms?: number;
 	/** 1 when the station has a grid meter. */
 	icon_grid?: number;
+	/**
+	 * 1 when PV is connected to the hybrid inverter itself. 0 on an AC-coupled plant, where the PV
+	 * comes from a separate inverter measured by a PV meter (`icon_pvi`) and the hybrid inverter's
+	 * own inputs report 0 V forever — verified on the reference plant over a whole day.
+	 */
+	icon_pv?: number;
 	/** Today's consumption, Wh. */
 	use_eq_total?: string | number;
 	/** Today's energy drawn from the grid, Wh. */
