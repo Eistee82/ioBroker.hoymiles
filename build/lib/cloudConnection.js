@@ -1,7 +1,7 @@
 import { postJson, postBinary, HttpError } from "./httpClient.js";
 import { decodeIndicatorDayCurve, parseChartResponse } from "./chartParser.js";
 import { TOKEN_MAX_AGE_MS, ENSURE_TOKEN_TIMEOUT_MS, CLOUD_HOST_DEFAULT, CLOUD_HOST_EU, CLOUD_DC_HOSTS, IAM_PRE_INSPECT_PATH, IAM_LOGIN_V3_PATH, IAM_REGION_PATH, PROFILE_PROBE_PATH, STATION_AK_FIND_PATH, PVM_CTL_SETTING_READ_PATH, PVM_CTL_SETTING_STATUS_PATH, DEVICE_SETTING_ACTION_GRID_READ, PVM_CTL_COMMAND_PUT_PATH, PVM_CTL_COMMAND_STATUS_PATH, DEVICE_SETTING_POLL_INTERVAL_MS, DEVICE_SETTING_POLL_MAX, APP_USER_AGENT_PREFIX, APP_VERSION, APP_TID, } from "./constants.js";
-import { SETTING_ACTION_BATTERY_MODE_READ, SETTING_ACTIONS_DRY_CONTACT_READ } from "./hybridCloud.js";
+import { ENERGY_STATS_TYPE_PRODUCTION_CONSUMPTION, SETTING_ACTION_BATTERY_MODE_READ, SETTING_ACTIONS_DRY_CONTACT_READ, } from "./hybridCloud.js";
 import { errorMessage, withTimeout, buildCredentialChallenges, buildArgon2Challenge, anonymize, sanitizeForLog, safeJsonStringify, } from "./utils.js";
 const EU_WEATHER_URL = `${CLOUD_HOST_EU}/tpa/api/0/weather/get`;
 function assertData(data, label) {
@@ -528,7 +528,7 @@ class CloudConnection {
                 sid: stationId,
                 mode,
                 date,
-                type: 1,
+                type: ENERGY_STATS_TYPE_PRODUCTION_CONSUMPTION,
             });
             this.logResponseSample(`energy-stats-${mode}`, result);
             if (result.status !== "0") {

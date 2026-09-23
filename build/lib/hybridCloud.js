@@ -291,11 +291,11 @@ export function mapStorageStationData(block) {
     if (!hasBattery && rf.icon_grid !== 1) {
         return null;
     }
-    const result = { flow: [], energy: [], battery: [] };
-    const add = (list, suffix, raw, scale = 1) => {
+    const result = { hasBattery, flow: [], battery: [] };
+    const add = (list, suffix, raw) => {
         const val = toNumber(raw);
         if (val !== null) {
-            list.push({ suffix, val: Math.round((val / scale) * 1000) / 1000 });
+            list.push({ suffix, val: Math.round(val * 1000) / 1000 });
         }
     };
     const edges = Array.isArray(rf.flows) ? rf.flows.map(f => ({ from: Number(f?.out), to: Number(f?.in) })) : [];
@@ -313,12 +313,7 @@ export function mapStorageStationData(block) {
             result.flow.push({ suffix: "grid.batteryPower", val: val === 0 ? 0 : val });
         }
     }
-    add(result.energy, "grid.consumptionToday", rf.use_eq_total, 1000);
-    add(result.energy, "grid.gridImportToday", rf.efg_total, 1000);
-    add(result.energy, "grid.gridExportToday", rf.e2g_total, 1000);
     if (hasBattery) {
-        add(result.energy, "grid.batteryChargeToday", rf.e2b_total, 1000);
-        add(result.energy, "grid.batteryDischargeToday", rf.efb_total, 1000);
         const workMode = toNumber(rf.work_mode);
         if (workMode !== null && workMode >= 1000) {
             result.battery.push({ suffix: "battery.workMode", val: Math.floor(workMode / 1000) });
@@ -341,25 +336,47 @@ export function mapBatterySettings(result) {
     return values;
 }
 export const ENERGY_STATS_MODES = [
-    { mode: 3, period: "Month" },
-    { mode: 4, period: "Year" },
-    { mode: 5, period: "Total" },
+    { mode: 1, period: "Today", slowPoll: false },
+    { mode: 3, period: "Month", slowPoll: true },
+    { mode: 4, period: "Year", slowPoll: true },
+    { mode: 5, period: "Total", slowPoll: true },
 ];
-export function mapEnergyStats(period, result) {
+export const ENERGY_STATS_TYPE_PRODUCTION_CONSUMPTION = 6;
+export function mapEnergyStats(period, result, hasBattery = true) {
     if (!result || typeof result !== "object") {
         return [];
     }
     const out = [];
-    for (const [key, name] of [
-        ["meter_in_eq", "gridImport"],
-        ["meter_out_eq", "gridExport"],
-        ["consumption_eq", "consumption"],
-        ["bms_in_eq", "batteryCharge"],
-        ["bms_out_eq", "batteryDischarge"],
-    ]) {
-        const val = toNumber(result[key]);
-        if (val !== null) {
-            out.push({ suffix: `grid.${name}${period}`, val: Math.round(val) / 1000 });
+    const kwh = (name, wh) => {
+        out.push({ suffix: `grid.${name}${period}`, val: Math.round(wh) / 1000 });
+    };
+    const lfg = toNumber(result.lfg);
+    const p2g = toNumber(result.p2g);
+    const p2l = toNumber(result.p2l);
+    const lfp = toNumber(result.lfp);
+    const lfb = toNumber(result.lfb);
+    const p2b = toNumber(result.p2b);
+    if (lfg !== null) {
+        kwh("gridImport", lfg);
+    }
+    if (p2g !== null) {
+        kwh("gridExport", p2g);
+    }
+    if (p2l !== null) {
+        kwh("pvToLoad", p2l);
+    }
+    if (lfp !== null && lfb !== null && lfg !== null) {
+        const consumption = lfp + lfb + lfg;
+        kwh("consumption", consumption);
+        const rate = consumption > 0 ? 100 - (lfg * 100) / consumption : 0;
+        out.push({ suffix: `grid.selfSufficiency${period}`, val: Math.round(rate * 10) / 10 });
+    }
+    if (hasBattery) {
+        if (p2b !== null) {
+            kwh("batteryCharge", p2b);
+        }
+        if (lfb !== null) {
+            kwh("batteryDischarge", lfb);
         }
     }
     return out;

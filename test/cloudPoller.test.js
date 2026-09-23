@@ -3190,7 +3190,7 @@ describe("CloudPoller – hybrid inverter", function () {
 		assert.strictEqual(readCalls[0].dtuSn, "DTU_MICRO2");
 	});
 
-	it("writes the storage station's day-energy balance (incl. battery charge/discharge) and live flow from reflux_station_data", async function () {
+	it("writes the storage station's live flow from reflux_station_data and its day balance from the 'Production & Consumption' statistics, not from the block's own counters", async function () {
 		const stateWrites = {};
 		const cloud = makeMockCloud();
 		cloud.getStationRealtime = async () => ({
@@ -3209,6 +3209,8 @@ describe("CloudPoller – hybrid inverter", function () {
 				efb_total: "5400",
 			},
 		});
+		cloud.getStationEnergyStats = async (_sid, mode) =>
+			mode === 1 ? { p2l: 4200, p2b: 3100, p2g: 500, lfp: 4200, lfb: 2900, lfg: 5100 } : null;
 		cloud.getDeviceTree = async () => [];
 		const adapter = makeMockAdapter();
 		adapter.setStateAsync = async (id, val) => {
@@ -3219,11 +3221,13 @@ describe("CloudPoller – hybrid inverter", function () {
 		await poller.poll();
 		poller.stop();
 
-		assert.strictEqual(stateWrites["station-1.grid.consumptionToday"], 14.3);
-		assert.strictEqual(stateWrites["station-1.grid.gridImportToday"], 6.5);
-		assert.strictEqual(stateWrites["station-1.grid.gridExportToday"], 3);
-		assert.strictEqual(stateWrites["station-1.grid.batteryChargeToday"], 7.8);
-		assert.strictEqual(stateWrites["station-1.grid.batteryDischargeToday"], 5.4);
+		assert.strictEqual(stateWrites["station-1.grid.consumptionToday"], 12.2, "lfp+lfb+lfg, not use_eq_total");
+		assert.strictEqual(stateWrites["station-1.grid.gridImportToday"], 5.1, "lfg, not efg_total");
+		assert.strictEqual(stateWrites["station-1.grid.gridExportToday"], 0.5, "p2g, not e2g_total");
+		assert.strictEqual(stateWrites["station-1.grid.batteryChargeToday"], 3.1, "p2b, not e2b_total");
+		assert.strictEqual(stateWrites["station-1.grid.batteryDischargeToday"], 2.9, "lfb, not efb_total");
+		assert.strictEqual(stateWrites["station-1.grid.pvToLoadToday"], 4.2);
+		assert.strictEqual(stateWrites["station-1.grid.selfSufficiencyToday"], 58.2);
 		assert.strictEqual(stateWrites["station-1.grid.loadPower"], 567);
 		assert.strictEqual(
 			stateWrites["station-1.battery.soc"],
@@ -3232,7 +3236,7 @@ describe("CloudPoller – hybrid inverter", function () {
 		);
 	});
 
-	it("keeps the day-energy counters but skips the live flow states when the station is burst-active", async function () {
+	it("keeps the day balance but skips the live flow states when the station is burst-active", async function () {
 		const stateWrites = {};
 		const cloud = makeMockCloud();
 		cloud.getStationRealtime = async () => ({
@@ -3251,6 +3255,8 @@ describe("CloudPoller – hybrid inverter", function () {
 				efb_total: "5400",
 			},
 		});
+		cloud.getStationEnergyStats = async (_sid, mode) =>
+			mode === 1 ? { p2l: 4200, p2b: 3100, p2g: 500, lfp: 4200, lfb: 2900, lfg: 5100 } : null;
 		cloud.getDeviceTree = async () => [];
 		const adapter = makeMockAdapter();
 		adapter.setStateAsync = async (id, val) => {
@@ -3268,8 +3274,8 @@ describe("CloudPoller – hybrid inverter", function () {
 		await poller.poll();
 		poller.stop();
 
-		assert.strictEqual(stateWrites["station-1.grid.consumptionToday"], 14.3);
-		assert.strictEqual(stateWrites["station-1.grid.batteryChargeToday"], 7.8);
+		assert.strictEqual(stateWrites["station-1.grid.consumptionToday"], 12.2);
+		assert.strictEqual(stateWrites["station-1.grid.batteryChargeToday"], 3.1);
 		assert.strictEqual(stateWrites["station-1.grid.loadPower"], undefined);
 		assert.strictEqual(stateWrites["station-1.battery.soc"], undefined);
 		assert.strictEqual(stateWrites["station-1.grid.batteryPower"], undefined);
@@ -3398,15 +3404,15 @@ describe("CloudPoller – hybrid inverter", function () {
 // CloudPoller – pollStationIndicators (station-level measuring points)
 // ============================================================
 describe("CloudPoller – energy stats (period balance)", function () {
-	// Recorded live: mode 4 (year 2026) of a plant with meter and battery.
+	// Recorded live 2026-09-24: mode 4 (year 2026), type 6, of a plant with meter and battery.
 	const YEAR = {
-		meter_in_eq: 2963800,
-		pv_eq: 4189600,
-		last_data_time: "2026-09-22 07:37:30",
-		meter_out_eq: 1545600,
-		bms_in_eq: 2141800,
-		bms_out_eq: 1890100,
-		consumption_eq: 5330400,
+		p2b: 1896200,
+		p2g: 700700,
+		last_data_time: "2026-09-24 00:52:31",
+		lfp: 1609100,
+		lfb: 1889400,
+		p2l: 1609100,
+		lfg: 1850700,
 	};
 	const storage = () => ({
 		real_power: "0",
@@ -3419,7 +3425,7 @@ describe("CloudPoller – energy stats (period balance)", function () {
 		reflux_station_data: { icon_bms: 1, icon_grid: 1, bms_soc: "25" },
 	});
 
-	it("reads month, year and lifetime on a slow poll and writes them under period-suffixed ids", async function () {
+	it("reads day, month, year and lifetime on a slow poll and writes them under period-suffixed ids", async function () {
 		const calls = [];
 		const writes = [];
 		const cloud = makeMockCloud();
@@ -3437,16 +3443,17 @@ describe("CloudPoller – energy stats (period balance)", function () {
 		poller.stop();
 		assert.deepStrictEqual(
 			calls.map(x => x.mode),
-			[3, 4, 5],
-			"month, year, lifetime",
+			[1, 3, 4, 5],
+			"day, month, year, lifetime",
 		);
 		assert.ok(
 			calls.every(x => x.sid === 1 && /^\d{4}-\d{2}-\d{2}$/.test(x.date)),
 			"a station-local date",
 		);
 		const byId = Object.fromEntries(writes.map(([id, v]) => [id, v]));
-		assert.deepStrictEqual(byId["station-1.grid.gridImportYear"], { val: 2963.8, ack: true, q: 0x00 });
-		assert.deepStrictEqual(byId["station-1.grid.batteryDischargeYear"], { val: 1890.1, ack: true, q: 0x00 });
+		assert.deepStrictEqual(byId["station-1.grid.gridImportYear"], { val: 1850.7, ack: true, q: 0x00 });
+		assert.deepStrictEqual(byId["station-1.grid.batteryDischargeYear"], { val: 1889.4, ack: true, q: 0x00 });
+		assert.deepStrictEqual(byId["station-1.grid.selfSufficiencyYear"], { val: 65.4, ack: true, q: 0x00 });
 		assert.strictEqual(
 			byId["station-1.grid.gridImportMonth"],
 			undefined,
@@ -3454,28 +3461,50 @@ describe("CloudPoller – energy stats (period balance)", function () {
 		);
 	});
 
-	it("does not read the balance for a plain PV plant, nor on a fast poll", async function () {
-		let calls = 0;
+	it("leaves the battery flows out for a plant with a meter but no battery", async function () {
+		const writes = [];
 		const cloud = makeMockCloud();
-		cloud.getStationEnergyStats = async () => {
-			calls++;
+		cloud.getStationRealtime = async () => ({
+			...storage(),
+			reflux_station_data: { icon_bms: 0, icon_grid: 1 },
+		});
+		cloud.getStationEnergyStats = async () => YEAR;
+		const adapter = makeMockAdapter();
+		adapter.setStateAsync = async (id, val) => {
+			writes.push([id, val]);
+		};
+		const poller = makePoller({ cloud, adapter, stationDevices: new Set([1]), slowPollFactor: 1 });
+		await poller.poll();
+		poller.stop();
+		const ids = writes.map(([id]) => id);
+		assert.ok(ids.includes("station-1.grid.gridImportYear"));
+		assert.ok(ids.includes("station-1.grid.gridImportToday"));
+		assert.ok(!ids.some(id => id.startsWith("station-1.grid.batteryCharge")));
+		assert.ok(!ids.some(id => id.startsWith("station-1.grid.batteryDischarge")));
+	});
+
+	it("does not read the balance for a plain PV plant; on a fast poll only the day is read", async function () {
+		const modes = [];
+		const cloud = makeMockCloud();
+		cloud.getStationEnergyStats = async (_sid, mode) => {
+			modes.push(mode);
 			return null;
 		};
 		// Plain plant, slow poll: no storage block → no request.
 		const plain = makePoller({ cloud, stationDevices: new Set([1]), slowPollFactor: 1 });
 		await plain.poll();
 		plain.stop();
-		assert.strictEqual(calls, 0);
-		// Storage plant, fast poll: the balance is slow-poll work only.
+		assert.deepStrictEqual(modes, []);
+		// Storage plant, fast poll: the day balance goes with every poll, the long periods are slow-poll work.
 		cloud.getStationRealtime = async () => storage();
 		const fast = makePoller({ cloud, stationDevices: new Set([1]), slowPollFactor: 6 });
 		await fast.poll(); // poll #1 of 6 is a fast one
-		assert.strictEqual(calls, 0, "no read on a fast poll");
+		assert.deepStrictEqual(modes, [1], "only the day on a fast poll");
 		await fast.poll(true); // forced slow poll
-		assert.strictEqual(calls, 3);
+		assert.deepStrictEqual(modes, [1, 1, 3, 4, 5]);
 		await fast.poll();
 		fast.stop();
-		assert.strictEqual(calls, 3, "no read on the following fast poll");
+		assert.deepStrictEqual(modes, [1, 1, 3, 4, 5, 1], "only the day on the following fast poll");
 	});
 
 	it("survives a throwing stats read and still finishes the poll", async function () {

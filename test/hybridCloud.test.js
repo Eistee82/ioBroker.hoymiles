@@ -18,6 +18,7 @@ import {
 	stationIndicatorTypes,
 	inverterHasPv,
 	ENERGY_STATS_MODES,
+	ENERGY_STATS_TYPE_PRODUCTION_CONSUMPTION,
 	mapEnergyStats,
 	mapIncomeStats,
 	mapCloudAlarms,
@@ -655,35 +656,80 @@ describe("hybridCloud – directedPower", function () {
 });
 
 describe("hybridCloud – mapEnergyStats", function () {
-	// Recorded live (mode 4 = year 2026): meter_in matches the month/year counters the portal's
-	// cost calculation is based on.
-	const YEAR = {
-		meter_in_eq: 2963800,
-		pv_eq: 4189600,
-		last_data_time: "2026-09-22 07:37:30",
-		meter_out_eq: 1545600,
-		bms_in_eq: 2141800,
-		bms_out_eq: 1890100,
-		consumption_eq: 5330400,
+	// Recorded live 2026-09-24 (mode 3 = September 2026, type 6): the six flows of the app's
+	// "Production & Consumption" tab. Production p2l+p2b+p2g = 305.9 kWh and consumption
+	// lfp+lfb+lfg = 419.0 kWh equal pv_eq / consumption_eq of the "Overview" tab (type 1); the
+	// grid import differs (129.7 vs 211.9 kWh), which is exactly what the user report was about.
+	const MONTH = {
+		p2b: 155500,
+		p2g: 500,
+		last_data_time: "2026-09-24 00:52:31",
+		lfp: 149900,
+		lfb: 139400,
+		p2l: 149900,
+		lfg: 129700,
 	};
 
-	it("uses the portal's mode numbers", function () {
+	it("uses the app's mode numbers, the day on every poll and the long periods on the slow poll", function () {
 		assert.deepStrictEqual(ENERGY_STATS_MODES, [
-			{ mode: 3, period: "Month" },
-			{ mode: 4, period: "Year" },
-			{ mode: 5, period: "Total" },
+			{ mode: 1, period: "Today", slowPoll: false },
+			{ mode: 3, period: "Month", slowPoll: true },
+			{ mode: 4, period: "Year", slowPoll: true },
+			{ mode: 5, period: "Total", slowPoll: true },
 		]);
 	});
 
-	it("converts a period's balance from Wh to kWh under period-suffixed ids", function () {
-		assert.deepStrictEqual(mapEnergyStats("Year", YEAR), [
-			{ suffix: "grid.gridImportYear", val: 2963.8 },
-			{ suffix: "grid.gridExportYear", val: 1545.6 },
-			{ suffix: "grid.consumptionYear", val: 5330.4 },
-			{ suffix: "grid.batteryChargeYear", val: 2141.8 },
-			{ suffix: "grid.batteryDischargeYear", val: 1890.1 },
+	it("asks for the app's 'Production & Consumption' data set (type 6), not the 'Overview' one", function () {
+		assert.strictEqual(ENERGY_STATS_TYPE_PRODUCTION_CONSUMPTION, 6);
+	});
+
+	it("converts a period's flows from Wh to kWh under period-suffixed ids, consumption summed like the app", function () {
+		assert.deepStrictEqual(mapEnergyStats("Month", MONTH), [
+			{ suffix: "grid.gridImportMonth", val: 129.7 },
+			{ suffix: "grid.gridExportMonth", val: 0.5 },
+			{ suffix: "grid.pvToLoadMonth", val: 149.9 },
+			{ suffix: "grid.consumptionMonth", val: 419 },
+			{ suffix: "grid.selfSufficiencyMonth", val: 69 },
+			{ suffix: "grid.batteryChargeMonth", val: 155.5 },
+			{ suffix: "grid.batteryDischargeMonth", val: 139.4 },
 		]);
-		assert.strictEqual(mapEnergyStats("Total", { meter_in_eq: "7001600" })[0].val, 7001.6);
+		assert.strictEqual(mapEnergyStats("Total", { lfg: "4739100" })[0].val, 4739.1);
+	});
+
+	it("computes self-sufficiency like the app: 100 − grid share of consumption, one decimal, 0 without consumption", function () {
+		// Year 2026 as recorded: lfg 1850.7 of 5349.2 kWh → 65.4 %.
+		const year = mapEnergyStats("Year", { lfp: 1609100, lfb: 1889400, lfg: 1850700 });
+		assert.deepStrictEqual(
+			year.find(v => v.suffix === "grid.selfSufficiencyYear"),
+			{
+				suffix: "grid.selfSufficiencyYear",
+				val: 65.4,
+			},
+		);
+		const night = mapEnergyStats("Today", { p2l: 0, p2b: 0, p2g: 0, lfp: 0, lfb: 0, lfg: 0 });
+		assert.strictEqual(night.find(v => v.suffix === "grid.selfSufficiencyToday").val, 0);
+		assert.strictEqual(night.find(v => v.suffix === "grid.consumptionToday").val, 0);
+		// Without the full consumption split there is no rate to compute.
+		const partial = mapEnergyStats("Today", { lfg: 1000 });
+		assert.strictEqual(
+			partial.some(v => v.suffix.startsWith("grid.selfSufficiency")),
+			false,
+		);
+		assert.strictEqual(
+			partial.some(v => v.suffix.startsWith("grid.consumption")),
+			false,
+		);
+	});
+
+	it("leaves the battery flows out on a plant with a meter but no battery", function () {
+		const ids = mapEnergyStats("Month", MONTH, false).map(v => v.suffix);
+		assert.deepStrictEqual(ids, [
+			"grid.gridImportMonth",
+			"grid.gridExportMonth",
+			"grid.pvToLoadMonth",
+			"grid.consumptionMonth",
+			"grid.selfSufficiencyMonth",
+		]);
 	});
 
 	it("maps nothing for a plant without a balance (only last_data_time) or no data", function () {
@@ -694,8 +740,8 @@ describe("hybridCloud – mapEnergyStats", function () {
 
 	it("only targets states that exist, in the type they declare", function () {
 		const known = new Map(stationStates.map(d => [d.id, d]));
-		for (const period of ["Month", "Year", "Total"]) {
-			for (const v of mapEnergyStats(period, YEAR)) {
+		for (const period of ["Today", "Month", "Year", "Total"]) {
+			for (const v of mapEnergyStats(period, MONTH)) {
 				assert.ok(known.has(v.suffix), `${v.suffix} has no state definition`);
 				assert.strictEqual(known.get(v.suffix).type, "number");
 			}
@@ -714,8 +760,9 @@ describe("hybridCloud – inverterHasPv", function () {
 });
 
 describe("hybridCloud – mapStorageStationData", function () {
-	// Checked against the portal's dashboard: from grid 6.5, to grid 3, charged 7.8, discharged 5.4,
-	// consumption 14.3 kWh.
+	// Recorded live. The block also carries the day's energy counters (use_eq_total, efg_total,
+	// e2g_total, e2b_total, efb_total) — those belong to the app's "Overview" and are NOT mapped:
+	// the day balance comes from the "Production & Consumption" statistics (mapEnergyStats).
 	const BLOCK = {
 		grid_power: "0.0",
 		load_power: "567.0",
@@ -731,24 +778,17 @@ describe("hybridCloud – mapStorageStationData", function () {
 	};
 	const toObject = list => Object.fromEntries(list.map(e => [e.suffix, e.val]));
 
-	it("converts the day's energy balance from Wh to kWh (battery charge/discharge included again)", function () {
-		assert.deepStrictEqual(toObject(mapStorageStationData(BLOCK).energy), {
-			"grid.consumptionToday": 14.3,
-			"grid.gridImportToday": 6.5,
-			"grid.gridExportToday": 3,
-			"grid.batteryChargeToday": 7.8,
-			"grid.batteryDischargeToday": 5.4,
-		});
+	it("does not map the block's day counters (the 'Overview' figures) — the day balance has one source only", function () {
+		const mapped = mapStorageStationData(BLOCK);
+		assert.deepStrictEqual(Object.keys(mapped).sort(), ["battery", "flow", "hasBattery"]);
+		assert.strictEqual(mapped.hasBattery, true);
+		assert.strictEqual(mapStorageStationData({ ...BLOCK, icon_bms: 0 }).hasBattery, false);
+		assert.ok(!Object.keys(toObject(mapped.flow)).some(id => id.endsWith("Today")));
 	});
 
 	it("leaves the battery values out on a station with a meter but no battery", function () {
 		const mapped = mapStorageStationData({ ...BLOCK, icon_bms: 0 });
 		assert.deepStrictEqual(Object.keys(toObject(mapped.flow)), ["grid.gridPower", "grid.loadPower"]);
-		assert.deepStrictEqual(Object.keys(toObject(mapped.energy)), [
-			"grid.consumptionToday",
-			"grid.gridImportToday",
-			"grid.gridExportToday",
-		]);
 		assert.deepStrictEqual(mapped.battery, []);
 	});
 
@@ -766,7 +806,6 @@ describe("hybridCloud – mapStorageStationData", function () {
 	it("skips values the cloud did not deliver", function () {
 		const mapped = mapStorageStationData({ icon_bms: 1, bms_power: "80" });
 		assert.deepStrictEqual(mapped.flow, [{ suffix: "grid.batteryPower", val: 80 }]);
-		assert.deepStrictEqual(mapped.energy, []);
 		assert.deepStrictEqual(mapped.battery, []);
 	});
 

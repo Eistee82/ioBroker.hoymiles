@@ -94,15 +94,6 @@ const isHybridInverter = (node: CloudTreeNode): boolean => node.type === CLOUD_D
 /** Automatic attempts to read a station's battery settings per adapter run (see `batterySettingsAttempts`). */
 const BATTERY_SETTINGS_MAX_ATTEMPTS = 3;
 
-/**
- * Whether a station realtime response describes a plant with a meter or a battery — the only
- * plants that have an energy balance to read.
- *
- * @param data - Station realtime response.
- */
-const storageBlockOf = (data: Record<string, unknown>): boolean =>
-	mapStorageStationData(data.reflux_station_data) !== null;
-
 /** Cloud polling states that determine what data is fetched and at what interval. */
 type CloudPollState = "POLLING_ACTIVE" | "RELAY_TRIGGERED" | "NIGHT_MODE";
 
@@ -563,11 +554,14 @@ class CloudPoller {
 		await this.setStationRealtimeStates(stationId, deviceId, data, online);
 		await this.pollStationIndicators(stationId, deviceId, data.reflux_station_data, online);
 
-		// Weather (slow poll ~30min), firmware (once per day), period balance (slow poll)
+		// Energy balance of a plant with a meter or a battery (the only plants that have one): the
+		// day with every poll, month/year/lifetime on the slow poll.
+		const storage = mapStorageStationData(data.reflux_station_data);
+		if (storage) {
+			await this.pollEnergyStats(stationId, deviceId, online, slowPoll, storage.hasBattery);
+		}
+		// Weather (slow poll ~30min), firmware (once per day)
 		if (slowPoll) {
-			if (storageBlockOf(data)) {
-				await this.pollEnergyStats(stationId, deviceId, online);
-			}
 			await this.pollIncome(stationId, deviceId);
 			await this.pollWeather(stationId, deviceId);
 			if (this.firmwareCheckDue(stationId)) {
@@ -581,7 +575,7 @@ class CloudPoller {
 		// Battery settings: once per adapter run, in the background (the device takes seconds to
 		// answer), retried on a later poll when the cloud was busy with the device. After that only
 		// when the user presses `<dtuSerial>.battery.readSettings`.
-		if (online && mapStorageStationData(data.reflux_station_data)?.battery.length) {
+		if (online && storage?.battery.length) {
 			const hybrids = this.hybridDevicesOf(stationId);
 			await this.ensureBatteryControls(hybrids);
 			const attempts = this.batterySettingsAttempts.get(stationId) ?? 0;
@@ -659,8 +653,8 @@ class CloudPoller {
 		if (!burstOwnsFlow) {
 			writes.push(w("grid.power", num(data.real_power)));
 		}
-		// Storage systems (battery and/or grid meter): the day's energy balance, plus the live flow
-		// whenever the burst is not streaming it anyway.
+		// Storage systems (battery and/or grid meter): the live flow whenever the burst is not
+		// streaming it anyway (the day's energy balance comes from `pollEnergyStats`).
 		// Each of these catches its own failure, so it can never take the station's core values
 		// above down with it through the shared Promise.all.
 		const storage = mapStorageStationData(data.reflux_station_data);
@@ -674,9 +668,6 @@ class CloudPoller {
 				w(suffix, value).catch(err => {
 					this.adapter.log.warn(`Cloud state write failed: ${errorMessage(err)}`);
 				});
-			for (const e of storage.energy) {
-				writes.push(ws(e.suffix, e.val));
-			}
 			// What the station knows about the battery goes to the battery, i.e. below the device
 			// of every hybrid inverter of this station — not into a second battery branch here.
 			for (const sn of this.hybridDevicesOf(stationId)) {
@@ -1334,22 +1325,39 @@ class CloudPoller {
 	}
 
 	/**
-	 * Month, year and lifetime balance of a plant with a meter or a battery — grid import/export,
-	 * consumption, battery charge/discharge — written to `station-<id>.grid.*`. Three cloud reads
-	 * per slow poll; a plant without a balance gets no states.
+	 * Energy balance of a plant with a meter or a battery — grid import/export, PV to load,
+	 * consumption, self-sufficiency, battery charge/discharge — as the S-Miles app's "Production &
+	 * Consumption" tab shows it, written to `station-<id>.grid.*`. The day is one cloud read per
+	 * poll; month, year and lifetime are three more on the slow poll. A plant without a balance
+	 * gets no states.
 	 *
 	 * @param stationId - Cloud station id.
 	 * @param deviceId - `station-<id>`.
 	 * @param online - Whether the station's last upload is fresh.
+	 * @param slowPoll - Whether this is a slow poll (reads the long periods as well).
+	 * @param hasBattery - Whether the plant has a battery (else the battery flows stay out).
 	 */
-	private async pollEnergyStats(stationId: number, deviceId: string, online: boolean): Promise<void> {
+	private async pollEnergyStats(
+		stationId: number,
+		deviceId: string,
+		online: boolean,
+		slowPoll: boolean,
+		hasBattery: boolean,
+	): Promise<void> {
 		const offsetMs = this.stationTzOffsetMs.get(stationId) ?? 0;
 		const today = new Date(Date.now() + offsetMs).toISOString().substring(0, 10);
 		const quality: ioBroker.STATE_QUALITY[keyof ioBroker.STATE_QUALITY] = online ? 0x00 : 0x42;
-		for (const { mode, period } of ENERGY_STATS_MODES) {
+		for (const { mode, period, slowPoll: slowOnly } of ENERGY_STATS_MODES) {
+			if (slowOnly && !slowPoll) {
+				continue;
+			}
 			let values: ReturnType<typeof mapEnergyStats>;
 			try {
-				values = mapEnergyStats(period, await this.cloud.getStationEnergyStats(stationId, mode, today));
+				values = mapEnergyStats(
+					period,
+					await this.cloud.getStationEnergyStats(stationId, mode, today),
+					hasBattery,
+				);
 			} catch (err) {
 				this.adapter.log.debug(
 					`Energy stats (${period}) failed for station ${stationId}: ${errorMessage(err)}`,

@@ -24,7 +24,11 @@ import {
 	APP_TID,
 } from "./constants.js";
 import type { CloudGridProfileParam } from "./gridProfile.js";
-import { SETTING_ACTION_BATTERY_MODE_READ, SETTING_ACTIONS_DRY_CONTACT_READ } from "./hybridCloud.js";
+import {
+	ENERGY_STATS_TYPE_PRODUCTION_CONSUMPTION,
+	SETTING_ACTION_BATTERY_MODE_READ,
+	SETTING_ACTIONS_DRY_CONTACT_READ,
+} from "./hybridCloud.js";
 import type {
 	BatterySettingsResult,
 	CloudAlarmList,
@@ -1185,10 +1189,11 @@ class CloudConnection {
 	}
 
 	/**
-	 * Energy balance of a plant with a meter or a battery over one period — what the portal's
-	 * "historical data" panel shows. Endpoint: /pvm-data/api/0/station/data_fd/stat_g_a. A pure
-	 * cloud read. `mode` 1 = day, 3 = month, 4 = year, 5 = lifetime; `date` is any day within
-	 * the period (station-local). A plain PV plant answers with `last_data_time` only.
+	 * Energy flows of a plant with a meter or a battery over one period — the data set of the
+	 * S-Miles app's "Production & Consumption" tab (`type: 6`; the "Overview" tab is `type: 1`).
+	 * Endpoint: /pvm-data/api/0/station/data_fd/stat_g_a. A pure cloud read. `mode` 1 = day,
+	 * 3 = month, 4 = year, 5 = lifetime; `date` is any day within the period (station-local). A
+	 * plain PV plant answers with `last_data_time` only.
 	 *
 	 * @param stationId - Cloud station ID.
 	 * @param mode - Period selector (see above).
@@ -1206,7 +1211,7 @@ class CloudConnection {
 				sid: stationId,
 				mode,
 				date,
-				type: 1,
+				type: ENERGY_STATS_TYPE_PRODUCTION_CONSUMPTION,
 			});
 			this.logResponseSample(`energy-stats-${mode}`, result);
 			if (result.status !== "0") {

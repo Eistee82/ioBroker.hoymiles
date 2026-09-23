@@ -485,16 +485,12 @@ export interface StorageStationData {
 	 * own inputs report 0 V forever — verified on the reference plant over a whole day.
 	 */
 	icon_pv?: number;
-	/** Today's consumption, Wh. */
-	use_eq_total?: string | number;
-	/** Today's energy drawn from the grid, Wh. */
-	efg_total?: string | number;
-	/** Today's energy fed into the grid, Wh. */
-	e2g_total?: string | number;
-	/** Today's energy charged into the battery, Wh. */
-	e2b_total?: string | number;
-	/** Today's energy discharged from the battery, Wh. */
-	efb_total?: string | number;
+	/**
+	 * Today's counters in Wh (`use_eq_total`, `efg_total`, `e2g_total`, `e2b_total`, `efb_total`)
+	 * also travel in this block. They are the figures of the app's "Overview" and are deliberately
+	 * NOT mapped: the day balance comes from the "Production & Consumption" statistics
+	 * (`mapEnergyStats`), the same source as month, year and lifetime.
+	 */
 	/** Battery working mode × 1000 (the S-Miles app divides by 1000 before it looks the mode up); 0 = none. */
 	work_mode?: string | number;
 	[key: string]: unknown;
@@ -502,10 +498,10 @@ export interface StorageStationData {
 
 /** Station-level values of a storage system; `null` = not delivered. */
 export interface MappedStorageStation {
+	/** Whether the plant has a battery (`icon_bms`) — decides whether the battery flows of the energy balance become states. */
+	hasBattery: boolean;
 	/** Live power flow (W) and state of charge (%) — overlaps with the realtime burst. */
 	flow: Array<{ suffix: string; val: number }>;
-	/** Today's energy balance in kWh. */
-	energy: Array<{ suffix: string; val: number }>;
 	/**
 	 * Facts about the battery that arrive with the station but belong to the battery — written
 	 * below the inverter's device (`<dtuSerial>.battery.*`), not below the station.
@@ -529,11 +525,11 @@ export function mapStorageStationData(block: unknown): MappedStorageStation | nu
 	if (!hasBattery && rf.icon_grid !== 1) {
 		return null;
 	}
-	const result: MappedStorageStation = { flow: [], energy: [], battery: [] };
-	const add = (list: MappedStorageStation["flow"], suffix: string, raw: unknown, scale = 1): void => {
+	const result: MappedStorageStation = { hasBattery, flow: [], battery: [] };
+	const add = (list: MappedStorageStation["flow"], suffix: string, raw: unknown): void => {
 		const val = toNumber(raw as RealIndicator["val"]);
 		if (val !== null) {
-			list.push({ suffix, val: Math.round((val / scale) * 1000) / 1000 });
+			list.push({ suffix, val: Math.round(val * 1000) / 1000 });
 		}
 	};
 	// Direction comes from the flow graph (see `directedPower`). Without a graph the block's own
@@ -556,12 +552,7 @@ export function mapStorageStationData(block: unknown): MappedStorageStation | nu
 			result.flow.push({ suffix: "grid.batteryPower", val: val === 0 ? 0 : val });
 		}
 	}
-	add(result.energy, "grid.consumptionToday", rf.use_eq_total, 1000);
-	add(result.energy, "grid.gridImportToday", rf.efg_total, 1000);
-	add(result.energy, "grid.gridExportToday", rf.e2g_total, 1000);
 	if (hasBattery) {
-		add(result.energy, "grid.batteryChargeToday", rf.e2b_total, 1000);
-		add(result.energy, "grid.batteryDischargeToday", rf.efb_total, 1000);
 		// Delivered passively with every station poll — reading the mode this way sends nothing to
 		// the device, unlike the portal's settings dialog.
 		const workMode = toNumber(rf.work_mode);
@@ -610,56 +601,102 @@ export function mapBatterySettings(
 	return values;
 }
 
-/** `mode` values of `station/data_fd/stat_g_a`: the period the balance is summed over. */
-export const ENERGY_STATS_MODES: ReadonlyArray<{ mode: number; period: "Month" | "Year" | "Total" }> = [
-	{ mode: 3, period: "Month" },
-	{ mode: 4, period: "Year" },
-	{ mode: 5, period: "Total" },
+/** Period suffix of the balance states (`grid.gridImport<Period>` …). */
+export type EnergyStatsPeriod = "Today" | "Month" | "Year" | "Total";
+
+/**
+ * `mode` values of `station/data_fd/stat_g_a`: the period the balance is summed over (the S-Miles
+ * app's statistics tab: 1 day, 3 month, 4 year, 5 lifetime). The day is read with every station
+ * poll, the long periods only on the slow poll — they move slowly and cost a request each.
+ */
+export const ENERGY_STATS_MODES: ReadonlyArray<{ mode: number; period: EnergyStatsPeriod; slowPoll: boolean }> = [
+	{ mode: 1, period: "Today", slowPoll: false },
+	{ mode: 3, period: "Month", slowPoll: true },
+	{ mode: 4, period: "Year", slowPoll: true },
+	{ mode: 5, period: "Total", slowPoll: true },
 ];
 
-/** Response of `station/data_fd/stat_g_a`, Wh. A plant without a balance only returns `last_data_time`. */
+/**
+ * `type` value of `station/data_fd/stat_g_a` that selects the data set of the app's
+ * "Production & Consumption" sub-tab (`PowerTab3FragmentDoubleYTestEs`, `AppConstant.p0 == 1`):
+ * the six energy flows below. `type: 1` is the "Overview" sub-tab (`meter_in_eq`, `meter_out_eq`,
+ * `consumption_eq`, `bms_in_eq`, `bms_out_eq`, `pv_eq`), `4` the battery tab, `5` the grid tab.
+ * Recorded live: both tabs agree on production and consumption, but "Overview" books the energy the
+ * grid pushes into the battery as grid import as well (211.9 vs 129.7 kWh in one month) — the user
+ * report asked for the "Production & Consumption" figures.
+ */
+export const ENERGY_STATS_TYPE_PRODUCTION_CONSUMPTION = 6;
+
+/**
+ * Response of `station/data_fd/stat_g_a` with `type: 6`, Wh. A plant without a balance only returns
+ * `last_data_time`. Field names as the app reads them (`StationDataBean`).
+ */
 export interface EnergyStatsResult {
-	/** Drawn from the grid. */
-	meter_in_eq?: string | number;
-	/** Fed into the grid. */
-	meter_out_eq?: string | number;
-	/** Consumed. */
-	consumption_eq?: string | number;
-	/** Charged into the battery. */
-	bms_in_eq?: string | number;
-	/** Discharged from the battery. */
-	bms_out_eq?: string | number;
-	/** PV yield — the station's `monthEnergy` / `yearEnergy` / `totalEnergy` already carry it. */
-	pv_eq?: string | number;
+	/** PV → load. */
+	p2l?: string | number;
+	/** PV → battery. */
+	p2b?: string | number;
+	/** PV → grid (export). */
+	p2g?: string | number;
+	/** Load from PV (equals `p2l` in every recorded response). */
+	lfp?: string | number;
+	/** Load from battery. */
+	lfb?: string | number;
+	/** Load from grid (import). */
+	lfg?: string | number;
 	[key: string]: unknown;
 }
 
 /**
- * Translate one period's energy balance into station states (kWh). This is the source behind the
- * portal's "historical data" panel; checked live: its month import matches the dashboard's monthly
- * cost at the plant's tariff, and its day values match the `reflux_station_data` day counters.
+ * Translate one period's energy flows into station states — kWh, plus the self-sufficiency rate in
+ * percent — exactly as the app's "Production & Consumption" tab presents them: consumption is
+ * `lfp + lfb + lfg`, self-sufficiency is `100 − lfg / consumption × 100` with one decimal and 0 %
+ * when nothing was consumed. Production (`p2l + p2b + p2g`) is not repeated here: the station's
+ * `dailyEnergy` / `monthEnergy` / `yearEnergy` / `totalEnergy` already carry the PV yield.
  *
  * @param period - Period the result was summed over.
  * @param result - Decoded `data` of the request.
+ * @param hasBattery - Whether the plant has a battery; without one the battery flows stay out.
  */
 export function mapEnergyStats(
-	period: "Month" | "Year" | "Total",
+	period: EnergyStatsPeriod,
 	result: EnergyStatsResult | null | undefined,
+	hasBattery = true,
 ): Array<{ suffix: string; val: number }> {
 	if (!result || typeof result !== "object") {
 		return [];
 	}
 	const out: Array<{ suffix: string; val: number }> = [];
-	for (const [key, name] of [
-		["meter_in_eq", "gridImport"],
-		["meter_out_eq", "gridExport"],
-		["consumption_eq", "consumption"],
-		["bms_in_eq", "batteryCharge"],
-		["bms_out_eq", "batteryDischarge"],
-	] as const) {
-		const val = toNumber(result[key]);
-		if (val !== null) {
-			out.push({ suffix: `grid.${name}${period}`, val: Math.round(val) / 1000 });
+	const kwh = (name: string, wh: number): void => {
+		out.push({ suffix: `grid.${name}${period}`, val: Math.round(wh) / 1000 });
+	};
+	const lfg = toNumber(result.lfg);
+	const p2g = toNumber(result.p2g);
+	const p2l = toNumber(result.p2l);
+	const lfp = toNumber(result.lfp);
+	const lfb = toNumber(result.lfb);
+	const p2b = toNumber(result.p2b);
+	if (lfg !== null) {
+		kwh("gridImport", lfg);
+	}
+	if (p2g !== null) {
+		kwh("gridExport", p2g);
+	}
+	if (p2l !== null) {
+		kwh("pvToLoad", p2l);
+	}
+	if (lfp !== null && lfb !== null && lfg !== null) {
+		const consumption = lfp + lfb + lfg;
+		kwh("consumption", consumption);
+		const rate = consumption > 0 ? 100 - (lfg * 100) / consumption : 0;
+		out.push({ suffix: `grid.selfSufficiency${period}`, val: Math.round(rate * 10) / 10 });
+	}
+	if (hasBattery) {
+		if (p2b !== null) {
+			kwh("batteryCharge", p2b);
+		}
+		if (lfb !== null) {
+			kwh("batteryDischarge", lfb);
 		}
 	}
 	return out;

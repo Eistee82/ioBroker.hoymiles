@@ -1076,6 +1076,52 @@ describe("cloudConnection – getRealIndicators", function () {
 });
 
 // ============================================================
+// cloudConnection – getStationEnergyStats
+// ============================================================
+describe("cloudConnection – getStationEnergyStats", function () {
+	let originalPost;
+
+	beforeEach(function () {
+		originalPost = CloudConnection.prototype._post;
+	});
+
+	afterEach(function () {
+		CloudConnection.prototype._post = originalPost;
+	});
+
+	it("posts {sid, mode, date, type: 6} — the app's 'Production & Consumption' data set — to data_fd/stat_g_a", async function () {
+		const cloud = new CloudConnection("u", "p");
+		cloud.token = "fake-token";
+		cloud.tokenTime = Date.now();
+		let calledPath;
+		let calledBody;
+		CloudConnection.prototype._post = async function (apiPath, body) {
+			calledPath = apiPath;
+			calledBody = body;
+			return { status: "0", data: { p2l: 149900, lfg: 129700, last_data_time: "2026-09-24 00:52:31" } };
+		};
+		const result = await cloud.getStationEnergyStats(42, 3, "2026-09-24");
+		assert.strictEqual(calledPath, "/pvm-data/api/0/station/data_fd/stat_g_a");
+		assert.deepStrictEqual(calledBody, { sid: 42, mode: 3, date: "2026-09-24", type: 6 });
+		assert.deepStrictEqual(result, { p2l: 149900, lfg: 129700, last_data_time: "2026-09-24 00:52:31" });
+	});
+
+	it("returns null on a non-zero status and when the request throws", async function () {
+		const cloud = new CloudConnection("u", "p");
+		cloud.token = "fake-token";
+		cloud.tokenTime = Date.now();
+		CloudConnection.prototype._post = async function () {
+			return { status: "1", message: "nope" };
+		};
+		assert.strictEqual(await cloud.getStationEnergyStats(1, 1, "2026-09-24"), null);
+		CloudConnection.prototype._post = async function () {
+			throw new Error("network error");
+		};
+		assert.strictEqual(await cloud.getStationEnergyStats(1, 1, "2026-09-24"), null);
+	});
+});
+
+// ============================================================
 // cloudConnection – getIncomeStats
 // ============================================================
 describe("cloudConnection – getIncomeStats", function () {

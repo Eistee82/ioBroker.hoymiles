@@ -703,19 +703,16 @@ const stationStates: StateDefinition[] = [
 	n("grid.loadPower", "Load power", "Lastleistung", "value.power", "W"),
 	n("grid.batteryPower", "Battery power", "Batterieleistung", "value.power", "W"),
 	n("grid.pvUtilization", "PV utilization", "PV-Auslastung", "value", "%"),
-	// Plants with a battery or a grid meter only (created on demand): the day's energy balance as
-	// the S-Miles dashboard shows it. Checked against the portal: `efg_total` = "from grid",
-	// `e2g_total` = "to grid", `e2b_total` = "charged", `efb_total` = "discharged". Everything else
-	// about the battery lives in one place only — below the inverter's device.
-	n("grid.consumptionToday", "Consumption today", "Verbrauch heute", "value.energy", "kWh"),
-	n("grid.gridImportToday", "Grid import today", "Netzbezug heute", "value.energy", "kWh"),
-	n("grid.gridExportToday", "Grid export today", "Netzeinspeisung heute", "value.energy", "kWh"),
-	n("grid.batteryChargeToday", "Battery charged today", "Batterieladung heute", "value.energy", "kWh"),
-	n("grid.batteryDischargeToday", "Battery discharged today", "Batterieentladung heute", "value.energy", "kWh"),
-	// The same balance over month, year and lifetime, from the portal's statistics endpoint
-	// (`data_fd/stat_g_a`, modes 3/4/5). Read on the slow poll.
+	// Plants with a battery or a grid meter only (created on demand): the energy balance of the
+	// S-Miles app's "Production & Consumption" tab (`data_fd/stat_g_a`, type 6) over day, month,
+	// year and lifetime — grid import = load from grid (`lfg`), export = PV to grid (`p2g`),
+	// consumption = load from PV + battery + grid, battery charged = PV to battery (`p2b`),
+	// discharged = load from battery (`lfb`), plus PV to load (`p2l`) and the self-sufficiency rate
+	// the app computes from them. The day is read with every poll, the long periods on the slow
+	// poll. Everything else about the battery lives in one place only — below the inverter's device.
 	...(
 		[
+			["Today", "today", "heute"],
 			["Month", "this month", "diesen Monat"],
 			["Year", "this year", "dieses Jahr"],
 			["Total", "total", "gesamt"],
@@ -723,7 +720,9 @@ const stationStates: StateDefinition[] = [
 	).flatMap(([p, en, de]) => [
 		n(`grid.gridImport${p}`, `Grid import ${en}`, `Netzbezug ${de}`, "value.energy", "kWh"),
 		n(`grid.gridExport${p}`, `Grid export ${en}`, `Netzeinspeisung ${de}`, "value.energy", "kWh"),
+		n(`grid.pvToLoad${p}`, `PV to load ${en}`, `PV direkt in die Last ${de}`, "value.energy", "kWh"),
 		n(`grid.consumption${p}`, `Consumption ${en}`, `Verbrauch ${de}`, "value.energy", "kWh"),
+		n(`grid.selfSufficiency${p}`, `Self-sufficiency ${en}`, `Autarkie ${de}`, "value", "%"),
 		n(`grid.batteryCharge${p}`, `Battery charged ${en}`, `Batterieladung ${de}`, "value.energy", "kWh"),
 		n(`grid.batteryDischarge${p}`, `Battery discharged ${en}`, `Batterieentladung ${de}`, "value.energy", "kWh"),
 	]),

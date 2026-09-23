@@ -386,16 +386,13 @@ Die Anzahl ermittelt der Adapter in dieser Reihenfolge:
 | `grid.batteryPower` | number | W | Batterieleistung (Echtzeit) — nur bei Batteriesystemen. Bei einer Speicheranlage: +Entladen/−Laden, wie in den Diagrammen des S-Miles-Portals; die Richtung stammt aus dem Energiefluss-Graphen der Cloud, so wie es auch das Portal macht |
 | `grid.pvUtilization` | number | % | PV-Auslastung (Echtzeit) |
 | `grid.dailyEnergy` | number | kWh | Tagesenergie |
-| `grid.consumptionToday` | number | kWh | Verbrauch heute — nur bei Anlagen mit Batterie oder Netzzähler |
-| `grid.gridImportToday` | number | kWh | Heute aus dem Netz bezogene Energie — nur bei Anlagen mit Batterie oder Netzzähler |
-| `grid.gridExportToday` | number | kWh | Heute ins Netz eingespeiste Energie — nur bei Anlagen mit Batterie oder Netzzähler |
-| `grid.gridImportMonth` / `gridImportYear` / `gridImportTotal` | number | kWh | Aus dem Netz bezogene Energie diesen Monat / dieses Jahr / gesamt — nur bei Anlagen mit Batterie oder Netzzähler |
-| `grid.gridExportMonth` / `gridExportYear` / `gridExportTotal` | number | kWh | Ins Netz eingespeiste Energie diesen Monat / dieses Jahr / gesamt — nur bei Anlagen mit Batterie oder Netzzähler |
-| `grid.consumptionMonth` / `consumptionYear` / `consumptionTotal` | number | kWh | Verbrauch diesen Monat / dieses Jahr / gesamt — nur bei Anlagen mit Batterie oder Netzzähler |
-| `grid.batteryChargeMonth` / `batteryChargeYear` / `batteryChargeTotal` | number | kWh | In die Batterie geladene Energie diesen Monat / dieses Jahr / gesamt — nur bei Batteriesystemen |
-| `grid.batteryDischargeMonth` / `batteryDischargeYear` / `batteryDischargeTotal` | number | kWh | Aus der Batterie entladene Energie diesen Monat / dieses Jahr / gesamt — nur bei Batteriesystemen |
-| `grid.batteryChargeToday` | number | kWh | Heute in die Batterie geladene Energie — nur bei Batteriesystemen |
-| `grid.batteryDischargeToday` | number | kWh | Heute aus der Batterie entladene Energie — nur bei Batteriesystemen |
+| `grid.gridImportToday` / `gridImportMonth` / `gridImportYear` / `gridImportTotal` | number | kWh | Von der Last aus dem Netz bezogene Energie heute / diesen Monat / dieses Jahr / gesamt — nur bei Anlagen mit Batterie oder Netzzähler; Quelle: Reiter „Ertrag & Verbrauch“ der S-Miles-App |
+| `grid.gridExportToday` / `gridExportMonth` / `gridExportYear` / `gridExportTotal` | number | kWh | Ins Netz eingespeiste PV-Energie heute / diesen Monat / dieses Jahr / gesamt — nur bei Anlagen mit Batterie oder Netzzähler; Quelle: Reiter „Ertrag & Verbrauch“ der S-Miles-App |
+| `grid.pvToLoadToday` / `pvToLoadMonth` / `pvToLoadYear` / `pvToLoadTotal` | number | kWh | Direkt von der Last genutzte PV-Energie heute / diesen Monat / dieses Jahr / gesamt — nur bei Anlagen mit Batterie oder Netzzähler; Quelle: Reiter „Ertrag & Verbrauch“ der S-Miles-App |
+| `grid.consumptionToday` / `consumptionMonth` / `consumptionYear` / `consumptionTotal` | number | kWh | Verbrauch heute / diesen Monat / dieses Jahr / gesamt (Last aus PV + Batterie + Netz) — nur bei Anlagen mit Batterie oder Netzzähler; Quelle: Reiter „Ertrag & Verbrauch“ der S-Miles-App |
+| `grid.selfSufficiencyToday` / `selfSufficiencyMonth` / `selfSufficiencyYear` / `selfSufficiencyTotal` | number | % | Autarkie heute / diesen Monat / dieses Jahr / gesamt: Anteil des Verbrauchs, der nicht aus dem Netz kam, eine Nachkommastelle, 0 solange nichts verbraucht wurde — berechnet wie in der App — nur bei Anlagen mit Batterie oder Netzzähler; Quelle: Reiter „Ertrag & Verbrauch“ der S-Miles-App |
+| `grid.batteryChargeToday` / `batteryChargeMonth` / `batteryChargeYear` / `batteryChargeTotal` | number | kWh | Aus PV in die Batterie geladene Energie heute / diesen Monat / dieses Jahr / gesamt — nur bei Batteriesystemen |
+| `grid.batteryDischargeToday` / `batteryDischargeMonth` / `batteryDischargeYear` / `batteryDischargeTotal` | number | kWh | Von der Last aus der Batterie bezogene Energie heute / diesen Monat / dieses Jahr / gesamt — nur bei Batteriesystemen |
 | `grid.monthEnergy` | number | kWh | Monatsenergie |
 | `grid.yearEnergy` | number | kWh | Jahresenergie |
 | `grid.totalEnergy` | number | kWh | Gesamtenergie |

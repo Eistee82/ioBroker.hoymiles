@@ -383,16 +383,13 @@ The adapter determines how many there are, in this order:
 | `grid.batteryPower` | number | W | Battery power (realtime) — battery systems only. On a storage plant: +discharging/−charging, like the charts of the S-Miles portal; the direction is taken from the cloud's energy-flow graph, as the portal does |
 | `grid.pvUtilization` | number | % | PV utilization (realtime) |
 | `grid.dailyEnergy` | number | kWh | Daily energy |
-| `grid.consumptionToday` | number | kWh | Today's consumption — plants with battery or grid meter only |
-| `grid.gridImportToday` | number | kWh | Energy drawn from the grid today — plants with battery or grid meter only |
-| `grid.gridExportToday` | number | kWh | Energy fed into the grid today — plants with battery or grid meter only |
-| `grid.gridImportMonth` / `gridImportYear` / `gridImportTotal` | number | kWh | Energy drawn from the grid this month / this year / in total — plants with battery or grid meter only |
-| `grid.gridExportMonth` / `gridExportYear` / `gridExportTotal` | number | kWh | Energy fed into the grid this month / this year / in total — plants with battery or grid meter only |
-| `grid.consumptionMonth` / `consumptionYear` / `consumptionTotal` | number | kWh | Consumption this month / this year / in total — plants with battery or grid meter only |
-| `grid.batteryChargeMonth` / `batteryChargeYear` / `batteryChargeTotal` | number | kWh | Energy charged into the battery this month / this year / in total — battery systems only |
-| `grid.batteryDischargeMonth` / `batteryDischargeYear` / `batteryDischargeTotal` | number | kWh | Energy discharged from the battery this month / this year / in total — battery systems only |
-| `grid.batteryChargeToday` | number | kWh | Energy charged into the battery today — battery systems only |
-| `grid.batteryDischargeToday` | number | kWh | Energy discharged from the battery today — battery systems only |
+| `grid.gridImportToday` / `gridImportMonth` / `gridImportYear` / `gridImportTotal` | number | kWh | Energy the load drew from the grid today / this month / this year / in total — plants with battery or grid meter only; source: the S-Miles app's "Production & Consumption" tab |
+| `grid.gridExportToday` / `gridExportMonth` / `gridExportYear` / `gridExportTotal` | number | kWh | PV energy fed into the grid today / this month / this year / in total — plants with battery or grid meter only; source: the S-Miles app's "Production & Consumption" tab |
+| `grid.pvToLoadToday` / `pvToLoadMonth` / `pvToLoadYear` / `pvToLoadTotal` | number | kWh | PV energy used directly by the load today / this month / this year / in total — plants with battery or grid meter only; source: the S-Miles app's "Production & Consumption" tab |
+| `grid.consumptionToday` / `consumptionMonth` / `consumptionYear` / `consumptionTotal` | number | kWh | Consumption today / this month / this year / in total (load from PV + battery + grid) — plants with battery or grid meter only; source: the S-Miles app's "Production & Consumption" tab |
+| `grid.selfSufficiencyToday` / `selfSufficiencyMonth` / `selfSufficiencyYear` / `selfSufficiencyTotal` | number | % | Self-sufficiency today / this month / this year / in total: the share of consumption not drawn from the grid, one decimal, 0 while nothing was consumed — computed like the app — plants with battery or grid meter only; source: the S-Miles app's "Production & Consumption" tab |
+| `grid.batteryChargeToday` / `batteryChargeMonth` / `batteryChargeYear` / `batteryChargeTotal` | number | kWh | PV energy charged into the battery today / this month / this year / in total — battery systems only |
+| `grid.batteryDischargeToday` / `batteryDischargeMonth` / `batteryDischargeYear` / `batteryDischargeTotal` | number | kWh | Energy the load drew from the battery today / this month / this year / in total — battery systems only |
 | `grid.monthEnergy` | number | kWh | Monthly energy |
 | `grid.yearEnergy` | number | kWh | Yearly energy |
 | `grid.totalEnergy` | number | kWh | Total lifetime energy |

@@ -31,7 +31,6 @@ const hybridChannelMap = new Map(hybridChannels.map(c => [c.id, c]));
 const stationIndicatorChannelMap = new Map(stationIndicatorChannels.map(c => [c.id, c]));
 const isHybridInverter = (node) => node.type === CLOUD_DEV_TYPE_HYBRID_INVERTER;
 const BATTERY_SETTINGS_MAX_ATTEMPTS = 3;
-const storageBlockOf = (data) => mapStorageStationData(data.reflux_station_data) !== null;
 class CloudPoller {
     static PORT_COUNT_RE = /(\d+)\s*(?:T|WB)$/i;
     cloud;
@@ -304,10 +303,11 @@ class CloudPoller {
         }
         await this.setStationRealtimeStates(stationId, deviceId, data, online);
         await this.pollStationIndicators(stationId, deviceId, data.reflux_station_data, online);
+        const storage = mapStorageStationData(data.reflux_station_data);
+        if (storage) {
+            await this.pollEnergyStats(stationId, deviceId, online, slowPoll, storage.hasBattery);
+        }
         if (slowPoll) {
-            if (storageBlockOf(data)) {
-                await this.pollEnergyStats(stationId, deviceId, online);
-            }
             await this.pollIncome(stationId, deviceId);
             await this.pollWeather(stationId, deviceId);
             if (this.firmwareCheckDue(stationId)) {
@@ -315,7 +315,7 @@ class CloudPoller {
             }
         }
         await this.pollDevicesAndInverters(stationId, slowPoll, online);
-        if (online && mapStorageStationData(data.reflux_station_data)?.battery.length) {
+        if (online && storage?.battery.length) {
             const hybrids = this.hybridDevicesOf(stationId);
             await this.ensureBatteryControls(hybrids);
             const attempts = this.batterySettingsAttempts.get(stationId) ?? 0;
@@ -371,9 +371,6 @@ class CloudPoller {
             const ws = (suffix, value) => w(suffix, value).catch(err => {
                 this.adapter.log.warn(`Cloud state write failed: ${errorMessage(err)}`);
             });
-            for (const e of storage.energy) {
-                writes.push(ws(e.suffix, e.val));
-            }
             for (const sn of this.hybridDevicesOf(stationId)) {
                 for (const b of storage.battery) {
                     writes.push(this.writeHybridState(sn, b.suffix, b.val, q).catch(err => {
@@ -817,14 +814,17 @@ class CloudPoller {
             }
         }
     }
-    async pollEnergyStats(stationId, deviceId, online) {
+    async pollEnergyStats(stationId, deviceId, online, slowPoll, hasBattery) {
         const offsetMs = this.stationTzOffsetMs.get(stationId) ?? 0;
         const today = new Date(Date.now() + offsetMs).toISOString().substring(0, 10);
         const quality = online ? 0x00 : 0x42;
-        for (const { mode, period } of ENERGY_STATS_MODES) {
+        for (const { mode, period, slowPoll: slowOnly } of ENERGY_STATS_MODES) {
+            if (slowOnly && !slowPoll) {
+                continue;
+            }
             let values;
             try {
-                values = mapEnergyStats(period, await this.cloud.getStationEnergyStats(stationId, mode, today));
+                values = mapEnergyStats(period, await this.cloud.getStationEnergyStats(stationId, mode, today), hasBattery);
             }
             catch (err) {
                 this.adapter.log.debug(`Energy stats (${period}) failed for station ${stationId}: ${errorMessage(err)}`);
