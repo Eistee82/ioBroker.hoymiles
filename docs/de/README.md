@@ -349,7 +349,7 @@ Die Anzahl ermittelt der Adapter in dieser Reihenfolge:
 | `inverter.temperature` | number | °C | nein | Temperatur |
 | `inverter.powerLimit` | number | % | **ja** | Leistungslimit, 2–100 %, lokal. **Mit diesem Datenpunkt lässt sich eine Nulleinspeisung realisieren.** ⚠️ Jedes Setzen beschreibt Flash im Gerät (siehe Warnung unten) — der Adapter drosselt das deshalb über Totzone und Mindestabstand |
 | `inverter.activePowerLimit` | number | % | nein | Aktives Leistungslimit (live, lokal) |
-| `inverter.active` | boolean | — | **ja** | Wechselrichter ein/aus (lokal; bei reinen Cloud-Geräten über die Cloud) |
+| `inverter.active` | boolean | — | **ja** | Wechselrichter ein/aus (lokal; bei reinen Cloud-Geräten über die Cloud). Bei einem Hybrid-Wechselrichter wird der Wert aus der Cloud zurückgelesen: ein, solange die Cloud ihn als verbunden und im Netzbetrieb („On-grid Mode“) oder mit AC-Leistungsfluss meldet, aus bei getrennter Verbindung |
 | `inverter.reboot` | boolean | — | **ja** | Wechselrichter neustarten (lokal; bei reinen Cloud-Geräten über die Cloud) |
 | `inverter.powerFactorLimit` | number | — | **ja** | Leistungsfaktor-Limit (-1 bis 1, lokal). ⚠️ Beschreibt Flash wie das Leistungslimit (action 47, gleicher Erfolgspfad) — gedrosselt |
 | `inverter.reactivePowerLimit` | number | ° | **ja** | Blindleistungs-Limit (-50 bis 50, lokal). ⚠️ Beschreibt Flash wie das Leistungslimit (action 48, gleicher Erfolgspfad) — gedrosselt |

@@ -321,6 +321,18 @@ export function mapStorageStationData(block) {
     }
     return result;
 }
+export const HYBRID_INV_STATE_ON_GRID = 3;
+export function hybridInverterActive(values, connected) {
+    const state = values.find(v => v.id === "inverter.operatingState")?.val;
+    const power = values.find(v => v.id === "grid.power")?.val;
+    if (typeof state !== "number" && typeof power !== "number") {
+        return null;
+    }
+    if (!connected) {
+        return false;
+    }
+    return state === HYBRID_INV_STATE_ON_GRID || (typeof power === "number" && power !== 0);
+}
 export const SETTING_ACTION_BATTERY_MODE_READ = 1013;
 export function mapBatterySettings(result) {
     const mode = toNumber(result?.mode);

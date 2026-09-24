@@ -17,6 +17,8 @@ import {
 	mapStorageStationData,
 	stationIndicatorTypes,
 	inverterHasPv,
+	hybridInverterActive,
+	HYBRID_INV_STATE_ON_GRID,
 	ENERGY_STATS_MODES,
 	ENERGY_STATS_TYPE_PRODUCTION_CONSUMPTION,
 	mapEnergyStats,
@@ -746,6 +748,64 @@ describe("hybridCloud – mapEnergyStats", function () {
 				assert.strictEqual(known.get(v.suffix).type, "number");
 			}
 		}
+	});
+});
+
+describe("hybridCloud – hybridInverterActive", function () {
+	// Recorded live 2026-09-24 09:27 on the running reference inverter: inv_state 3 ("On-grid Mode"),
+	// p_total −297 W. The S-Miles app has no on/off notion for a storage inverter (it only shows
+	// connected/alarm) and no value table for inv_state, so the derivation rests on these two signals.
+	const running = [
+		{ id: "inverter.operatingState", val: 3 },
+		{ id: "inverter.operatingStateText", val: "On-grid Mode" },
+		{ id: "grid.power", val: -297 },
+	];
+
+	it("is on while the inverter is connected and in On-grid Mode, even at 0 W", function () {
+		assert.strictEqual(HYBRID_INV_STATE_ON_GRID, 3);
+		assert.strictEqual(hybridInverterActive(running, true), true);
+		assert.strictEqual(
+			hybridInverterActive(
+				[
+					{ id: "inverter.operatingState", val: 3 },
+					{ id: "grid.power", val: 0 },
+				],
+				true,
+			),
+			true,
+		);
+	});
+
+	it("is on while AC power flows in another working state", function () {
+		assert.strictEqual(
+			hybridInverterActive(
+				[
+					{ id: "inverter.operatingState", val: 4 },
+					{ id: "grid.power", val: 120 },
+				],
+				true,
+			),
+			true,
+		);
+	});
+
+	it("is off in an unknown working state without AC power, and always off while disconnected", function () {
+		assert.strictEqual(
+			hybridInverterActive(
+				[
+					{ id: "inverter.operatingState", val: 0 },
+					{ id: "grid.power", val: 0 },
+				],
+				true,
+			),
+			false,
+		);
+		assert.strictEqual(hybridInverterActive(running, false), false);
+	});
+
+	it("is unknown (null) when neither the working state nor the power was delivered", function () {
+		assert.strictEqual(hybridInverterActive([], true), null);
+		assert.strictEqual(hybridInverterActive([{ id: "grid.frequency", val: 50 }], true), null);
 	});
 });
 

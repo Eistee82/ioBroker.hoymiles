@@ -563,6 +563,41 @@ export function mapStorageStationData(block: unknown): MappedStorageStation | nu
 	return result;
 }
 
+/**
+ * `inv_state` ("Working Status") value the cloud labels "On-grid Mode" — recorded live on the running
+ * reference inverter. The S-Miles app carries no value table for `inv_state` (it prints the cloud's
+ * `fmt_val` as delivered) and no on/off notion for a storage inverter at all (its device list only
+ * distinguishes connected / alarm / disconnected), so this is the one working state known for sure.
+ */
+export const HYBRID_INV_STATE_ON_GRID = 3;
+
+/**
+ * Whether a cloud-only hybrid inverter is running — the value of `inverter.active`, which the
+ * local path derives from the microinverter's RealData and which nobody wrote for a cloud-only
+ * device (it stayed on its default and showed "off" for a running inverter). On: the tree reports
+ * the inverter connected and it is either in On-grid Mode or exchanging AC power (`p_total` ≠ 0).
+ * Off: disconnected, or an unknown working state without any AC power. A powered-off inverter has
+ * not been observed yet, so no `inv_state` value is claimed to mean "off".
+ *
+ * @param values - Mapped `IND_INV` values of the inverter (`mapRealIndicators(...).values`).
+ * @param connected - `warn_data.connect` of the inverter's device-tree node.
+ * @returns true/false, or null when neither the working state nor the power was delivered.
+ */
+export function hybridInverterActive(
+	values: ReadonlyArray<{ id: string; val: unknown }>,
+	connected: boolean,
+): boolean | null {
+	const state = values.find(v => v.id === "inverter.operatingState")?.val;
+	const power = values.find(v => v.id === "grid.power")?.val;
+	if (typeof state !== "number" && typeof power !== "number") {
+		return null;
+	}
+	if (!connected) {
+		return false;
+	}
+	return state === HYBRID_INV_STATE_ON_GRID || (typeof power === "number" && power !== 0);
+}
+
 /** Action code of the setting read that returns the battery working mode and its parameters. */
 export const SETTING_ACTION_BATTERY_MODE_READ = 1013;
 

@@ -5,7 +5,7 @@ import { formatDtuVersion, formatSwVersion } from "./protobufHandler.js";
 import { anonymize, deriveStationTzOffsetMs, errorMessage, logOnError, mapLimit, stationWallClockToEpoch, } from "./utils.js";
 import { stationStateMap, stationIndicatorStateMap, stationIndicatorChannels, hybridStateMap, hybridChannels, buildStateCommon, } from "./stateDefinitions.js";
 import { mapCloudGridProfile } from "./gridProfile.js";
-import { CLOUD_DEV_TYPE_BATTERY, CLOUD_DEV_TYPE_BATTERY_PACK, CLOUD_DEV_TYPE_HYBRID_INVERTER, REAL_INDICATOR_TYPE_PV, mapBatterySettings, DAY_CURVES, ENERGY_STATS_MODES, inverterHasPv, mapCloudAlarms, mapDayCurve, mapDryContactSettings, mapEnergyStats, mapIncomeStats, mapRealIndicators, mapStorageStationData, stationIndicatorTypes, } from "./hybridCloud.js";
+import { CLOUD_DEV_TYPE_BATTERY, CLOUD_DEV_TYPE_BATTERY_PACK, CLOUD_DEV_TYPE_HYBRID_INVERTER, REAL_INDICATOR_TYPE_PV, mapBatterySettings, DAY_CURVES, ENERGY_STATS_MODES, hybridInverterActive, inverterHasPv, mapCloudAlarms, mapDayCurve, mapDryContactSettings, mapEnergyStats, mapIncomeStats, mapRealIndicators, mapStorageStationData, stationIndicatorTypes, } from "./hybridCloud.js";
 const num = (v) => parseFloat(v) || 0;
 const WEATHER_DESCRIPTIONS = {
     "01d": { en: "Clear sky", de: "Klarer Himmel" },
@@ -714,6 +714,10 @@ class CloudPoller {
                 continue;
             }
             writes.push(this.writeHybridState(sn, v.id, v.val, q));
+        }
+        const active = hybridInverterActive(mapped.values, inv.warn_data?.connect === true);
+        if (active !== null) {
+            writes.push(this.writeHybridState(sn, "inverter.active", active, q));
         }
         const reportedInputs = typeof invData?.pv_total === "number" ? invData.pv_total : 0;
         let pvValues = 0;

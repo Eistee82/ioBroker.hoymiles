@@ -2591,6 +2591,52 @@ describe("CloudPoller – hybrid inverter", function () {
 		});
 	});
 
+	it("derives inverter.active for the cloud-only hybrid inverter from its working state / AC power and the tree's connect flag", async function () {
+		const writes = {};
+		const cloud = makeMockCloud();
+		cloud.getStationRealtime = async () => baseRealtime();
+		cloud.getDeviceTree = async () => hatDeviceTree();
+		cloud.getRealIndicators = async (stationId, selector) =>
+			selector.type === 6
+				? {
+						title: "IND_INV",
+						list: [
+							{ key: "inv_state", val: "3", fmt_val: "On-grid Mode" },
+							{ key: "p_total", val: -297, unit: "W" },
+						],
+					}
+				: null;
+		const adapter = makeMockAdapter();
+		adapter.setStateAsync = async (id, val) => {
+			writes[id] = val;
+		};
+		const devices = new Map([["DTU_HAT", hatDevice()]]);
+		const poller = makePoller({ cloud, adapter, devices, stationDevices: new Set([1]), slowPollFactor: 1 });
+		await poller.poll();
+		poller.stop();
+		assert.deepStrictEqual(writes["DTU_HAT.inverter.active"], { val: true, ack: true, q: 0x00 });
+		assert.deepStrictEqual(writes["DTU_HAT.inverter.operatingState"], { val: 3, ack: true, q: 0x00 });
+
+		// Disconnected inverter: off, and stale like everything else of it.
+		const tree = hatDeviceTree();
+		tree[0].children[0].warn_data = { connect: false, warn: false };
+		cloud.getDeviceTree = async () => tree;
+		const offline = makePoller({ cloud, adapter, devices, stationDevices: new Set([1]), slowPollFactor: 1 });
+		await offline.poll();
+		offline.stop();
+		assert.deepStrictEqual(writes["DTU_HAT.inverter.active"], { val: false, ack: true, q: 0x42 });
+
+		// Nothing usable delivered: the state is left alone rather than guessed.
+		delete writes["DTU_HAT.inverter.active"];
+		cloud.getDeviceTree = async () => hatDeviceTree();
+		cloud.getRealIndicators = async (stationId, selector) =>
+			selector.type === 6 ? { title: "IND_INV", list: [{ key: "frequency", val: "50.01", unit: "Hz" }] } : null;
+		const bare = makePoller({ cloud, adapter, devices, stationDevices: new Set([1]), slowPollFactor: 1 });
+		await bare.poll();
+		bare.stop();
+		assert.strictEqual(writes["DTU_HAT.inverter.active"], undefined);
+	});
+
 	it("requests the PV set with a type-4 selector, using the inverter's own device type, only when pv_total > 0", async function () {
 		const calls = [];
 		const cloud = makeMockCloud();

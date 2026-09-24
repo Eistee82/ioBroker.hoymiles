@@ -346,7 +346,7 @@ The adapter determines how many there are, in this order:
 | `inverter.temperature` | number | °C | no | Inverter temperature |
 | `inverter.powerLimit` | number | % | **yes** | Power limit, 2–100 %, local. **Use this state to realize zero-export / dynamic curtailment.** ⚠️ Every write programs flash inside the device (see the warning below) — the adapter therefore throttles it with a dead band and a minimum interval |
 | `inverter.activePowerLimit` | number | % | no | Active power limit (live, local) |
-| `inverter.active` | boolean | — | **yes** | Turn inverter on/off (local; via the cloud for cloud-only devices) |
+| `inverter.active` | boolean | — | **yes** | Turn inverter on/off (local; via the cloud for cloud-only devices). On a hybrid inverter the value is read back from the cloud: on while the cloud reports it connected and in On-grid Mode or exchanging AC power, off while disconnected |
 | `inverter.reboot` | boolean | — | **yes** | Reboot inverter (button, local; via the cloud for cloud-only devices) |
 | `inverter.powerFactorLimit` | number | — | **yes** | Power factor limit (-1 to 1, local). ⚠️ Programs flash just like the power limit (action 47, same success path) — throttled |
 | `inverter.reactivePowerLimit` | number | ° | **yes** | Reactive power limit (-50 to 50, local). ⚠️ Programs flash just like the power limit (action 48, same success path) — throttled |

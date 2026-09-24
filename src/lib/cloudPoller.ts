@@ -35,6 +35,7 @@ import {
 	mapBatterySettings,
 	DAY_CURVES,
 	ENERGY_STATS_MODES,
+	hybridInverterActive,
 	inverterHasPv,
 	mapCloudAlarms,
 	mapDayCurve,
@@ -1183,6 +1184,12 @@ class CloudPoller {
 				continue;
 			}
 			writes.push(this.writeHybridState(sn, v.id, v.val, q));
+		}
+		// `inverter.active` has no local RealData to come from on a cloud-only device: read it back
+		// from the working state and the AC power, with the tree's connect flag.
+		const active = hybridInverterActive(mapped.values, inv.warn_data?.connect === true);
+		if (active !== null) {
+			writes.push(this.writeHybridState(sn, "inverter.active", active, q));
 		}
 
 		// PV inputs are a set of their own, not part of the inverter's. Skipped for an inverter that
