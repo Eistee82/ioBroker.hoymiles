@@ -14,42 +14,44 @@ export function isHoymilesAdvertisement(adv) {
     const name = (adv.name ?? "").trim();
     return HOYMILES_NAME_PREFIXES.some(p => name.startsWith(p));
 }
-function sleep(ms, timers, signal) {
-    return new Promise(resolve => {
-        if (signal?.aborted) {
-            resolve();
+export const NATIVE_DELAY = {
+    delay: ms => new Promise(resolve => {
+        NATIVE_TIMERS.setTimeout(resolve, ms);
+    }),
+};
+export async function discoverGateways(timeoutMs = 5000, waiter = NATIVE_DELAY, signal, createDiscovery = () => new Discovery({})) {
+    const found = new Map();
+    if (signal?.aborted) {
+        return [];
+    }
+    const disc = createDiscovery();
+    let closed = false;
+    const close = () => {
+        if (closed) {
             return;
         }
-        let handle = undefined;
-        const done = () => {
-            signal?.removeEventListener("abort", done);
-            timers.clearTimeout(handle);
-            resolve();
-        };
-        handle = timers.setTimeout(done, ms);
-        signal?.addEventListener("abort", done, { once: true });
-    });
-}
-export async function discoverGateways(timeoutMs = 5000, timers = NATIVE_TIMERS, signal) {
-    const found = new Map();
-    const disc = new Discovery({});
-    disc.on("info", (info) => {
+        closed = true;
+        try {
+            disc.destroy();
+        }
+        catch {
+        }
+    };
+    disc.on("info", info => {
         const host = info.address || info.host || info.address6;
         if (host) {
             const name = info.name || (info.host && info.host !== host ? info.host : "");
             found.set(host, { host, port: info.port || ESPHOME_API_PORT, name });
         }
     });
+    signal?.addEventListener("abort", close, { once: true });
     try {
         disc.run();
-        await sleep(timeoutMs, timers, signal);
+        await waiter.delay(timeoutMs);
     }
     finally {
-        try {
-            disc.destroy();
-        }
-        catch {
-        }
+        signal?.removeEventListener("abort", close);
+        close();
     }
     return [...found.values()];
 }

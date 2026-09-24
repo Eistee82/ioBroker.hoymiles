@@ -1,5 +1,5 @@
 import assert from "node:assert";
-import { bleNameToSn, isHoymilesAdvertisement } from "../build/lib/bleDiscovery.js";
+import { bleNameToSn, discoverGateways, isHoymilesAdvertisement } from "../build/lib/bleDiscovery.js";
 import { EsphomeGateway } from "../build/lib/esphomeGateway.js";
 
 describe("bleDiscovery", function () {
@@ -49,6 +49,110 @@ describe("bleDiscovery", function () {
 		});
 		it("parses a MAC without separators", function () {
 			assert.strictEqual(EsphomeGateway.macToNumber("aabbccddeeff"), 0xaabbccddeeff);
+		});
+	});
+
+	describe("discoverGateways", function () {
+		/** A stand-in for the esphome-native-api Discovery: records run/destroy, lets the test emit "info". */
+		function fakeDiscovery() {
+			const disc = {
+				ran: 0,
+				destroyed: 0,
+				listeners: [],
+				on(event, cb) {
+					if (event === "info") {
+						disc.listeners.push(cb);
+					}
+					return disc;
+				},
+				run() {
+					disc.ran++;
+				},
+				destroy() {
+					disc.destroyed++;
+				},
+				emit(info) {
+					for (const cb of disc.listeners) {
+						cb(info);
+					}
+				},
+			};
+			return disc;
+		}
+
+		it("waits with the adapter's delay, collects the answers and closes the mDNS socket afterwards", async function () {
+			const disc = fakeDiscovery();
+			const delays = [];
+			const waiter = {
+				delay: async ms => {
+					delays.push(ms);
+					// Answers arrive while the wait is pending.
+					disc.emit({ address: "192.168.1.20", host: "proxy.local", port: 6053, name: "" });
+					disc.emit({ host: "other.local", port: 0 });
+					disc.emit({ address: "192.168.1.20", host: "proxy.local", port: 6053 }); // duplicate host
+				},
+			};
+			const result = await discoverGateways(1234, waiter, undefined, () => disc);
+			assert.deepStrictEqual(delays, [1234], "the wait goes through the injected delay(), nothing else");
+			assert.strictEqual(disc.ran, 1);
+			assert.strictEqual(disc.destroyed, 1, "the socket is closed once the wait is over");
+			assert.deepStrictEqual(result, [
+				{ host: "192.168.1.20", port: 6053, name: "proxy.local" },
+				{ host: "other.local", port: 6053, name: "" },
+			]);
+		});
+
+		it("closes the mDNS socket the moment the caller aborts, even though adapter.delay() never settles on unload", function () {
+			const disc = fakeDiscovery();
+			const abort = new AbortController();
+			// adapter.delay() clears its timer on unload and leaves the promise pending forever — model exactly that.
+			const waiter = { delay: () => new Promise(() => {}) };
+			void discoverGateways(15000, waiter, abort.signal, () => disc);
+			assert.strictEqual(disc.ran, 1);
+			assert.strictEqual(disc.destroyed, 0, "still listening while nothing happened");
+			abort.abort();
+			assert.strictEqual(disc.destroyed, 1, "abort tears the socket down without waiting for the delay");
+		});
+
+		it("does not destroy twice when the delay ends after an abort", async function () {
+			const disc = fakeDiscovery();
+			const abort = new AbortController();
+			let release;
+			const waiter = { delay: () => new Promise(resolve => (release = resolve)) };
+			const pending = discoverGateways(5000, waiter, abort.signal, () => disc);
+			abort.abort();
+			release();
+			await pending;
+			assert.strictEqual(disc.destroyed, 1);
+		});
+
+		it("opens no socket at all when the signal is already aborted", async function () {
+			const disc = fakeDiscovery();
+			const abort = new AbortController();
+			abort.abort();
+			let waited = false;
+			const result = await discoverGateways(
+				5000,
+				{
+					delay: async () => {
+						waited = true;
+					},
+				},
+				abort.signal,
+				() => disc,
+			);
+			assert.deepStrictEqual(result, []);
+			assert.strictEqual(disc.ran, 0);
+			assert.strictEqual(waited, false);
+		});
+
+		it("survives a discovery that throws on destroy", async function () {
+			const disc = fakeDiscovery();
+			disc.destroy = () => {
+				throw new Error("already closed");
+			};
+			const result = await discoverGateways(10, { delay: async () => {} }, undefined, () => disc);
+			assert.deepStrictEqual(result, []);
 		});
 	});
 });

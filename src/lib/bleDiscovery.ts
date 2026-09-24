@@ -1,6 +1,6 @@
 import { Discovery } from "@2colors/esphome-native-api";
 import { ESPHOME_API_PORT, BLE_SERVICE_UUID } from "./constants.js";
-import { NATIVE_TIMERS, type TimerScheduler } from "./tcpConnection.js";
+import { NATIVE_TIMERS } from "./tcpConnection.js";
 
 /** A discovered ESPHome Bluetooth-Proxy gateway. */
 export interface GatewayInfo {
@@ -52,42 +52,79 @@ export function isHoymilesAdvertisement(adv: { name?: string; serviceUuidsList?:
 	return HOYMILES_NAME_PREFIXES.some(p => name.startsWith(p));
 }
 
-function sleep(ms: number, timers: TimerScheduler, signal?: AbortSignal): Promise<void> {
-	return new Promise(resolve => {
-		if (signal?.aborted) {
-			resolve();
-			return;
-		}
-		// Initialized here rather than at the setTimeout call so that a scheduler calling back
-		// synchronously cannot hit the temporal dead zone inside done().
-		let handle: ioBroker.Timeout | undefined = undefined;
-		const done = (): void => {
-			signal?.removeEventListener("abort", done);
-			timers.clearTimeout(handle);
-			resolve();
-		};
-		// A shutting-down adapter refuses the timer and returns undefined; the abort from the
-		// caller's stop() is what ends the wait then.
-		handle = timers.setTimeout(done, ms);
-		signal?.addEventListener("abort", done, { once: true });
-	});
+/**
+ * What the discovery needs for its wait: the adapter, whose `delay()` the js-controller cancels on
+ * unload (the timer is cleared and the promise is left pending, so nothing after the `await` runs).
+ */
+export interface DelayProvider {
+	/** Resolve after `ms` milliseconds — or never, once the adapter is shutting down. */
+	delay: (ms: number) => Promise<void>;
+}
+
+/** Fallback for standalone use (tools, tests) when no adapter is at hand. */
+export const NATIVE_DELAY: DelayProvider = {
+	delay: ms =>
+		new Promise(resolve => {
+			NATIVE_TIMERS.setTimeout(resolve, ms);
+		}),
+};
+
+/** An mDNS answer of the esphome-native-api `Discovery`. */
+interface DiscoveryInfo {
+	host?: string;
+	address?: string;
+	address6?: string;
+	port?: number;
+	name?: string;
+}
+
+/** The part of the esphome-native-api `Discovery` this module uses — injectable for tests. */
+export interface DiscoveryLike {
+	/** Subscribe to the answers; each carries the gateway's address, host, port and name. */
+	on: (event: "info", listener: (info: DiscoveryInfo) => void) => unknown;
+	/** Start browsing. */
+	run: () => void;
+	/** Close the multicast socket. */
+	destroy: () => void;
 }
 
 /**
  * Discover ESPHome gateways on the local network via mDNS (`_esphomelib._tcp`).
  *
+ * The wait is the adapter's `delay()`. On unload the js-controller cancels it and never resolves
+ * it, so the `finally` below would not run then — which is why the mDNS socket is closed from the
+ * abort signal the caller's `stop()` fires, not only after the wait. That matters in compact mode,
+ * where the process lives on after the instance stopped.
+ *
  * @param timeoutMs - how long to listen for responses
- * @param timers - timer scheduler; pass the adapter so the js-controller cleans the wait timer up
- * @param signal - abort the wait and tear the mDNS socket down early, e.g. from the caller's stop()
+ * @param waiter - the adapter (its `delay()` is cancelled by the js-controller on unload)
+ * @param signal - abort from the caller's stop(): tears the mDNS socket down right away
+ * @param createDiscovery - builds the mDNS browser; replaced in tests
  */
 export async function discoverGateways(
 	timeoutMs = 5000,
-	timers: TimerScheduler = NATIVE_TIMERS,
+	waiter: DelayProvider = NATIVE_DELAY,
 	signal?: AbortSignal,
+	createDiscovery: () => DiscoveryLike = () => new Discovery({}),
 ): Promise<GatewayInfo[]> {
 	const found = new Map<string, GatewayInfo>();
-	const disc = new Discovery({});
-	disc.on("info", (info: { host?: string; address?: string; address6?: string; port?: number; name?: string }) => {
+	if (signal?.aborted) {
+		return [];
+	}
+	const disc = createDiscovery();
+	let closed = false;
+	const close = (): void => {
+		if (closed) {
+			return;
+		}
+		closed = true;
+		try {
+			disc.destroy();
+		} catch {
+			/* ignore */
+		}
+	};
+	disc.on("info", info => {
 		// Prefer the resolved IPv4 — a ".local" mDNS hostname only resolves when the OS runs an mDNS
 		// resolver (Bonjour/Avahi), which many setups (Docker/Linux) do not. Fall back to host/IPv6.
 		const host = info.address || info.host || info.address6;
@@ -97,15 +134,13 @@ export async function discoverGateways(
 			found.set(host, { host, port: info.port || ESPHOME_API_PORT, name });
 		}
 	});
+	signal?.addEventListener("abort", close, { once: true });
 	try {
 		disc.run();
-		await sleep(timeoutMs, timers, signal);
+		await waiter.delay(timeoutMs);
 	} finally {
-		try {
-			disc.destroy();
-		} catch {
-			/* ignore */
-		}
+		signal?.removeEventListener("abort", close);
+		close();
 	}
 	return [...found.values()];
 }
