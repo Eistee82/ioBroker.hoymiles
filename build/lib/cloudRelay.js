@@ -1,5 +1,7 @@
+import * as tls from "node:tls";
 import TcpConnection from "./tcpConnection.js";
 import { unixSeconds } from "./utils.js";
+import { HOYMILES_ROOT_CA_PEM } from "./hoymilesCa.js";
 import { CLOUD_RECONNECT_DELAY_MIN_MS, CLOUD_RECONNECT_DELAY_MAX_MS, CLOUD_HEARTBEAT_INTERVAL_MS, CLOUD_SOCKET_TIMEOUT_MS, CLOUD_DEFAULT_REALDATA_INTERVAL_MS, CLOUD_MIN_REALDATA_INTERVAL_MS, } from "./constants.js";
 const CLOUD_CMD_HEARTBEAT = [0x22, 0x02];
 const CLOUD_CMD_REALDATA = [0x22, 0x0c];
@@ -18,8 +20,8 @@ class CloudRelay extends TcpConnection {
     seq;
     realDataIntervalMs;
     rxBuffer;
-    constructor(host, port, timers) {
-        super(host, port, CLOUD_RECONNECT_DELAY_MIN_MS, CLOUD_RECONNECT_DELAY_MAX_MS, timers);
+    constructor(host, port, timers, options) {
+        super(host, port, CLOUD_RECONNECT_DELAY_MIN_MS, CLOUD_RECONNECT_DELAY_MAX_MS, timers, options?.tls ? { ca: [HOYMILES_ROOT_CA_PEM, ...tls.rootCertificates], minVersion: "TLSv1.2" } : null);
         this.paused = false;
         this.heartbeatTimer = undefined;
         this.realDataTimer = undefined;

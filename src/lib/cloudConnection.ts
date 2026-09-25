@@ -1,5 +1,6 @@
 import { postJson, postBinary, HttpError } from "./httpClient.js";
-import { parseChartResponse } from "./chartParser.js";
+import { decodeIndicatorDayCurve, parseChartResponse } from "./chartParser.js";
+import type { IndicatorDayCurve } from "./chartParser.js";
 import {
 	TOKEN_MAX_AGE_MS,
 	ENSURE_TOKEN_TIMEOUT_MS,
@@ -23,6 +24,20 @@ import {
 	APP_TID,
 } from "./constants.js";
 import type { CloudGridProfileParam } from "./gridProfile.js";
+import { NATIVE_DELAY, type DelayProvider } from "./tcpConnection.js";
+import {
+	ENERGY_STATS_TYPE_PRODUCTION_CONSUMPTION,
+	SETTING_ACTION_BATTERY_MODE_READ,
+	SETTING_ACTIONS_DRY_CONTACT_READ,
+} from "./hybridCloud.js";
+import type {
+	BatterySettingsResult,
+	CloudAlarmList,
+	DryContactResult,
+	EnergyStatsResult,
+	IncomeStats,
+	RealIndicatorData,
+} from "./hybridCloud.js";
 import {
 	errorMessage,
 	withTimeout,
@@ -86,6 +101,27 @@ export interface BurstData {
 	flow?: BurstFlowEdge[];
 	/** Present for m:3 (per-device detail). */
 	mis?: BurstInverter[];
+	/** Present for m:0 on a storage system, where it replaces `power`. */
+	es?: BurstStorageFlow;
+	/** Present for m:0 on a storage system: battery state of charge (%). */
+	soc?: number;
+}
+/**
+ * Station power flow of a storage system (burst m:0), all in watts. Seen on a hybrid-inverter
+ * station, which delivers this block instead of {@link BurstStationPower}. Signs are passed through
+ * as delivered; `bp` was positive while the battery discharged.
+ */
+export interface BurstStorageFlow {
+	/** PV generation power (W). */
+	pp: number;
+	/** Grid power (W). */
+	gp: number;
+	/** Battery power (W). */
+	bp: number;
+	/** Load / consumption power (W). */
+	lp: number;
+	/** Not identified yet — 0 in every sample seen. */
+	sp: number;
 }
 
 /**
@@ -271,6 +307,8 @@ interface CloudStationDetails {
 	timezone: { tz_name: string };
 	/** Station wall-clock time ("YYYY-MM-DD HH:mm:ss"), station-local zone. */
 	local_time?: string;
+	/** Installed battery capacity in kWh. Storage stations only. */
+	bms_capacitor?: string;
 	[key: string]: unknown;
 }
 
@@ -362,6 +400,8 @@ class CloudConnection {
 	private readonly log: (msg: string) => void;
 	private tokenTime: number;
 	private tokenRefreshPromise: Promise<void> | null;
+	/** Wait between device-task status polls — the adapter in production (see constructor). */
+	private readonly waiter: DelayProvider;
 	/**
 	 * Active API base URL. Starts at CLOUD_HOST_DEFAULT and may be replaced
 	 * once region_c maps the user's account to a different regional host.
@@ -400,9 +440,12 @@ class CloudConnection {
 	 * @param user - Hoymiles account email
 	 * @param password - Hoymiles account password
 	 * @param log - Debug log callback
+	 * @param waiter - Wait between the status polls of a device task; pass the adapter, whose
+	 *   `delay()` the js-controller cancels on unload, so a pending task stops polling with it
 	 */
-	constructor(user: string, password: string, log?: (msg: string) => void) {
+	constructor(user: string, password: string, log?: (msg: string) => void, waiter: DelayProvider = NATIVE_DELAY) {
 		this.user = user;
+		this.waiter = waiter;
 		const input = Buffer.from(password);
 		this.credentials = buildCredentialChallenges(input);
 		this.credentialInput = input;
@@ -1116,6 +1159,215 @@ class CloudConnection {
 	}
 
 	/**
+	 * Read the live values of a hybrid inverter, its battery or the station's grid meter.
+	 * Endpoint: /pvm-data/api/0/indicators/data/select_real_indicators_data — what the S-Miles web
+	 * portal's device detail view polls. Unlike the microinverter day charts this is plain JSON.
+	 *
+	 * Only the web/installer API is known to serve it; a home-profile account gets `null`. The
+	 * request is a pure read of values the cloud already holds — nothing is sent to the device.
+	 *
+	 * @param stationId - Cloud station ID.
+	 * @param selector - Device selector: `{type:6, inv_list:[{id,sn,type:6}]}` for a hybrid inverter,
+	 *   `{type:2}` for the grid meter, `{type:10, inv_list:[{id,sn,type:0}], dev_sn}` for a battery.
+	 * @returns The decoded `data` object, or null when unavailable.
+	 */
+	async getRealIndicators(stationId: number, selector: Record<string, unknown>): Promise<RealIndicatorData | null> {
+		this.assertStationId(stationId);
+		await this.ensureToken();
+		if (this.profile === "home") {
+			return null;
+		}
+		try {
+			const result = await this._post<RealIndicatorData>(
+				"/pvm-data/api/0/indicators/data/select_real_indicators_data",
+				{ sid: stationId, ...selector },
+			);
+			this.logResponseSample(`real-indicators-${String(selector.type)}`, result);
+			if (result.status !== "0") {
+				this.log(`[diag] Real indicators (type ${String(selector.type)}) failed: ${result.message}`);
+				return null;
+			}
+			return result.data ?? null;
+		} catch (err) {
+			this.log(`[diag] Real indicators (type ${String(selector.type)}) error: ${errorMessage(err)}`);
+			return null;
+		}
+	}
+
+	/**
+	 * Energy flows of a plant with a meter or a battery over one period — the data set of the
+	 * S-Miles app's "Production & Consumption" tab (`type: 6`; the "Overview" tab is `type: 1`).
+	 * Endpoint: /pvm-data/api/0/station/data_fd/stat_g_a. A pure cloud read. `mode` 1 = day,
+	 * 3 = month, 4 = year, 5 = lifetime; `date` is any day within the period (station-local). A
+	 * plain PV plant answers with `last_data_time` only.
+	 *
+	 * @param stationId - Cloud station ID.
+	 * @param mode - Period selector (see above).
+	 * @param date - A date inside the period, `YYYY-MM-DD`.
+	 * @returns The decoded `data` object, or null when unavailable.
+	 */
+	async getStationEnergyStats(stationId: number, mode: number, date: string): Promise<EnergyStatsResult | null> {
+		this.assertStationId(stationId);
+		await this.ensureToken();
+		if (this.profile === "home") {
+			return null;
+		}
+		try {
+			const result = await this._post<EnergyStatsResult>("/pvm-data/api/0/station/data_fd/stat_g_a", {
+				sid: stationId,
+				mode,
+				date,
+				type: ENERGY_STATS_TYPE_PRODUCTION_CONSUMPTION,
+			});
+			this.logResponseSample(`energy-stats-${mode}`, result);
+			if (result.status !== "0") {
+				this.log(`[diag] Energy stats (mode ${mode}) failed: ${result.message}`);
+				return null;
+			}
+			return result.data ?? null;
+		} catch (err) {
+			this.log(`[diag] Energy stats (mode ${mode}) error: ${errorMessage(err)}`);
+			return null;
+		}
+	}
+
+	/**
+	 * Income and cost as the cloud accounts them. Endpoint: /eps/api/0/record/stat_a — a pure cloud
+	 * read that works for any plant with a tariff.
+	 *
+	 * @param stationId - Cloud station ID.
+	 */
+	async getIncomeStats(stationId: number): Promise<IncomeStats | null> {
+		this.assertStationId(stationId);
+		await this.ensureToken();
+		try {
+			const result = await this._post<IncomeStats>("/eps/api/0/record/stat_a", { sid: stationId });
+			this.logResponseSample("income-stats", result);
+			return result.status === "0" ? (result.data ?? null) : null;
+		} catch (err) {
+			this.log(`[diag] Income stats error: ${errorMessage(err)}`);
+			return null;
+		}
+	}
+
+	/**
+	 * Active alarms of one device as the cloud lists them. Endpoint family /monitor/api/0/ng/dev/…:
+	 * `flesw` for a storage inverter, `fldw` for a DTU (`flmw` microinverter, `flmew` meter). Pure
+	 * cloud read; unknown on the home profile.
+	 *
+	 * @param stationId - Cloud station ID.
+	 * @param sn - Device serial.
+	 * @param kind - Endpoint suffix, e.g. `flesw`.
+	 */
+	async getCloudAlarms(stationId: number, sn: string, kind: string): Promise<CloudAlarmList | null> {
+		this.assertStationId(stationId);
+		await this.ensureToken();
+		if (this.profile === "home" || !sn) {
+			return null;
+		}
+		try {
+			const result = await this._post<CloudAlarmList>(`/monitor/api/0/ng/dev/${kind}`, {
+				sid: stationId,
+				sn,
+				page: 1,
+				page_size: 50,
+			});
+			this.logResponseSample(`alarms-${kind}`, result);
+			return result.status === "0" ? (result.data ?? null) : null;
+		} catch (err) {
+			this.log(`[diag] Cloud alarms (${kind}) error: ${errorMessage(err)}`);
+			return null;
+		}
+	}
+
+	/**
+	 * Day curve of one indicator of a storage-plant device. Endpoint:
+	 * /pvm-data/api/0/indicators/data/cid_g_a (protobuf). Pure cloud read; unknown on the home profile.
+	 *
+	 * @param stationId - Cloud station ID.
+	 * @param devType - Cloud device type (6 inverter, 10 battery).
+	 * @param devList - Devices, `[{id, sn}]`.
+	 * @param indicator - Indicator key, e.g. `p_total`.
+	 * @param date - Station-local day, `YYYY-MM-DD`.
+	 */
+	async getIndicatorDayCurve(
+		stationId: number,
+		devType: number,
+		devList: Array<{ id: number; sn: string }>,
+		indicator: string,
+		date: string,
+	): Promise<IndicatorDayCurve | null> {
+		this.assertStationId(stationId);
+		await this.ensureToken();
+		if (this.profile === "home") {
+			return null;
+		}
+		try {
+			const rawBuf = await this._postBinary("/pvm-data/api/0/indicators/data/cid_g_a", {
+				sid: stationId,
+				dev_type: devType,
+				date,
+				dev_list: devList,
+				ind_list: [indicator],
+				pb_ver: 1,
+			});
+			return decodeIndicatorDayCurve(rawBuf);
+		} catch (err) {
+			this.log(`[diag] Day curve (${indicator}) error: ${errorMessage(err)}`);
+			return null;
+		}
+	}
+
+	/**
+	 * Read the dry-contact (relay) settings of a storage plant from the device. Like the battery
+	 * settings a request that travels down to the device; which action code a plant answers
+	 * depends on its relay hardware, so the codes are tried in turn while the cloud says
+	 * "Not Supported". Only reads.
+	 *
+	 * @param stationId - Cloud station ID.
+	 * @returns The result, or null when no code is supported.
+	 */
+	async readDryContactSettings(stationId: number): Promise<DryContactResult | null> {
+		this.assertStationId(stationId);
+		let lastError: unknown = null;
+		for (const action of SETTING_ACTIONS_DRY_CONTACT_READ) {
+			try {
+				const result = await this.runDeviceTask<{ code?: number; data?: DryContactResult }>(
+					PVM_CTL_SETTING_READ_PATH,
+					{ action, data: { sid: stationId } },
+					PVM_CTL_SETTING_STATUS_PATH,
+				);
+				return result.data ?? {};
+			} catch (err) {
+				if (!/not supported/i.test(errorMessage(err))) {
+					throw err;
+				}
+				lastError = err;
+			}
+		}
+		this.log(`[diag] Dry-contact read: no supported action code (${errorMessage(lastError)})`);
+		return null;
+	}
+
+	/**
+	 * Read the battery working mode and its parameters from a storage plant. Unlike the indicator
+	 * reads this is a request that travels down to the device (the portal issues the same one when
+	 * its battery settings page is opened) — it only reads, but it is not free, so it is made on
+	 * demand and not on every poll.
+	 *
+	 * @param stationId - Cloud station ID.
+	 */
+	async readBatterySettings(stationId: number): Promise<BatterySettingsResult> {
+		this.assertStationId(stationId);
+		const result = await this.runDeviceTask<{ code?: number; data?: BatterySettingsResult }>(
+			PVM_CTL_SETTING_READ_PATH,
+			{ action: SETTING_ACTION_BATTERY_MODE_READ, data: { sid: stationId } },
+			PVM_CTL_SETTING_STATUS_PATH,
+		);
+		return result.data ?? {};
+	}
+
+	/**
 	 * Get station-wide realtime energy/power. Both API surfaces produce the same
 	 * 15 core fields (today_eq, real_power, …); the home variant additionally returns
 	 * `reflux_station_data`, `efl_*`, `local_time`, `warn_data`, and `electricity_price`
@@ -1311,7 +1563,8 @@ class CloudConnection {
 		}
 		const taskId = started.data;
 		for (let attempt = 0; attempt < DEVICE_SETTING_POLL_MAX; attempt++) {
-			await new Promise<void>(resolve => globalThis.setTimeout(resolve, DEVICE_SETTING_POLL_INTERVAL_MS));
+			// The adapter's delay(): on unload it never settles, so no request goes out after the stop.
+			await this.waiter.delay(DEVICE_SETTING_POLL_INTERVAL_MS);
 			const status = await this._post<T>(statusPath, { id: taskId });
 			if (status.status !== "0") {
 				throw new Error(`Device task ${statusPath} failed: ${status.message}`);

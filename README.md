@@ -24,7 +24,7 @@ This adapter is not affiliated with, endorsed by, or connected to Hoymiles Power
 
 ## Description
 
-ioBroker adapter for [**Hoymiles**](https://www.hoymiles.com/) **HMS-xxxW-xT** and **HMS-xxx-xWB** microinverters with integrated WiFi/Bluetooth DTU (DTUBI).
+ioBroker adapter for [**Hoymiles**](https://www.hoymiles.com/) **HMS-xxxW-xT** and **HMS-xxx-xWB** microinverters with integrated WiFi/Bluetooth DTU (DTUBI) — locally or through the S-Miles cloud — and, through the cloud, for **HAT** hybrid inverters with battery.
 
 Two connection modes (independently configurable):
 - **Local:** Direct TCP/Protobuf communication on port 10081 — no cloud, no gateway needed
@@ -150,16 +150,12 @@ Cloud stations create aggregated device nodes (e.g. `hoymiles.0.station-12345.*`
 
 ### **WORK IN PROGRESS**
 
-- (@Eistee82) **Inverters of the WB series (e.g. HMS-800-2WB) can now be used locally.** They have no network port and are only reachable over Bluetooth, so the adapter talks to them through a cheap ESP32 running an ESPHome Bluetooth Proxy — reading and controlling them without the cloud. Proxy and inverters are found automatically
-- (@Eistee82) **Your inverters and plants now appear on the Config Manager tab** with live values, controls and a settings dialog — no need to build your own view first
-- (@Eistee82) **A Shelly or ecotracker energy meter can be connected to a WB-series inverter**, either just to read it out or so the inverter throttles itself and nothing is fed into the grid. The regulation runs inside the inverter, so it keeps working even when the adapter does not
-- (@Eistee82) **The inverter's own daily power curve is now read locally** (`history.powerJson`), covering the whole day instead of just the first hours — and without the cloud
-- (@Eistee82) **Setting a power limit wears out the inverter's memory.** Every write erases two flash sectors, which was not previously known and applies to earlier versions too. The adapter now skips changes that are too small and keeps a minimum gap between writes, both adjustable. Writing a single configuration value also no longer overwrites the rest of the configuration
-- (@Eistee82) **The log stays quiet while a Bluetooth inverter is off for the night.** Every failed reconnect used to add a warning, so a night produced hundreds of them; now the first failure is reported once and the retries move to the debug log. The adapter also stops hammering the Bluetooth proxy — it waits 5s, 10s, 20s and so on, up to 5 minutes, and goes back to a quick retry as soon as the inverter answers again
-- (@Eistee82) **The plant's total power now keeps up with the individual inverters.** When every inverter is connected locally, the station total came from a slow cloud query and could show a fraction of what the inverters were reporting at that moment — 255 W next to 516 W and 265 W. It now comes from the same fast realtime channel as everything else
-- (@Eistee82) **The settings are now split into Local, Cloud and Bluetooth tabs**, with a link straight to the S-Miles portal and to the instructions for flashing a Bluetooth proxy
-- (@Eistee82) **What the cloud sends back is now read instead of discarded.** The server's time and timezone reach the inverter again, and an upload the server rejects is reported rather than silently swallowed. Downlinks that would start a firmware download are refused — relaying one unattended can brick the hardware. Values the device already reports became states of their own: its network settings (`config.ipAddress`, `subnetMask`, `gateway`, `dnsServer`, `macAddress`), what kind of meter it has (`config.meterKind`, `meterInterface`), and its zero-export and lock settings
-- (@Eistee82) **Corrected readings:** the WiFi signal is a 0-100 quality, not dBm — the two states are now called `dtu.signalQuality` and `config.wifiSignalQuality` instead of carrying "rssi" in their name; reactive power can be negative; energy counters could jump backwards after an inverter restart; and `inverter.activePowerLimit` showed 0 % on a producing inverter. Three states that never held usable data (`inverter.modulationIndexSignal`, `dtu.searchResult`, `pvN.errorCode`) are gone and disappear from existing installations by themselves
+- (@Eistee82) **DTUs with firmware V01.01.01 work locally again.** That firmware encrypts the local connection and moves the DTU's cloud link to TLS on port 10083; the adapter now speaks both. DTUs with older firmware are unaffected
+- (@Eistee82) **Hybrid inverters with a battery (HAT series, e.g. HAT-6.0HV-EUG1) can be read through the cloud** — experimental, needs an installer-type S-Miles account. Everything about the battery is in one place below the inverter (`<dtuSerial>.battery.*`); the plant gets its live power flow, its energy balance for today, month, year and lifetime including the self-sufficiency rate (the figures of the app's "Production & Consumption" tab), income and cost, its measuring points (grid meter, loads, PV meter, generator), day curves, the cloud's alarm list and the relay settings. Read-only; power on/off and reboot are sent in the form such a device expects. Many thanks to BastiBerlin for providing access to a real system for development and testing
+- (@Eistee82) **WB-series inverters (e.g. HMS-800-2WB) can be used locally over Bluetooth** through a cheap ESP32 running an ESPHome Bluetooth Proxy, found automatically. A Shelly or ecotracker meter can be connected to such an inverter, either to read it out or so the inverter itself keeps the grid feed-in at zero. Nightly reconnect attempts no longer flood the log
+- (@Eistee82) **Your inverters and plants appear on the Config Manager tab** with live values, controls and a settings dialog, and the adapter settings are split into Local, Cloud and Bluetooth tabs with links to the S-Miles portal and the Bluetooth-proxy instructions. In the adapter list it now appears as "Hoymiles Inverters"
+- (@Eistee82) **More accurate readings, less wear:** the inverter's full daily power curve (`history.powerJson`) is read locally, the plant total keeps up with the individual inverters, energy counters no longer jump backwards after a restart, `inverter.activePowerLimit` no longer shows 0 % while producing, and the DTU's network, meter, zero-export and lock settings become states. Power-limit writes are rate-limited because every write wears the inverter's flash memory, and a single setting no longer overwrites the rest of the configuration
+- (@Eistee82) **Renamed and removed states:** the WiFi signal is a 0–100 quality, not dBm, and is now called `dtu.signalQuality` / `config.wifiSignalQuality` (was "rssi"). `inverter.modulationIndexSignal`, `dtu.searchResult` and `pvN.errorCode` never held usable data and disappear from existing installations by themselves
 
 ### 0.4.1 (2026-07-18)
 - (@Eistee82) Packaging: removed the npm `prepare` install script — installs from GitHub now use the committed `build/` output directly, so no dev dependencies are downloaded onto the target system; npm releases are still built freshly via `prepublishOnly`
@@ -198,7 +194,7 @@ Older entries: see [CHANGELOG_OLD.md](CHANGELOG_OLD.md).
 
 MIT License
 
-Copyright (c) 2026 Eistee82
+Copyright (c) 2026 Eistee82 (t.me/AMEistee)
 
 Permission is hereby granted, free of charge, to any person obtaining a copy
 of this software and associated documentation files (the "Software"), to deal

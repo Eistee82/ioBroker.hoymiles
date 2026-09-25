@@ -271,6 +271,96 @@ describe("CloudManager – event delegation", function () {
 		assert.doesNotThrow(() => manager.onRelayDataSent());
 	});
 
+	it("readBatterySettings does not throw when no poller exists yet", async function () {
+		const manager = new CloudManager({
+			adapter: makeMockAdapter(),
+			protobuf: makeMockProtobuf(),
+			cloudUser: "test@example.com",
+			cloudPassword: "password123",
+			enableLocal: false,
+			enableCloudRelay: false,
+			dataInterval: 5,
+			slowPollFactor: 6,
+			localContexts: [],
+		});
+		await assert.doesNotReject(() => manager.readBatterySettings(1));
+	});
+
+	it("readBatterySettings delegates to the cloud poller with the same station id", async function () {
+		const manager = new CloudManager({
+			adapter: makeMockAdapter(),
+			protobuf: makeMockProtobuf(),
+			cloudUser: "test@example.com",
+			cloudPassword: "password123",
+			enableLocal: false,
+			enableCloudRelay: false,
+			dataInterval: 5,
+			slowPollFactor: 6,
+			localContexts: [],
+		});
+		const calls = [];
+		// Overwrite the private field — same trick the other tests use for `manager.cloud`.
+		manager.cloudPoller = {
+			readBatterySettings: async stationId => {
+				calls.push(stationId);
+			},
+		};
+		await manager.readBatterySettings(42);
+		assert.deepStrictEqual(calls, [42]);
+	});
+
+	it("no longer exposes handleStationStateChange (removed — main.ts routes battery.readSettings through DeviceContext)", function () {
+		const manager = new CloudManager({
+			adapter: makeMockAdapter(),
+			protobuf: makeMockProtobuf(),
+			cloudUser: "test@example.com",
+			cloudPassword: "password123",
+			enableLocal: false,
+			enableCloudRelay: false,
+			dataInterval: 5,
+			slowPollFactor: 6,
+			localContexts: [],
+		});
+		assert.strictEqual(typeof manager.handleStationStateChange, "undefined");
+	});
+
+	it("readDryContactSettings does not throw when no poller exists yet", async function () {
+		const manager = new CloudManager({
+			adapter: makeMockAdapter(),
+			protobuf: makeMockProtobuf(),
+			cloudUser: "test@example.com",
+			cloudPassword: "password123",
+			enableLocal: false,
+			enableCloudRelay: false,
+			dataInterval: 5,
+			slowPollFactor: 6,
+			localContexts: [],
+		});
+		await assert.doesNotReject(() => manager.readDryContactSettings(1));
+	});
+
+	it("readDryContactSettings delegates to the cloud poller with the same station id", async function () {
+		const manager = new CloudManager({
+			adapter: makeMockAdapter(),
+			protobuf: makeMockProtobuf(),
+			cloudUser: "test@example.com",
+			cloudPassword: "password123",
+			enableLocal: false,
+			enableCloudRelay: false,
+			dataInterval: 5,
+			slowPollFactor: 6,
+			localContexts: [],
+		});
+		const calls = [];
+		manager.cloudPoller = {
+			readDryContactSettings: async stationId => {
+				calls.push(stationId);
+			},
+		};
+		await manager.readDryContactSettings(42);
+		assert.deepStrictEqual(calls, [42]);
+	});
+
 	it("onLocalDisconnected does not throw on fresh manager", function () {
 		const manager = new CloudManager({
 			adapter: makeMockAdapter(),
@@ -622,6 +712,80 @@ describe("CloudManager – _discoverDevices", function () {
 		}
 
 		assert.strictEqual(adapter.devices.size, 0);
+		manager.stop();
+	});
+
+	it("sets hybridInverter=true on a cloud-only device created from a tree node with a type-6 (hybrid inverter) child", async function () {
+		const adapter = makeMockAdapter();
+		adapter.extendObjectAsync = async () => {};
+
+		const manager = new CloudManager({
+			adapter,
+			protobuf: makeMockProtobuf(),
+			cloudUser: "test@example.com",
+			cloudPassword: "password123",
+			enableLocal: false,
+			enableCloudRelay: false,
+			dataInterval: 5,
+			slowPollFactor: 6,
+			localContexts: [],
+		});
+		manager.cloud = {
+			token: "mock-token",
+			login: async () => "mock-token",
+			getStationList: async () => [{ id: 1, name: "Storage station" }],
+			getDeviceTree: async () => [{ sn: "DTU_HAT_DISC", children: [{ sn: "INV_HAT_DISC", type: 6 }] }],
+			disconnect: () => {},
+			ensureToken: async () => {},
+		};
+
+		try {
+			await manager.start();
+		} catch {
+			/* CloudPoller errors are acceptable — only discovery is under test */
+		}
+
+		const ctx = adapter.devices.get("DTU_HAT_DISC");
+		assert.ok(ctx, "cloud-only device must have been created");
+		assert.strictEqual(ctx.hybridInverter, true);
+
+		manager.stop();
+	});
+
+	it("leaves hybridInverter false for a cloud-only device created from a tree node with only microinverter children", async function () {
+		const adapter = makeMockAdapter();
+		adapter.extendObjectAsync = async () => {};
+
+		const manager = new CloudManager({
+			adapter,
+			protobuf: makeMockProtobuf(),
+			cloudUser: "test@example.com",
+			cloudPassword: "password123",
+			enableLocal: false,
+			enableCloudRelay: false,
+			dataInterval: 5,
+			slowPollFactor: 6,
+			localContexts: [],
+		});
+		manager.cloud = {
+			token: "mock-token",
+			login: async () => "mock-token",
+			getStationList: async () => [{ id: 1, name: "Micro station" }],
+			getDeviceTree: async () => [{ sn: "DTU_MICRO_DISC", children: [{ sn: "INV_MICRO_DISC", type: 3 }] }],
+			disconnect: () => {},
+			ensureToken: async () => {},
+		};
+
+		try {
+			await manager.start();
+		} catch {
+			/* CloudPoller errors are acceptable — only discovery is under test */
+		}
+
+		const ctx = adapter.devices.get("DTU_MICRO_DISC");
+		assert.ok(ctx, "cloud-only device must have been created");
+		assert.strictEqual(ctx.hybridInverter, false);
+
 		manager.stop();
 	});
 

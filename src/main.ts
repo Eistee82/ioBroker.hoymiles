@@ -368,6 +368,30 @@ class Hoymiles extends utils.Adapter {
 		await this.cloudManager.sendDeviceCommand(devSn, dtuSn, action, devType);
 	}
 
+	/**
+	 * Read the battery settings of a storage plant from the device (read-only).
+	 *
+	 * @param stationId - Cloud station id the requesting device belongs to.
+	 */
+	async readBatterySettings(stationId: number): Promise<void> {
+		if (!this.cloudManager) {
+			throw new Error("Cloud is not enabled");
+		}
+		await this.cloudManager.readBatterySettings(stationId);
+	}
+
+	/**
+	 * Read the dry-contact (relay) settings of a storage plant from the device (read-only).
+	 *
+	 * @param stationId - Cloud station id the requesting device belongs to.
+	 */
+	async readDryContactSettings(stationId: number): Promise<void> {
+		if (!this.cloudManager) {
+			throw new Error("Cloud is not enabled");
+		}
+		await this.cloudManager.readDryContactSettings(stationId);
+	}
+
 	// --- State change routing ---
 
 	private async onStateChange(id: string, state: ioBroker.State | null | undefined): Promise<void> {

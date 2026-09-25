@@ -1,7 +1,8 @@
 import TcpConnection from "./tcpConnection.js";
-import { HM_MAGIC_0, HM_MAGIC_1 } from "./constants.js";
+import { HM_HEADER_SIZE, HM_MAGIC_0, HM_MAGIC_1 } from "./constants.js";
+import Encryption from "./encryption.js";
 const MAGIC_HEADER = Buffer.from([HM_MAGIC_0, HM_MAGIC_1]);
-const HEADER_SIZE = 10;
+const HEADER_SIZE = HM_HEADER_SIZE;
 const HEARTBEAT_TIMEOUT = 20000;
 const RECONNECT_DELAY_MIN = 1000;
 const RECONNECT_DELAY_MAX = 300000;
@@ -18,6 +19,7 @@ class DtuConnection extends TcpConnection {
     idleTimer;
     lastRequestTime;
     consecutiveFailedSends;
+    encryptedFrames;
     constructor(host, port, heartbeatGenerator, timers) {
         super(host, port, RECONNECT_DELAY_MIN, RECONNECT_DELAY_MAX, timers);
         this.heartbeatGenerator = heartbeatGenerator || null;
@@ -27,6 +29,10 @@ class DtuConnection extends TcpConnection {
         this.idleTimer = undefined;
         this.lastRequestTime = 0;
         this.consecutiveFailedSends = 0;
+        this.encryptedFrames = false;
+    }
+    setEncryptedFrames(active) {
+        this.encryptedFrames = active;
     }
     connect() {
         this.receiveBufferLen = 0;
@@ -109,12 +115,13 @@ class DtuConnection extends TcpConnection {
                 this.receiveBufferLen -= 1;
                 continue;
             }
-            if (this.receiveBufferLen < totalLen) {
+            const frameLen = Encryption.wireLength(this.receiveBuffer, this.encryptedFrames);
+            if (this.receiveBufferLen < frameLen) {
                 break;
             }
-            const message = Buffer.from(this.receiveBuffer.subarray(0, totalLen));
-            this.receiveBuffer.copy(this.receiveBuffer, 0, totalLen, this.receiveBufferLen);
-            this.receiveBufferLen -= totalLen;
+            const message = Buffer.from(this.receiveBuffer.subarray(0, frameLen));
+            this.receiveBuffer.copy(this.receiveBuffer, 0, frameLen, this.receiveBufferLen);
+            this.receiveBufferLen -= frameLen;
             this.emit("message", message);
         }
     }

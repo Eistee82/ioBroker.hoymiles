@@ -3,33 +3,33 @@
     "name": "hoymiles",
     "version": "0.4.1",
     "titleLang": {
-      "en": "Hoymiles HMS-xxxW-xT",
-      "de": "Hoymiles HMS-xxxW-xT",
-      "ru": "Hoymiles HMS-xxxW-xT",
-      "pt": "Hoymiles HMS-xxxW-xT",
-      "nl": "Hoymiles HMS-xxxW-xT",
-      "fr": "Hoymiles HMS-xxxW-xT",
-      "it": "Hoymiles HMS-xxxW-xT",
-      "es": "Hoymiles HMS-xxxW-xT",
-      "pl": "Hoymiles HMS-xxxW-xT",
-      "uk": "Hoymiles HMS-xxxW-xT",
-      "zh-cn": "Hoymiles HMS-xxxW-xT"
+      "en": "Hoymiles Inverters",
+      "de": "Hoymiles Wechselrichter",
+      "ru": "Инверторы Hoymiles",
+      "pt": "Inversores Hoymiles",
+      "nl": "Hoymiles-omvormers",
+      "fr": "Onduleurs Hoymiles",
+      "it": "Inverter Hoymiles",
+      "es": "Inversores Hoymiles",
+      "pl": "Falowniki Hoymiles",
+      "uk": "Інвертори Hoymiles",
+      "zh-cn": "Hoymiles 逆变器"
     },
     "desc": {
-      "en": "Monitor Hoymiles HMS inverters via local TCP/Protobuf and/or S-Miles Cloud API",
-      "de": "Hoymiles HMS Wechselrichter per lokalem TCP/Protobuf und/oder S-Miles Cloud-API überwachen",
-      "ru": "Мониторинг инверторов Hoymiles HMS через локальный TCP/Protobuf и/или облачный API S-Miles",
-      "pt": "Monitorar inversores Hoymiles HMS via TCP/Protobuf local e/ou API Cloud S-Miles",
-      "nl": "Hoymiles HMS omvormers monitoren via lokaal TCP/Protobuf en/of S-Miles Cloud API",
-      "fr": "Surveiller les onduleurs Hoymiles HMS via TCP/Protobuf local et/ou API Cloud S-Miles",
-      "it": "Monitorare inverter Hoymiles HMS tramite TCP/Protobuf locale e/o API Cloud S-Miles",
-      "es": "Monitorear inversores Hoymiles HMS vía TCP/Protobuf local y/o API Cloud S-Miles",
-      "pl": "Monitorowanie falowników Hoymiles HMS przez lokalny TCP/Protobuf i/lub API Cloud S-Miles",
-      "uk": "Моніторинг інверторів Hoymiles HMS через локальний TCP/Protobuf та/або хмарний API S-Miles",
-      "zh-cn": "通过本地TCP/Protobuf和/或S-Miles云API监控Hoymiles HMS逆变器"
+      "en": "Hoymiles HMS microinverters locally (WiFi or Bluetooth) or via the S-Miles cloud, plus HAT hybrid inverters with battery via the cloud",
+      "de": "Hoymiles HMS-Mikrowechselrichter lokal (WLAN oder Bluetooth) oder über die S-Miles-Cloud, dazu HAT-Hybrid-Wechselrichter mit Batterie über die Cloud",
+      "ru": "Микроинверторы Hoymiles HMS локально (Wi-Fi или Bluetooth) или через облако S-Miles, а также гибридные инверторы HAT с аккумулятором через облако",
+      "pt": "Microinversores Hoymiles HMS localmente (Wi-Fi ou Bluetooth) ou pela nuvem S-Miles, além de inversores híbridos HAT com bateria pela nuvem",
+      "nl": "Hoymiles HMS-micro-omvormers lokaal (wifi of Bluetooth) of via de S-Miles-cloud, plus HAT-hybride omvormers met batterij via de cloud",
+      "fr": "Micro-onduleurs Hoymiles HMS en local (Wi-Fi ou Bluetooth) ou via le cloud S-Miles, ainsi que les onduleurs hybrides HAT avec batterie via le cloud",
+      "it": "Microinverter Hoymiles HMS in locale (Wi-Fi o Bluetooth) o tramite il cloud S-Miles, più inverter ibridi HAT con batteria tramite il cloud",
+      "es": "Microinversores Hoymiles HMS en local (Wi-Fi o Bluetooth) o a través de la nube S-Miles, además de inversores híbridos HAT con batería a través de la nube",
+      "pl": "Mikrofalowniki Hoymiles HMS lokalnie (Wi-Fi lub Bluetooth) lub przez chmurę S-Miles, a także falowniki hybrydowe HAT z baterią przez chmurę",
+      "uk": "Мікроінвертори Hoymiles HMS локально (Wi-Fi або Bluetooth) або через хмару S-Miles, а також гібридні інвертори HAT з акумулятором через хмару",
+      "zh-cn": "在本地（WiFi 或蓝牙）或通过 S-Miles 云连接 Hoymiles HMS 微型逆变器，并通过云连接带电池的 HAT 混合逆变器"
     },
     "authors": [
-      "Eistee"
+      "Eistee (t.me/AMEistee)"
     ],
     "keywords": [
       "solar",

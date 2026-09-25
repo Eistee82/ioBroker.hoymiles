@@ -1,6 +1,6 @@
 ![Logo](../../admin/hoymiles.png)
 
-# ioBroker.hoymiles — Hoymiles HMS-xxxW-xT / HMS-xxx-xWB
+# ioBroker.hoymiles — Hoymiles HMS-Mikrowechselrichter und HAT-Hybrid-Wechselrichter
 
 ## Unterstützte Wechselrichter
 
@@ -12,12 +12,12 @@ Dieser Adapter ist für **Hoymiles HMS Mikrowechselrichter mit integrierter WiFi
 |--------|:---:|:---:|:---:|:---:|--------|
 | HMS-300W-1T | 1 | ✅ | — | ✅ | Ungetestet |
 | HMS-350W-1T | 1 | ✅ | — | ✅ | Ungetestet |
-| HMS-400W-1T | 1 | ✅ | — | ✅ | Ungetestet |
+| HMS-400W-1T | 1 | ✅ | — | ✅ | **Getestet** (Lokal + Cloud-Relay, DTU-Firmware V01.01.01) |
 | HMS-450W-1T | 1 | ✅ | — | ✅ | Ungetestet |
 | HMS-500W-1T | 1 | ✅ | — | ✅ | Ungetestet |
 | HMS-600W-2T | 2 | ✅ | — | ✅ | Ungetestet |
 | HMS-700W-2T | 2 | ✅ | — | ✅ | Ungetestet |
-| HMS-800W-2T | 2 | ✅ | — | ✅ | **Getestet** (Lokal + Cloud) |
+| HMS-800W-2T | 2 | ✅ | — | ✅ | **Getestet** (Lokal + Cloud; lokal + Cloud-Relay auch mit DTU-Firmware V01.01.01) |
 | HMS-900W-2T | 2 | ✅ | — | ✅ | Ungetestet |
 | HMS-1000W-2T | 2 | ✅ | — | ✅ | **Getestet** (Lokal) |
 | HMS-1600DW-4T | 4 | ✅ | — | ✅ | Ungetestet |
@@ -38,6 +38,18 @@ Dieser Adapter ist für **Hoymiles HMS Mikrowechselrichter mit integrierter WiFi
 
 **Cloud-only-Betrieb:** Jeder unterstützte Wechselrichter im S-Miles-Konto funktioniert auch ganz ohne lokale Verbindung — der Adapter erkennt ihn automatisch und liefert über die Cloud Echtzeitleistung (Burst-Kanal), Energie-Aggregate, das Netzprofil sowie die Befehle Wechselrichter ein/aus + Neustart (`inverter.active` / `inverter.reboot`) und DTU-Neustart (`dtu.reboot`). Die übrigen Befehle (Leistungslimit, Sperren, Warnungen quittieren, …) erfordern die lokale TCP-Verbindung.
 
+### Hybrid-Wechselrichter mit Batterie (HAT-Serie) — Cloud, nur lesend, experimentell
+
+Ein Hoymiles-**Hybrid-Wechselrichter** im S-Miles-Konto — Referenzanlage: **HAT-6.0HV-EUG1** mit Batterie **HB-(10-23)S-G2**, dreiphasigem Netzzähler und DTS-WIFI-G1 — wird **über die Cloud** ausgelesen: dreiphasige AC-Werte, Notstrom-Ausgang (EPS), PV-Eingänge, die Batterie im Detail (Lade- und Gesundheitszustand, Zell- und Modul-Extremwerte), dazu der Energiefluss der Anlage und ihre Energiebilanz für heute, diesen Monat, dieses Jahr und gesamt — Netzbezug und -einspeisung, direkt genutzter PV-Strom, Verbrauch, Batterieladung und -entladung sowie die Autarkie, mit den Zahlen des Reiters „Ertrag & Verbrauch“ der S-Miles-App — und die Einnahmen und Kosten, wie die Cloud sie abrechnet. Unter dem Wechselrichter stehen außerdem die heutigen Verläufe von AC-Leistung, Batterieleistung und Ladezustand, die Alarmliste der Cloud und, auf Anforderung vom Gerät gelesen, die Batterie- und Trockenkontakt-(Relais-)Einstellungen. Die States stehen unter [Hybrid-Wechselrichter](#dtuserial--hybrid-wechselrichter-mit-batterie-hat-serie-cloud-dynamisch). Auch die **Messpunkte** der Anlage — Netzzähler, Verbraucher, ein PV-Zähler an einem Fremd-Wechselrichter, ein Generator — werden gelesen und erscheinen unterhalb der Station; siehe [Messpunkte der Anlage](#station-id--messpunkte-netzzähler-verbraucher-pv-zähler-generator-cloud-dynamisch). Das funktioniert für jede Anlage, für die die Cloud sie meldet, nicht nur für Hybrid-Wechselrichter.
+
+- **Lesen, nicht steuern.** Betriebsmodus und Batterie-Einstellungen werden angezeigt (`<dtuSerial>.battery.*`), lassen sich aber nicht ändern — der Adapter hat keinen Datenpunkt, der die Arbeitsweise des Speichersystems verändert. Das Auslesen des Netzprofils, ein für Mikro-Wechselrichter gebauter Befehl, wird an einen Hybrid-Wechselrichter nicht gesendet.
+- **Die drei bestehenden Befehle arbeiten so, wie das S-Miles-Portal sie sendet.** Die Gerätewartung des Portals bietet für einen HAT-Wechselrichter genau *Einschalten*, *Abschaltung* und *Neustart* an, für seine DTU einen *Neustart* — das sind `inverter.active`, `inverter.reboot` und `dtu.reboot` des Adapters. Bei einer Speicheranlage gehen sie mit dem Gerätetyp des Wechselrichters und der Speicher-Variante des DTU-Neustarts hinaus, genau wie im Portal. Sie wurden gegen den Code des Portals geprüft, aber **nicht an echter Hardware ausgeführt** — das Abschalten eines Speicher-Wechselrichters nimmt auch den Notstrom-Ausgang vom Netz, also bewusst einsetzen.
+- **Benötigt ein Installateur-Konto** (eines, das sich auf global.hoymiles.com anmelden kann). Für die S-Miles-Home-API ist der zugehörige Endpunkt nicht bekannt.
+- **Aktualisierungsrate:** Der schnelle Echtzeitkanal funktioniert auch bei einer Speicheranlage, auch im reinen Cloud-Betrieb: PV-, Netz-, Last- und Batterieleistung (`station-<id>.grid.*`) sowie der Ladezustand der Batterie (`<dtuSerial>.battery.soc`) kommen etwa alle 10 s — an der Referenzanlage gemessen liefert das Gerät wirklich in diesem Takt, schnelleres Abfragen bringt nichts Neueres. Anders als bei Mikro-Wechselrichtern hat der Kanal für eine Speicheranlage keinen Geräte-Modus; alles Übrige (Phasen, EPS, PV-Eingänge, Batterie-Details, Zähler) folgt deshalb dem normalen Upload des Geräts in die Cloud, etwa alle 5 Minuten.
+- **Welche Werte schnell sind und welche nicht.** Live (etwa alle 10 s) kommen genau fünf Werte: `station-<id>.grid.power` (PV), `grid.gridPower`, `grid.loadPower`, `grid.batteryPower` und `<dtuSerial>.battery.soc`. `grid.gridPower` *ist* der Live-Wert des Netzzählers. Alles andere — auch die phasenweisen Werte unter `gridMeter.*`, `load.*` und `pvMeter.*` — ist nur so frisch wie der letzte Upload des Geräts in die Cloud (etwa alle 5 Minuten); schneller bietet die Cloud sie nicht an, auch dem Portal nicht.
+- **Vorzeichen.** `grid.gridPower` ist +Bezug/−Einspeisung und `grid.batteryPower` +Entladen/−Laden, jeweils aus dem Energiefluss-Graphen der Cloud. Die Geräte- und Zählerwerte werden so durchgereicht, wie die Cloud sie liefert — dabei meldet der Netz*zähler* Bezug als **negative** Wirkleistung (`gridMeter.power` stand auf −284 W, während `grid.gridPower` +278 W zeigte).
+- Gebaut anhand einer einzigen Anlage, ausgelesen über das Cloud-Konto ihres Besitzers (danke an BastiBerlin) — Rückmeldungen von anderen Anlagen sind willkommen.
+
 > Dieser Adapter funktioniert **NICHT** mit: HMS-1600/1800/2000-4T ohne "DW", HM-Serie, MI-Serie, externen DTU-Sticks oder HMT-Dreiphasenmodellen.
 
 ## Konfiguration
@@ -55,6 +67,8 @@ Dieser Adapter ist für **Hoymiles HMS Mikrowechselrichter mit integrierter WiFi
 | **Totzone Leistungslimit** | 1 % | Kleinere Änderungen des Leistungslimits werden nicht an das Gerät gesendet. Jedes Setzen beschreibt zwei Flash-Sektoren. 0 = aus. |
 | **Mindestabstand Leistungslimit** | 60 s | Kürzester Abstand zwischen zwei Schreibvorgängen des Leistungslimits. 0 = aus. |
 | **Cloud-Relay** | an | Echtzeitdaten im Namen der DTU an die Hoymiles Cloud weiterleiten. Ohne diese Option blockiert die lokale TCP-Verbindung den Cloud-Upload der DTU. |
+
+> **DTU-Firmware ab V01.01.01 verschlüsselt die lokale Verbindung.** Der Adapter erkennt das an der ersten Antwort der DTU und schaltet von selbst auf AES-128-GCM um — nichts einzustellen. Eine solche DTU spricht auch mit der Cloud per TLS (Port 10083), und das Cloud-Relay zieht mit: Es verbindet sich immer mit dem Server und Port, die in der DTU selbst konfiguriert sind (`config.serverDomain` / `config.serverPort`), auf Port 10083 per TLS, auf Port 10081 per Klartext-TCP. Ältere Firmware (bis V01.00.07) funktioniert unverändert weiter.
 
 ### Cloud-Verbindung (S-Miles)
 
@@ -84,7 +98,7 @@ Login ist ein einzelner v3-Flow plus anschließender Profil-Probe (`region_c →
   - probe akzeptiert → **installer**-Profil — das Konto funktioniert auf `global.hoymiles.com` und nutzt die volle `/pvm/...`-Web-API inkl. `latitude`/`longitude`/`address`/`local_time`/`status`/`warn_data` und Firmware-Versionsstrings.
   - probe abgelehnt (Server: *„can only be used for logging in to the S-Miles Home app"*) → **home**-Profil — vom Server auf `/pvmc/.../*_c` beschränkt. Diese Surface liefert die obigen Felder nicht, dafür aber Rückspeise-/Eigenverbrauchs-Energie und Strom-Tarif. Für die fehlenden Felder legt der Adapter **keine** States an — sie erscheinen nur, wenn die jeweilige Antwort den Wert tatsächlich enthält. `latitude` / `longitude` / `address` werden für Home-Konten zusätzlich über den `pvm-ext/station-ak/find`-Endpoint nachgeladen, den auch die S-Miles-Home-App selbst nutzt — damit funktioniert die Wetter-Abfrage.
 
-> **Hinweis:** `dataeu.hoymiles.com:10081` ist der EU-Cloud-Relay-Server, an den DTUs ihre Daten pushen — **kein** User-Login-Server. Der Adapter regelt das Cloud-Relay automatisch (siehe *Cloud-Relay*).
+> **Hinweis:** `dataeu.hoymiles.com:10081` (Klartext, ältere Firmware) und `dataeu.hoymiles.com:10083` (TLS, Firmware ab V01.01.01) sind die EU-Cloud-Relay-Server, an die DTUs ihre Daten pushen — **keine** User-Login-Server. Der Adapter regelt das Cloud-Relay automatisch (siehe *Cloud-Relay*).
 
 #### Cloud-Login testen
 
@@ -217,6 +231,12 @@ BLE-Geräte (HMS-800-2WB) arbeiten nach demselben Prinzip, aber in gröberen Stu
 > (HMS-800-2WB) hat keinen lokalen TCP-Port; der Adapter nimmt ihm seine Cloud-Verbindung nie
 > weg, es lädt weiterhin selbst hoch. Für BLE-Geräte startet der Adapter deshalb **kein**
 > Relay — es würde einen zweiten Datenstrom unter derselben Seriennummer erzeugen.
+>
+> Das Relay verbindet sich mit dem Server und Port aus der Konfiguration der DTU. Auf Port 10083
+> (Standard der Firmware ab V01.01.01) spricht es TLS und prüft den Server gegen die Hoymiles-eigene
+> CA, genau wie die DTU; auf Port 10081 spricht es Klartext-HM wie ältere Firmware. Die Rahmen darin
+> sind in beiden Fällen dieselben — die DTU weist sich der Cloud gegenüber allein über ihre
+> Seriennummer aus, nicht über ein Zertifikat.
 
 Solange das Relay läuft, antwortet der Cloud-Server auf die Uploads und schickt gelegentlich
 Befehle. Der Adapter ordnet **jede** dieser Nachrichten ihrem Firmware-Namen zu:
@@ -329,7 +349,7 @@ Die Anzahl ermittelt der Adapter in dieser Reihenfolge:
 | `inverter.temperature` | number | °C | nein | Temperatur |
 | `inverter.powerLimit` | number | % | **ja** | Leistungslimit, 2–100 %, lokal. **Mit diesem Datenpunkt lässt sich eine Nulleinspeisung realisieren.** ⚠️ Jedes Setzen beschreibt Flash im Gerät (siehe Warnung unten) — der Adapter drosselt das deshalb über Totzone und Mindestabstand |
 | `inverter.activePowerLimit` | number | % | nein | Aktives Leistungslimit (live, lokal) |
-| `inverter.active` | boolean | — | **ja** | Wechselrichter ein/aus (lokal; bei reinen Cloud-Geräten über die Cloud) |
+| `inverter.active` | boolean | — | **ja** | Wechselrichter ein/aus (lokal; bei reinen Cloud-Geräten über die Cloud). Bei einem Hybrid-Wechselrichter wird der Wert aus der Cloud zurückgelesen: ein, solange die Cloud ihn als verbunden und im Netzbetrieb („On-grid Mode“) oder mit AC-Leistungsfluss meldet, aus bei getrennter Verbindung |
 | `inverter.reboot` | boolean | — | **ja** | Wechselrichter neustarten (lokal; bei reinen Cloud-Geräten über die Cloud) |
 | `inverter.powerFactorLimit` | number | — | **ja** | Leistungsfaktor-Limit (-1 bis 1, lokal). ⚠️ Beschreibt Flash wie das Leistungslimit (action 47, gleicher Erfolgspfad) — gedrosselt |
 | `inverter.reactivePowerLimit` | number | ° | **ja** | Blindleistungs-Limit (-50 bis 50, lokal). ⚠️ Beschreibt Flash wie das Leistungslimit (action 48, gleicher Erfolgspfad) — gedrosselt |
@@ -363,9 +383,16 @@ Die Anzahl ermittelt der Adapter in dieser Reihenfolge:
 | `grid.power` | number | W | Gesamtleistung der Station (live in ~1,5–3 s über den Burst-Kanal — auch in einem rein lokalen Setup; nur ~80 s, wenn der Burst abgeschaltet ist) |
 | `grid.gridPower` | number | W | Netzaustauschleistung (Echtzeit, +Bezug/−Einspeisung) — nur bei Anlagen mit Zähler ≠ 0 |
 | `grid.loadPower` | number | W | Last-/Verbrauchsleistung (Echtzeit) |
-| `grid.batteryPower` | number | W | Batterieleistung (Echtzeit, +Laden/−Entladen) — nur bei Batteriesystemen |
+| `grid.batteryPower` | number | W | Batterieleistung (Echtzeit) — nur bei Batteriesystemen. Bei einer Speicheranlage: +Entladen/−Laden, wie in den Diagrammen des S-Miles-Portals; die Richtung stammt aus dem Energiefluss-Graphen der Cloud, so wie es auch das Portal macht |
 | `grid.pvUtilization` | number | % | PV-Auslastung (Echtzeit) |
 | `grid.dailyEnergy` | number | kWh | Tagesenergie |
+| `grid.gridImportToday` / `gridImportMonth` / `gridImportYear` / `gridImportTotal` | number | kWh | Von der Last aus dem Netz bezogene Energie heute / diesen Monat / dieses Jahr / gesamt — nur bei Anlagen mit Batterie oder Netzzähler; Quelle: Reiter „Ertrag & Verbrauch“ der S-Miles-App |
+| `grid.gridExportToday` / `gridExportMonth` / `gridExportYear` / `gridExportTotal` | number | kWh | Ins Netz eingespeiste PV-Energie heute / diesen Monat / dieses Jahr / gesamt — nur bei Anlagen mit Batterie oder Netzzähler; Quelle: Reiter „Ertrag & Verbrauch“ der S-Miles-App |
+| `grid.pvToLoadToday` / `pvToLoadMonth` / `pvToLoadYear` / `pvToLoadTotal` | number | kWh | Direkt von der Last genutzte PV-Energie heute / diesen Monat / dieses Jahr / gesamt — nur bei Anlagen mit Batterie oder Netzzähler; Quelle: Reiter „Ertrag & Verbrauch“ der S-Miles-App |
+| `grid.consumptionToday` / `consumptionMonth` / `consumptionYear` / `consumptionTotal` | number | kWh | Verbrauch heute / diesen Monat / dieses Jahr / gesamt (Last aus PV + Batterie + Netz) — nur bei Anlagen mit Batterie oder Netzzähler; Quelle: Reiter „Ertrag & Verbrauch“ der S-Miles-App |
+| `grid.selfSufficiencyToday` / `selfSufficiencyMonth` / `selfSufficiencyYear` / `selfSufficiencyTotal` | number | % | Autarkie heute / diesen Monat / dieses Jahr / gesamt: Anteil des Verbrauchs, der nicht aus dem Netz kam, eine Nachkommastelle, 0 solange nichts verbraucht wurde — berechnet wie in der App — nur bei Anlagen mit Batterie oder Netzzähler; Quelle: Reiter „Ertrag & Verbrauch“ der S-Miles-App |
+| `grid.batteryChargeToday` / `batteryChargeMonth` / `batteryChargeYear` / `batteryChargeTotal` | number | kWh | Aus PV in die Batterie geladene Energie heute / diesen Monat / dieses Jahr / gesamt — nur bei Batteriesystemen |
+| `grid.batteryDischargeToday` / `batteryDischargeMonth` / `batteryDischargeYear` / `batteryDischargeTotal` | number | kWh | Von der Last aus der Batterie bezogene Energie heute / diesen Monat / dieses Jahr / gesamt — nur bei Batteriesystemen |
 | `grid.monthEnergy` | number | kWh | Monatsenergie |
 | `grid.yearEnergy` | number | kWh | Jahresenergie |
 | `grid.totalEnergy` | number | kWh | Gesamtenergie |
@@ -375,8 +402,8 @@ Die Anzahl ermittelt der Adapter in dieser Reihenfolge:
 | `grid.currency` | string | — | Währungscode |
 | `grid.isBalance` | boolean | — | Nulleinspeisung aktiv |
 | `grid.isReflux` | boolean | — | Rückspeisung aktiv |
-| `grid.todayIncome` | number | — | Tagesertrag |
-| `grid.totalIncome` | number | — | Gesamtertrag |
+| `grid.todayIncome` / `monthIncome` / `yearIncome` / `totalIncome` | number | — | Ertrag heute / diesen Monat / dieses Jahr / gesamt. Wo die Cloud eine eigene Abrechnung führt (Anlagen mit Tarif), werden deren Zahlen verwendet; sonst werden heute/gesamt als Ertrag × Preis geschätzt |
+| `grid.todayCost` / `monthCost` / `yearCost` / `totalCost` | number | — | Stromkosten heute / diesen Monat / dieses Jahr / gesamt aus der Abrechnung der Cloud — nur bei Anlagen mit Tarif |
 
 ### `station-<id>.info.*` — Stationsinformation (Cloud)
 
@@ -644,6 +671,80 @@ Datenpunkte nie.
 | `meter.l3Current` | number | A | nein | Strom L3 |
 | `meter.l3Power` | number | W | nein | Leistung L3 (vorzeichenbehaftet) |
 
+### `<dtuSerial>.*` — Hybrid-Wechselrichter mit Batterie (HAT-Serie, Cloud, dynamisch)
+
+Wird nur angelegt, wenn die Cloud unter der DTU einen Hybrid-Wechselrichter meldet; alle States sind nur lesbar und kommen aus der Cloud. Die Summenwerte des Wechselrichters nutzen die States, die jedes Gerät hat: `grid.power` (kombinierte Wirkleistung), `grid.frequency`, `inverter.temperature` (interne Umgebungstemperatur), `inverter.model` / `serialNumber` / `swVersion` sowie `pv0.*` / `pv1.*` (`power`, `voltage`, `current` und `dailyEnergy`, wenn die Cloud es liefert) für die PV-Eingänge — nur wenn am Hybrid-Wechselrichter wirklich PV angeschlossen ist; bei einer AC-gekoppelten Anlage, deren PV aus einem separaten Wechselrichter hinter einem PV-Zähler kommt (`station-<id>.pvMeter.*`), kennzeichnet die Cloud die Eingänge als unbenutzt, und es entstehen keine `pvN`-States. `battery.*` entsteht, sobald unter dem Wechselrichter eine Batterie hängt — es ist der eine Ort für alles zur Batterie; bei der Station stehen nur Energiefluss und Energiebilanz der Anlage (`grid.batteryPower`, `grid.batteryCharge*`, `grid.batteryDischarge*` für heute, Monat, Jahr und gesamt). Mit ⁺ markierte Zeilen gehören zum Wortschatz der Cloud für diese Geräte, wurden von der Referenzanlage aber nicht geliefert — sie erscheinen nur, wenn das eigene Gerät sie meldet.
+
+| Datenpunkt | Typ | Einheit | Beschreibung |
+|------------|-----|---------|--------------|
+| `grid.l1Voltage` / `l2…` / `l3…` | number | V | AC-Spannung des Wechselrichters je Phase |
+| `grid.l1Current` / `l2…` / `l3…` | number | A | AC-Strom des Wechselrichters je Phase |
+| `grid.l1Power` / `l2…` / `l3…` | number | W | Wirkleistung des Wechselrichters je Phase |
+| `grid.l1ReactivePower` / `l2…` / `l3…` | number | var | Blindleistung des Wechselrichters je Phase |
+| `inverter.operatingState` | number | — | Betriebsstatus als Zahl (beobachtet: 3 = netzgebunden; die vollständige Werteliste ist noch nicht bekannt) |
+| `inverter.operatingStateText` | string | — | Betriebsstatus im Wortlaut der Cloud |
+| `inverter.busVoltage` | number | V | Zwischenkreisspannung |
+| `inverter.drmMode` | number | — | DRM-Modus (Demand Response) |
+| `inverter.pvPower` | number | W | PV-Leistung aller Eingänge zusammen |
+| `inverter.pvEnergyToday` ⁺ | number | kWh | PV-Energie aller Eingänge heute |
+| `inverter.pvHeatsinkTemperature` / `heatsinkTemperature` / `batteryHeatsinkTemperature` ⁺ | number | °C | Kühlkörpertemperaturen von PV-, Wechselrichter- und Batteriestufe |
+| `inverter.powerFaultCode` / `safetyFaultCode` ⁺ | string | — | Fehlercodes des Leistungs- und des Sicherheits-Controllers |
+| `eps.l1Voltage` / `l2…` / `l3…` | number | V | Spannung am Notstrom-Ausgang (EPS) je Phase |
+| `eps.l1Current` / `l2…` / `l3…` | number | A | Strom am Notstrom-Ausgang (EPS) je Phase |
+| `eps.l1Power` / `l2…` / `l3…` | number | W | Wirkleistung am Notstrom-Ausgang (EPS) je Phase |
+| `battery.serialNumber` / `model` / `swVersion` / `hwVersion` | string | — | Batterie-Stammdaten aus der Geräteliste der Cloud |
+| `battery.capacity` | number | kWh | Installierte Batteriekapazität |
+| `battery.connected` | boolean | — | Batterie laut Cloud online |
+| `battery.type` | string | — | Batterietyp im Wortlaut der Cloud (z. B. `Li-Ion`) |
+| `battery.soc` | number | % | Ladezustand — etwa alle 10 s über den schnellen Echtzeitkanal, sonst zusammen mit den übrigen Batteriewerten |
+| `battery.soh` | number | % | Gesundheitszustand |
+| `battery.state` | number | — | Batteriestatus als Zahl (beobachtet: 2 = Entladen) |
+| `battery.stateText` | string | — | Batteriestatus im Wortlaut der Cloud |
+| `battery.faultCode` | string | — | Fehlercode der Batterie (`0` = keiner) |
+| `battery.voltage` / `current` / `power` | number | V / A / W | Messwerte aus dem Batteriemanagementsystem |
+| `battery.cycles` ⁺ | number | — | Ladezyklen |
+| `battery.heating` / `heatingText` ⁺ | number / string | — | Heizstatus der Batterie, als Zahl und im Wortlaut der Cloud |
+| `battery.workMode` | number | — | Betriebsmodus: 1 = Selbstverbrauch, 2 = Sparmodus, 3 = Backup, 4 = netzunabhängig, 5 = erzwungenes Laden, 6 = erzwungenes Entladen, 7 = Spitzendeckung, 8 = Nutzungszeit. Kommt mit der normalen Stationsabfrage — dafür wird nichts an das Gerät gesendet |
+| `battery.readSettings` | boolean (Button) | — | Liest die Batterie-Einstellungen vom Gerät. **Liest nur** — die Anfrage geht aber bis zum Gerät hinunter und dauert einige Sekunden; sie läuft deshalb einmal pro Adapterstart und danach nur auf Knopfdruck |
+| `battery.reserveSoc` | number | % | Reservierter Ladezustand des aktiven Betriebsmodus (aus dem Einstellungs-Abruf) |
+| `battery.settingsJson` | string (JSON) | — | Die kompletten Einstellungen, wie das Gerät sie meldet: aktiver Modus plus die Parameter aller Modi (`k_1`…`k_8`: Reserve-SoC, Leistungsgrenzen, Zeitfenster, Tarife). Unverändert durchgereicht — die Parameter tragen keine Einheiten und unterscheiden sich je Modus |
+| `battery.settingsUpdated` | number | — | Zeitpunkt des letzten Einstellungs-Abrufs |
+| `dryContact.readSettings` | boolean (Button) | — | Liest die Trockenkontakt-(Relais-)Einstellungen vom Gerät — Generator-Start/Stopp-Schwellen, Lastregelungs-Zeitfenster, SoC-Grenzen. **Liest nur**; geht wie die Batterie-Einstellungen bis zum Gerät hinunter, läuft deshalb einmal pro Adapterstart und danach über diesen Button. Eine Anlage, deren Relais-Hardware keinen der bekannten Aktionscodes beantwortet, wird in Ruhe gelassen |
+| `dryContact.mode` | number | — | Relaismodus (0 = aus) |
+| `dryContact.settingsJson` | string (JSON) | — | Die kompletten Relais-Einstellungen, wie das Gerät sie meldet, unverändert |
+| `dryContact.settingsUpdated` | number | — | Zeitpunkt des letzten Relais-Abrufs |
+| `alarms.cloudActiveCount` / `alarms.cloudActiveJson` | number / string (JSON) | — | Aktive Alarme des Wechselrichters und seiner DTU, wie die Cloud sie listet (`code`, `time`, `source`, Rohdatenworte), beim Slow-Poll aktualisiert |
+| `history.powerJson` / `batteryPowerJson` / `socJson` / `pvPowerJson` | string (JSON) | W / W / % / W | Tageskurven von AC-Leistung, Batterieleistung, Ladezustand und — bei PV am Wechselrichter — PV-Leistung, ein Wert je 5 Minuten; `history.startTime` (ms) und `history.stepTime` (s) wie bei der lokalen Kurve. Beim Slow-Poll aktualisiert |
+| `battery.maxChargeCurrent` / `maxDischargeCurrent` | number | A | Stromgrenzen, die die Batterie zulässt |
+| `battery.chargeCutoffVoltage` / `dischargeCutoffVoltage` | number | V | Spannungsgrenzen der Batterie |
+| `battery.cellTempMax` / `cellTempMin` | number | °C | Wärmste / kälteste Zelle |
+| `battery.moduleTempMax` / `moduleTempMin` | number | °C | Wärmstes / kältestes Modul |
+| `battery.cellVoltageMax` / `cellVoltageMin` | number | V | Höchste / niedrigste Zellspannung |
+| `battery.moduleVoltageMax` / `moduleVoltageMin` | number | V | Höchste / niedrigste Modulspannung |
+| `battery.inverterVoltage` / `inverterCurrent` / `inverterPower` | number | V / A / W | Dieselbe Batterie, wie der Wechselrichter sie an seinen Klemmen misst |
+
+### `station-<id>.*` — Messpunkte: Netzzähler, Verbraucher, PV-Zähler, Generator (Cloud, dynamisch)
+
+Wird für jede Anlage aus der Cloud gelesen, die solche Messpunkte hat — der Adapter fragt nur ab, was die Cloud als vorhanden kennzeichnet. Eine Anlage ohne diese Messpunkte verursacht also keine zusätzliche Anfrage und bekommt keine zusätzlichen States. Alles nur lesbar; benötigt ein Installateur-Konto. Die Werte folgen dem Upload des Geräts in die Cloud (etwa alle 5 Minuten). Vorzeichen werden so durchgereicht, wie sie geliefert werden. Mit ⁺ markierte Zeilen wurden von der Referenzanlage nicht geliefert und erscheinen nur, wenn die eigene Anlage sie meldet.
+
+| Datenpunkt | Typ | Einheit | Beschreibung |
+|------------|-----|---------|--------------|
+| `gridMeter.connected` | boolean | — | Netzzähler laut Cloud online |
+| `gridMeter.power` / `reactivePower` / `powerFactor` / `frequency` | number | W / var / — / Hz | Summenwerte am Netzanschluss |
+| `gridMeter.l1Voltage` / `l1Current` / `l1Power` / `l1ReactivePower` / `l1PowerFactor` (auch `l2…`, `l3…`) | number | V / A / W / var / — | Messwerte des Netzzählers je Phase |
+| `gridMeter.importToday` / `exportToday` ⁺ (auch je Phase: `l1ImportToday`, `l1ExportToday`, …) | number | kWh | Heute aus dem Netz bezogene / ins Netz eingespeiste Energie |
+| `load.l1Voltage` / `l1Power` (auch `l2…`, `l3…`) | number | V / W | Spannung und Wirkleistung auf der Verbraucherseite |
+| `load.energyToday` ⁺ (auch je Phase: `l1EnergyToday`, …) | number | kWh | Heute verbrauchte Energie |
+| `load.mode` / `modeText` ⁺ | number / string | — | Lastmodus, als Zahl und im Wortlaut der Cloud |
+| `pvMeter.connected` | boolean | — | PV-Zähler laut Cloud online (ein Zähler an einem Fremd-PV-Wechselrichter) |
+| `pvMeter.power` / `reactivePower` / `frequency` | number | W / var / Hz | Summenwerte des gemessenen PV-Wechselrichters |
+| `pvMeter.l1Voltage` / `l1Current` / `l1Power` / `l1ReactivePower` (auch `l2…`, `l3…`) | number | V / A / W / var | Messwerte des PV-Zählers je Phase |
+| `pvMeter.energyToday` ⁺ (auch je Phase: `l1EnergyToday`, …) | number | kWh | Energie des gemessenen PV-Wechselrichters heute |
+| `generator.state` / `stateText` ⁺ | number / string | — | Generatorstatus |
+| `generator.power` / `reactivePower` / `frequency` ⁺ | number | W / var / Hz | Summenwerte des Generators |
+| `generator.l1Voltage` / `l1Current` / `l1Power` / `l1ReactivePower` (auch `l2…`, `l3…`) ⁺ | number | V / A / W / var | Messwerte des Generators je Phase |
+| `generator.energyToday` ⁺ (auch je Phase: `l1EnergyToday`, …) | number | kWh | Energie des Generators heute |
+
 ### Adapter-Ebene
 
 | Datenpunkt | Typ | Beschreibung |
@@ -660,23 +761,30 @@ Datenpunkte nie.
 - **Kodierung:** Protocol Buffers (Protobuf)
 - **Frame:** 10-Byte Header (`HM` Magic + Command-ID + CRC16 + Länge) + Protobuf-Payload, mit Sequenznummern (0-60000)
 - **Authentifizierung:** Keine (nur lokales Netzwerk)
-- **Verschlüsselung:** Optionales AES-128-CBC mit SHA-256 Schlüsselableitung (automatisch erkannt)
-- **Heartbeat:** Protobuf-Heartbeat alle 20s für die persistente Verbindung
-- **Reconnect:** 5 Minuten Idle-Timeout, automatische Wiederverbindung mit exponentiellem Backoff (1s-60s)
+- **Verschlüsselung:** keine bis DTU-Firmware V01.00.x. Ab V01.01.01 setzt die DTU in ihrer InfoData-Antwort Bit 25 von `dfs` und erwartet für alle anderen lokalen Rahmen **AES-128-GCM** — Schlüssel und Nonce werden aus dem 16-Byte-`enc_rand` abgeleitet, das sie im Klartext mitschickt, das 16-Byte-Authentifizierungs-Tag folgt dem Chiffretext hinter der Rahmenlänge. Der Adapter erkennt das an der ersten Antwort und stellt selbst um. Nur InfoData-Anfrage und -Antwort bleiben Klartext.
+- **Heartbeat:** ein Protobuf-Heartbeat nach 20 s ohne Verkehr hält die persistente Verbindung offen
+- **Reconnect:** nach 5 Minuten ohne Daten und nach jedem Verbindungsabbruch, mit exponentiellem Backoff von 1 s bis 5 Minuten
 
 ### Cloud (S-Miles API)
 
-- **Base-URL:** `https://neapi.hoymiles.com`
-- **Authentifizierung:** MD5+SHA256 Credential-Hash mit Nonce
-- **Daten:** Stations-Echtzeit, Gerätebaum, Stationsdetails
+- **Base-URL:** `https://neapi.hoymiles.com`; Anlagen im EU-Rechenzentrum liefert `https://euapi.hoymiles.com`, der Adapter wählt den Host pro Anlage
+- **Authentifizierung:** Challenge-Login; Argon2id, wenn der Server ein Salt liefert (S-Miles Home), sonst der klassische MD5/SHA-256-Hash, den auch das Web-Portal sendet
+- **Daten:** Stations-Echtzeit und -Details, Gerätebaum, Echtzeit-Indikatoren je Gerät (Hybrid-Wechselrichter, Batterie, Zähler), der schnelle Echtzeit-Burst-Kanal, Tagesverläufe, die Energiestatistik (Tag, Monat, Jahr, gesamt), Einnahmen und Kosten, Alarmlisten sowie Geräte-Aufträge (Einstellungen lesen, Ein/Aus, Neustart)
+- **Cloud-Relay:** der Adapter reicht die Daten der DTU an den Server und Port weiter, die in der DTU eingestellt sind — Klartext-TCP auf Port 10081 bei älterer Firmware, TLS auf Port 10083 (geprüft gegen die eigene Root-CA von Hoymiles) ab Firmware V01.01.01
 - **Passwort:** Verschlüsselt in der ioBroker-Konfiguration gespeichert
 
 ### Danksagung
 
-Protokoll-Reverse-Engineering durch die Community:
-- [hoymiles-wifi](https://github.com/suaveolent/hoymiles-wifi) — Python-Bibliothek (primäre Referenz)
+Community-Projekte, die die ersten Schritte möglich gemacht haben:
+- [hoymiles-wifi](https://github.com/suaveolent/hoymiles-wifi) — Python-Bibliothek
 - [dtuGateway](https://github.com/ohAnd/dtuGateway) — ESP32-Gateway
-- [Hoymiles-DTU-Proto](https://github.com/henkwiedig/Hoymiles-DTU-Proto) — Originale Protobuf-Definitionen
+- [Hoymiles-DTU-Proto](https://github.com/henkwiedig/Hoymiles-DTU-Proto) — originale Protobuf-Definitionen
+
+Heute wird das Protokoll direkt an der S-Miles-App sowie an der Firmware von DTU und Wechselrichter geprüft.
+
+Dank an die Nutzer, die ihre Anlagen zur Verfügung gestellt haben:
+- **BastiBerlin** — Zugang zu einer HAT-6.0HV-EUG1-Hybridanlage mit Batterie, der Referenz für die Hybrid-Unterstützung
+- **akwf1927** — erster Test der DTU-Firmware V01.01.01 an einem HMS-400W-1T und einem HMS-800W-2T, lokal und über den TLS-Cloud-Relay
 
 ## Fehlerbehebung
 
@@ -686,8 +794,8 @@ Protokoll-Reverse-Engineering durch die Community:
 - Wenn das dtuGateway ESP32 noch läuft, stoppe es zuerst
 
 ### Keine Daten nach Verbindung
-- DTU-Firmware V01.01.00 und neuer kann die lokale Protobuf-Kommunikation brechen
-- Aktualisiere die DTU-Firmware NICHT, wenn dir lokaler Zugang wichtig ist
+- Prüfe das Adapter-Log auf Protobuf-Dekodierfehler
+- `Decryption failed: ... wrong final block length` oder `bad decrypt` bei einer DTU mit Firmware V01.01.01 bedeutet: es läuft eine Adapter-Version ohne Unterstützung für das verschlüsselte Protokoll. Aktuelle Version installieren und die Instanz neu starten; im Log steht dann `DTU requires encrypted communication (firmware V01.01.01+)`
 
 ### Cloud-Login fehlgeschlagen
 - Prüfe E-Mail und Passwort des S-Miles Kontos

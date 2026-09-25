@@ -569,3 +569,29 @@ describe("cloudRelay – downlink routing", function () {
 		assert.strictEqual(e.command.length, 1);
 	});
 });
+
+// ============================================================
+// cloudRelay – transport (plain TCP on 10081, TLS on 10083)
+// ============================================================
+describe("cloudRelay – transport", function () {
+	it("talks plain TCP by default", function () {
+		const relay = new CloudRelay("dataeu.hoymiles.com", 10081);
+		assert.strictEqual(relay.usesTls, false);
+		relay.disconnect();
+	});
+
+	it("wraps the connection in TLS when asked to", function () {
+		const relay = new CloudRelay("dataeu.hoymiles.com", 10083, undefined, { tls: true });
+		assert.strictEqual(relay.usesTls, true);
+		relay.disconnect();
+	});
+
+	it("pins Hoymiles' own root CA for the TLS connection", function () {
+		const relay = new CloudRelay("dataeu.hoymiles.com", 10083, undefined, { tls: true });
+		const ca = relay.tlsOptions.ca;
+		assert.ok(Array.isArray(ca) && ca.length > 1, "Hoymiles CA plus the system roots");
+		assert.ok(ca[0].includes("BEGIN CERTIFICATE"));
+		assert.strictEqual(relay.tlsOptions.minVersion, "TLSv1.2");
+		relay.disconnect();
+	});
+});

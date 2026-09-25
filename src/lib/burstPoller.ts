@@ -1,6 +1,7 @@
 import type CloudConnection from "./cloudConnection.js";
-import type { BurstInverter, BurstStationPower } from "./cloudConnection.js";
+import type { BurstFlowEdge, BurstInverter, BurstStationPower, BurstStorageFlow } from "./cloudConnection.js";
 import type DeviceContext from "./deviceContext.js";
+import { CLOUD_DEV_TYPE_HYBRID_INVERTER, FLOW_NODE_BATTERY, FLOW_NODE_GRID, directedPower } from "./hybridCloud.js";
 import {
 	BURST_MIN_INTERVAL_MS,
 	BURST_MAX_INTERVAL_MS,
@@ -8,7 +9,7 @@ import {
 	BURST_MAX_FAILURES,
 	CLOUD_POLL_CONCURRENCY,
 } from "./constants.js";
-import { stationStateMap, buildStateCommon } from "./stateDefinitions.js";
+import { stationStateMap, hybridStateMap, hybridChannels, buildStateCommon } from "./stateDefinitions.js";
 import { anonymize, errorMessage, mapLimit } from "./utils.js";
 
 // The burst endpoint types its power fields as numbers, but the main cloud API is known to
@@ -169,6 +170,7 @@ class BurstPoller {
 	 */
 	private async startStation(stationId: number): Promise<void> {
 		const targets = new Map<string, InverterTarget>();
+		let storagePlant = false;
 		let deviceTree: Awaited<ReturnType<CloudConnection["getDeviceTree"]>> = [];
 		try {
 			deviceTree = await this.cloud.getDeviceTree(stationId);
@@ -187,7 +189,12 @@ class BurstPoller {
 				continue;
 			}
 			for (const inv of dtu.children ?? []) {
-				if (inv.sn) {
+				// The per-inverter mode (m:3) is a microinverter feature. A hybrid inverter is not
+				// known to answer it, and claiming its grid.power here would stop the slow poller
+				// from writing a value nobody else delivers.
+				if (inv.type === CLOUD_DEV_TYPE_HYBRID_INVERTER) {
+					storagePlant = true;
+				} else if (inv.sn) {
 					targets.set(inv.sn, { dtuSerial: dev.dtuSerial, dev });
 				}
 			}
@@ -211,9 +218,11 @@ class BurstPoller {
 		};
 		this.stations.set(stationId, sb);
 		this.adapter.log.info(
-			targets.size === 0
-				? `Burst realtime started for station ${stationId} (station-level power aggregate only — all inverters served locally)`
-				: `Burst realtime started for station ${stationId} (${targets.size} cloud-only inverter(s))`,
+			targets.size > 0
+				? `Burst realtime started for station ${stationId} (${targets.size} cloud-only inverter(s))`
+				: storagePlant
+					? `Burst realtime started for station ${stationId} (storage plant: power flow and battery state of charge — the channel has no per-inverter mode for hybrid inverters)`
+					: `Burst realtime started for station ${stationId} (station-level power aggregate only — all inverters served locally)`,
 		);
 		void this.poll(sb);
 	}
@@ -259,9 +268,12 @@ class BurstPoller {
 			// Station-level power flow (m:0), aggregated live across all inverters of the station.
 			// The first poll after opening the stream sometimes omits `power` — just skip it then.
 			const stationData = await this.cloud.pollRealtimeBurst(sb.uri, { m: 0, t: 1 });
+			const sq: ioBroker.STATE_QUALITY[keyof ioBroker.STATE_QUALITY] = stationData.con === 1 ? 0x00 : 0x42;
 			if (stationData.power) {
-				const sq: ioBroker.STATE_QUALITY[keyof ioBroker.STATE_QUALITY] = stationData.con === 1 ? 0x00 : 0x42;
 				await this.writeStation(sb.stationId, stationData.power, sq);
+			} else if (stationData.es) {
+				// A storage system delivers its power flow in its own block instead of `power`.
+				await this.writeStorageStation(sb.stationId, stationData.es, stationData.flow, stationData.soc, sq);
 			}
 
 			// Every poll of this cycle worked again — take the power states back from the slow cloud
@@ -376,6 +388,84 @@ class BurstPoller {
 			ws("grid.batteryPower", num(power.bat)),
 			ws("grid.pvUtilization", num(power.pvr)),
 		]);
+	}
+
+	/**
+	 * Write the realtime power flow of a storage system (burst m:0, `es` block) to the same
+	 * `station-<id>.grid.*` states {@link writeStation} fills. Signs are passed through as the
+	 * cloud delivers them.
+	 *
+	 * The state of charge that rides along is the battery's, so it goes where the battery is:
+	 * `<dtuSerial>.battery.soc` of the station's hybrid devices. A storage plant has no per-device
+	 * burst mode (every `m` returns this same block or nothing), so this is the one fast value a
+	 * device gets.
+	 *
+	 * @param stationId - Cloud station id.
+	 * @param es - The `es` object from a burst m:0 response.
+	 * @param flow - The flow graph of the same response; it carries the direction of `gp` and `bp`.
+	 * @param soc - Battery state of charge (%), when delivered.
+	 * @param quality - ioBroker state quality (0x00 live, 0x42 stale).
+	 */
+	private async writeStorageStation(
+		stationId: number,
+		es: BurstStorageFlow,
+		flow: BurstFlowEdge[] | undefined,
+		soc: number | undefined,
+		quality: ioBroker.STATE_QUALITY[keyof ioBroker.STATE_QUALITY],
+	): Promise<void> {
+		const deviceId = `station-${stationId}`;
+		const ws = (suffix: string, val: number): Promise<void> =>
+			this.writeStationState(deviceId, suffix, val, quality);
+		// `o` is the node the power comes out of, `i` the node it goes into.
+		const edges = (flow ?? []).map(e => ({ from: Number(e?.o), to: Number(e?.i) }));
+		const writes = [
+			ws("grid.power", num(es.pp)),
+			ws("grid.gridPower", directedPower(num(es.gp), FLOW_NODE_GRID, edges)),
+			ws("grid.loadPower", num(es.lp)),
+			ws("grid.batteryPower", directedPower(num(es.bp), FLOW_NODE_BATTERY, edges)),
+		];
+		if (soc !== undefined && soc !== null) {
+			for (const dev of this.devices.values()) {
+				if (dev.cloudStationId === stationId && dev.hybridInverter && dev.dtuSerial) {
+					writes.push(this.writeBatterySoc(dev.dtuSerial, num(soc), quality));
+				}
+			}
+		}
+		await Promise.allSettled(writes);
+	}
+
+	/**
+	 * Set `<dtuSerial>.battery.soc`, creating channel and state on first use — the burst may well
+	 * be the first to deliver a battery value, ahead of the slow poller.
+	 *
+	 * @param sn - DTU serial = state id prefix.
+	 * @param val - State of charge (%).
+	 * @param quality - ioBroker state quality.
+	 */
+	private async writeBatterySoc(
+		sn: string,
+		val: number,
+		quality: ioBroker.STATE_QUALITY[keyof ioBroker.STATE_QUALITY],
+	): Promise<void> {
+		const fullId = `${sn}.battery.soc`;
+		if (!this.stationStateObjects.has(fullId)) {
+			this.stationStateObjects.add(fullId);
+			const channel = hybridChannels.find(c => c.id === "battery");
+			const def = hybridStateMap.get("battery.soc");
+			if (channel && def) {
+				await this.adapter.setObjectNotExistsAsync(`${sn}.battery`, {
+					type: "channel",
+					common: { name: channel.name },
+					native: {},
+				});
+				await this.adapter.extendObjectAsync(fullId, {
+					type: "state",
+					common: buildStateCommon(def),
+					native: {},
+				});
+			}
+		}
+		await this.adapter.setStateAsync(fullId, { val, ack: true, q: quality });
 	}
 
 	/**

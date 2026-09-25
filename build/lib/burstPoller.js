@@ -1,5 +1,6 @@
+import { CLOUD_DEV_TYPE_HYBRID_INVERTER, FLOW_NODE_BATTERY, FLOW_NODE_GRID, directedPower } from "./hybridCloud.js";
 import { BURST_MIN_INTERVAL_MS, BURST_MAX_INTERVAL_MS, BURST_URI_REFRESH_MS, BURST_MAX_FAILURES, CLOUD_POLL_CONCURRENCY, } from "./constants.js";
-import { stationStateMap, buildStateCommon } from "./stateDefinitions.js";
+import { stationStateMap, hybridStateMap, hybridChannels, buildStateCommon } from "./stateDefinitions.js";
 import { anonymize, errorMessage, mapLimit } from "./utils.js";
 const num = (v) => (typeof v === "number" ? v : parseFloat(String(v)) || 0);
 class BurstPoller {
@@ -68,6 +69,7 @@ class BurstPoller {
     }
     async startStation(stationId) {
         const targets = new Map();
+        let storagePlant = false;
         let deviceTree = [];
         try {
             deviceTree = await this.cloud.getDeviceTree(stationId);
@@ -82,7 +84,10 @@ class BurstPoller {
                 continue;
             }
             for (const inv of dtu.children ?? []) {
-                if (inv.sn) {
+                if (inv.type === CLOUD_DEV_TYPE_HYBRID_INVERTER) {
+                    storagePlant = true;
+                }
+                else if (inv.sn) {
                     targets.set(inv.sn, { dtuSerial: dev.dtuSerial, dev });
                 }
             }
@@ -103,9 +108,11 @@ class BurstPoller {
             claimReleased: false,
         };
         this.stations.set(stationId, sb);
-        this.adapter.log.info(targets.size === 0
-            ? `Burst realtime started for station ${stationId} (station-level power aggregate only — all inverters served locally)`
-            : `Burst realtime started for station ${stationId} (${targets.size} cloud-only inverter(s))`);
+        this.adapter.log.info(targets.size > 0
+            ? `Burst realtime started for station ${stationId} (${targets.size} cloud-only inverter(s))`
+            : storagePlant
+                ? `Burst realtime started for station ${stationId} (storage plant: power flow and battery state of charge — the channel has no per-inverter mode for hybrid inverters)`
+                : `Burst realtime started for station ${stationId} (station-level power aggregate only — all inverters served locally)`);
         void this.poll(sb);
     }
     async poll(sb) {
@@ -132,9 +139,12 @@ class BurstPoller {
                 dly = data.dly;
             }
             const stationData = await this.cloud.pollRealtimeBurst(sb.uri, { m: 0, t: 1 });
+            const sq = stationData.con === 1 ? 0x00 : 0x42;
             if (stationData.power) {
-                const sq = stationData.con === 1 ? 0x00 : 0x42;
                 await this.writeStation(sb.stationId, stationData.power, sq);
+            }
+            else if (stationData.es) {
+                await this.writeStorageStation(sb.stationId, stationData.es, stationData.flow, stationData.soc, sq);
             }
             if (sb.claimReleased) {
                 for (const t of sb.targets.values()) {
@@ -198,6 +208,46 @@ class BurstPoller {
             ws("grid.batteryPower", num(power.bat)),
             ws("grid.pvUtilization", num(power.pvr)),
         ]);
+    }
+    async writeStorageStation(stationId, es, flow, soc, quality) {
+        const deviceId = `station-${stationId}`;
+        const ws = (suffix, val) => this.writeStationState(deviceId, suffix, val, quality);
+        const edges = (flow ?? []).map(e => ({ from: Number(e?.o), to: Number(e?.i) }));
+        const writes = [
+            ws("grid.power", num(es.pp)),
+            ws("grid.gridPower", directedPower(num(es.gp), FLOW_NODE_GRID, edges)),
+            ws("grid.loadPower", num(es.lp)),
+            ws("grid.batteryPower", directedPower(num(es.bp), FLOW_NODE_BATTERY, edges)),
+        ];
+        if (soc !== undefined && soc !== null) {
+            for (const dev of this.devices.values()) {
+                if (dev.cloudStationId === stationId && dev.hybridInverter && dev.dtuSerial) {
+                    writes.push(this.writeBatterySoc(dev.dtuSerial, num(soc), quality));
+                }
+            }
+        }
+        await Promise.allSettled(writes);
+    }
+    async writeBatterySoc(sn, val, quality) {
+        const fullId = `${sn}.battery.soc`;
+        if (!this.stationStateObjects.has(fullId)) {
+            this.stationStateObjects.add(fullId);
+            const channel = hybridChannels.find(c => c.id === "battery");
+            const def = hybridStateMap.get("battery.soc");
+            if (channel && def) {
+                await this.adapter.setObjectNotExistsAsync(`${sn}.battery`, {
+                    type: "channel",
+                    common: { name: channel.name },
+                    native: {},
+                });
+                await this.adapter.extendObjectAsync(fullId, {
+                    type: "state",
+                    common: buildStateCommon(def),
+                    native: {},
+                });
+            }
+        }
+        await this.adapter.setStateAsync(fullId, { val, ack: true, q: quality });
     }
     async writeStationState(deviceId, suffix, val, quality) {
         const fullId = `${deviceId}.${suffix}`;

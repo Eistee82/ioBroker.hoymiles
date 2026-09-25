@@ -259,6 +259,293 @@ describe("BurstPoller – start() station discovery", function () {
 });
 
 // ============================================================
+// BurstPoller – hybrid (storage) inverters
+// ============================================================
+describe("BurstPoller – hybrid inverters", function () {
+	it("startStation claims no m:3 target for a hybrid inverter (type 6), but the station m:0 loop still runs", async function () {
+		const { adapter } = createTrackingAdapter();
+		const modes = [];
+
+		let resolveStation;
+		const stationDone = new Promise(r => (resolveStation = r));
+		const trackedSetState = adapter.setStateAsync;
+		adapter.setStateAsync = async (id, val) => {
+			await trackedSetState(id, val);
+			if (id === "station-1.grid.pvUtilization") {
+				resolveStation();
+			}
+		};
+
+		const cloud = {
+			getDeviceTree: async () => [{ sn: "DTU_HAT", id: 1, children: [{ sn: "INV_HAT", id: 100, type: 6 }] }],
+			getRealtimeUri: async () => "https://eurt.example.com/rds/api/0/burst/get?k=abc&t=1",
+			pollRealtimeBurst: async (uri, body) => {
+				modes.push(body.m);
+				return { con: 1, dly: 5000, power: { pv: 100, pvr: 10, grid: 0, load: 100, bat: 0 } };
+			},
+		};
+
+		const dev = makeDevice({ dtuSerial: "DTU_HAT", connection: null });
+		const devices = new Map([["DTU_HAT", dev]]);
+		const burstActiveStations = new Set();
+
+		const poller = new BurstPoller({
+			cloud,
+			adapter,
+			devices,
+			stationDevices: new Set([1]),
+			burstActiveStations,
+		});
+		await poller.start();
+		await stationDone;
+
+		assert.ok(modes.length > 0 && modes.every(m => m === 0), "no m:3 poll may be issued for a hybrid inverter");
+		assert.strictEqual(
+			dev.burstActive,
+			undefined,
+			"burstActive must stay untouched — no per-inverter target claimed",
+		);
+		assert.strictEqual(
+			burstActiveStations.has(1),
+			true,
+			"the station-level aggregate is still served by the burst",
+		);
+		poller.stop();
+	});
+
+	it("writes a storage station's m:0 power flow (es) to station-<id>.grid.*, and the soc to every hybrid device's battery.soc, quality 0x00 when live", async function () {
+		const { adapter, calls } = createTrackingAdapter();
+		let resolveDevice;
+		const deviceDone = new Promise(r => (resolveDevice = r));
+		const trackedSetState = adapter.setStateAsync;
+		adapter.setStateAsync = async (id, val) => {
+			await trackedSetState(id, val);
+			if (id === "DTU_HAT.battery.soc") {
+				resolveDevice();
+			}
+		};
+
+		const cloud = {
+			getDeviceTree: async () => [],
+			getRealtimeUri: async () => "https://eurt.example.com/rds/api/0/burst/get?k=abc&t=1",
+			pollRealtimeBurst: async () => ({
+				flow: [{ i: 1, o: 10 }],
+				dly: 10000,
+				con: 1,
+				es: { pp: 0, gp: 0, bp: 571, lp: 571, sp: 0 },
+				soc: 25,
+			}),
+		};
+
+		const devices = new Map([
+			["DTU_HAT", makeDevice({ dtuSerial: "DTU_HAT", cloudStationId: 1, hybridInverter: true })],
+		]);
+		const poller = new BurstPoller({
+			cloud,
+			adapter,
+			devices,
+			stationDevices: new Set([1]),
+			burstActiveStations: new Set(),
+		});
+		await poller.start();
+		await deviceDone;
+		poller.stop();
+
+		const byId = Object.fromEntries(calls.map(([id, val]) => [id, val]));
+		assert.deepStrictEqual(byId["station-1.grid.power"], { val: 0, ack: true, q: 0x00 });
+		assert.deepStrictEqual(byId["station-1.grid.gridPower"], { val: 0, ack: true, q: 0x00 });
+		assert.deepStrictEqual(byId["station-1.grid.loadPower"], { val: 571, ack: true, q: 0x00 });
+		assert.deepStrictEqual(byId["station-1.grid.batteryPower"], { val: 571, ack: true, q: 0x00 });
+		assert.deepStrictEqual(byId["DTU_HAT.battery.soc"], { val: 25, ack: true, q: 0x00 });
+		assert.strictEqual(byId["station-1.battery.soc"], undefined, "there is no station battery place");
+	});
+
+	// The burst delivers magnitudes; which way the power runs is in the flow graph (`o` = the node
+	// it comes out of, `i` = the node it goes into; 4 = PV, 1 = load, 10 = battery, 2 = grid). The
+	// S-Miles portal reads it the same way: arrows from the graph, Math.abs() on the grid power.
+	it("takes the direction of grid and battery power from the flow graph: feed-in and charging are negative", async function () {
+		const { adapter, calls } = createTrackingAdapter();
+		let resolveStation;
+		const stationDone = new Promise(r => (resolveStation = r));
+		const trackedSetState = adapter.setStateAsync;
+		adapter.setStateAsync = async (id, val) => {
+			await trackedSetState(id, val);
+			if (id === "station-1.grid.batteryPower") {
+				resolveStation();
+			}
+		};
+		const cloud = {
+			getDeviceTree: async () => [],
+			getRealtimeUri: async () => "https://eurt.example.com/rds/api/0/burst/get?k=abc&t=1",
+			// PV surplus: PV feeds the load, charges the battery and exports the rest.
+			pollRealtimeBurst: async () => ({
+				flow: [
+					{ i: 1, o: 4 },
+					{ i: 10, o: 4 },
+					{ i: 2, o: 4 },
+				],
+				dly: 10000,
+				con: 1,
+				es: { pp: 3000, gp: 800, bp: 1500, lp: 700, sp: 0 },
+				soc: 60,
+			}),
+		};
+		const poller = new BurstPoller({
+			cloud,
+			adapter,
+			devices: new Map(),
+			stationDevices: new Set([1]),
+			burstActiveStations: new Set(),
+		});
+		await poller.start();
+		await stationDone;
+		poller.stop();
+
+		const byId = Object.fromEntries(calls.map(([id, val]) => [id, val.val]));
+		assert.strictEqual(byId["station-1.grid.power"], 3000);
+		assert.strictEqual(byId["station-1.grid.loadPower"], 700);
+		assert.strictEqual(byId["station-1.grid.gridPower"], -800, "the grid is a sink → feed-in → negative");
+		assert.strictEqual(byId["station-1.grid.batteryPower"], -1500, "the battery is a sink → charging → negative");
+	});
+
+	it("does not write any soc at all when the station has no locally-known hybrid device", async function () {
+		const { adapter, calls } = createTrackingAdapter();
+		let resolveStation;
+		const stationDone = new Promise(r => (resolveStation = r));
+		const trackedSetState = adapter.setStateAsync;
+		adapter.setStateAsync = async (id, val) => {
+			await trackedSetState(id, val);
+			if (id === "station-1.grid.batteryPower") {
+				resolveStation();
+			}
+		};
+
+		const cloud = {
+			getDeviceTree: async () => [],
+			getRealtimeUri: async () => "https://eurt.example.com/rds/api/0/burst/get?k=abc&t=1",
+			pollRealtimeBurst: async () => ({
+				flow: [{ i: 1, o: 10 }],
+				dly: 10000,
+				con: 1,
+				es: { pp: 0, gp: 0, bp: 571, lp: 571, sp: 0 },
+				soc: 25,
+			}),
+		};
+
+		const poller = new BurstPoller({
+			cloud,
+			adapter,
+			devices: new Map(),
+			stationDevices: new Set([1]),
+			burstActiveStations: new Set(),
+		});
+		await poller.start();
+		await stationDone;
+		poller.stop();
+
+		assert.ok(
+			!calls.some(([id]) => id.endsWith(".battery.soc")),
+			"no soc write anywhere without a locally-known hybrid device",
+		);
+	});
+
+	it("flags a storage station's m:0 power flow, and the device soc, with quality 0x42 when the stream is not live (con!=1)", async function () {
+		const { adapter, calls } = createTrackingAdapter();
+		let resolveDevice;
+		const deviceDone = new Promise(r => (resolveDevice = r));
+		const trackedSetState = adapter.setStateAsync;
+		adapter.setStateAsync = async (id, val) => {
+			await trackedSetState(id, val);
+			if (id === "DTU_HAT.battery.soc") {
+				resolveDevice();
+			}
+		};
+
+		const cloud = {
+			getDeviceTree: async () => [],
+			getRealtimeUri: async () => "https://eurt.example.com/rds/api/0/burst/get?k=abc&t=1",
+			pollRealtimeBurst: async () => ({
+				dly: 10000,
+				con: 0,
+				es: { pp: 0, gp: 0, bp: 571, lp: 571, sp: 0 },
+				soc: 25,
+			}),
+		};
+
+		const devices = new Map([
+			["DTU_HAT", makeDevice({ dtuSerial: "DTU_HAT", cloudStationId: 1, hybridInverter: true })],
+		]);
+		const poller = new BurstPoller({
+			cloud,
+			adapter,
+			devices,
+			stationDevices: new Set([1]),
+			burstActiveStations: new Set(),
+		});
+		await poller.start();
+		await deviceDone;
+		poller.stop();
+
+		const byId = Object.fromEntries(calls.map(([id, val]) => [id, val]));
+		assert.strictEqual(byId["DTU_HAT.battery.soc"].q, 0x42);
+		assert.strictEqual(byId["station-1.grid.batteryPower"].q, 0x42);
+	});
+
+	it("creates the on-demand battery channel exactly once per device when writing battery.soc", async function () {
+		const { adapter, calls } = createTrackingAdapter();
+		const channelCalls = [];
+		adapter.setObjectNotExistsAsync = async id => {
+			channelCalls.push(id);
+		};
+		let resolveDevice;
+		const deviceDone = new Promise(r => (resolveDevice = r));
+		const trackedSetState = adapter.setStateAsync;
+		adapter.setStateAsync = async (id, val) => {
+			await trackedSetState(id, val);
+			if (id === "DTU_HAT.battery.soc") {
+				resolveDevice();
+			}
+		};
+
+		const cloud = {
+			getDeviceTree: async () => [],
+			getRealtimeUri: async () => "https://eurt.example.com/rds/api/0/burst/get?k=abc&t=1",
+			pollRealtimeBurst: async () => ({
+				flow: [{ i: 1, o: 10 }],
+				dly: 10000,
+				con: 1,
+				es: { pp: 0, gp: 0, bp: 571, lp: 571, sp: 0 },
+				soc: 25,
+			}),
+		};
+
+		const devices = new Map([
+			["DTU_HAT", makeDevice({ dtuSerial: "DTU_HAT", cloudStationId: 1, hybridInverter: true })],
+		]);
+		const poller = new BurstPoller({
+			cloud,
+			adapter,
+			devices,
+			stationDevices: new Set([1]),
+			burstActiveStations: new Set(),
+		});
+		await poller.start();
+		await deviceDone;
+		poller.stop();
+
+		assert.deepStrictEqual(
+			channelCalls.filter(id => id === "DTU_HAT.battery"),
+			["DTU_HAT.battery"],
+			"the battery channel must be created exactly once",
+		);
+		assert.ok(
+			calls.some(([id]) => id === "DTU_HAT.battery.soc"),
+			"battery.soc must have been written",
+		);
+	});
+});
+
+// ============================================================
 // BurstPoller – writing state values
 // ============================================================
 describe("BurstPoller – writeInverter", function () {

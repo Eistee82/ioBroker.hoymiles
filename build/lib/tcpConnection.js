@@ -1,10 +1,16 @@
 import * as net from "node:net";
+import * as tls from "node:tls";
 import { EventEmitter } from "node:events";
 export const NATIVE_TIMERS = {
     setTimeout: (cb, ms) => globalThis.setTimeout(cb, ms),
     clearTimeout: handle => globalThis.clearTimeout(handle),
     setInterval: (cb, ms) => globalThis.setInterval(cb, ms),
     clearInterval: handle => globalThis.clearInterval(handle),
+};
+export const NATIVE_DELAY = {
+    delay: ms => new Promise(resolve => {
+        NATIVE_TIMERS.setTimeout(resolve, ms);
+    }),
 };
 class TcpConnection extends EventEmitter {
     connected;
@@ -14,14 +20,16 @@ class TcpConnection extends EventEmitter {
     host;
     port;
     timers;
+    tlsOptions;
     reconnectTimer;
     reconnectDelayMin;
     reconnectDelayMax;
-    constructor(host, port, reconnectDelayMin, reconnectDelayMax, timers) {
+    constructor(host, port, reconnectDelayMin, reconnectDelayMax, timers, tlsOptions) {
         super();
         this.host = host;
         this.port = port;
         this.timers = timers ?? NATIVE_TIMERS;
+        this.tlsOptions = tlsOptions ?? null;
         this.socket = null;
         this.connected = false;
         this.destroyed = false;
@@ -37,15 +45,32 @@ class TcpConnection extends EventEmitter {
         this.reconnectTimer = this.clearManagedTimeout(this.reconnectTimer);
         this._cleanupSocket();
         this.connected = false;
-        this.socket = new net.Socket();
-        this._configureSocket(this.socket);
-        this.socket.connect(this.port, this.host, () => {
+        const onConnected = () => {
             this.connected = true;
             this.reconnectDelay = this.reconnectDelayMin;
             this._onConnected();
-        });
+        };
+        if (this.tlsOptions) {
+            const socket = tls.connect({
+                host: this.host,
+                port: this.port,
+                ...(net.isIP(this.host) ? {} : { servername: this.host }),
+                ...this.tlsOptions,
+            }, onConnected);
+            this.socket = socket;
+            this._configureSocket(socket);
+        }
+        else {
+            const socket = new net.Socket();
+            this.socket = socket;
+            this._configureSocket(socket);
+            socket.connect(this.port, this.host, onConnected);
+        }
         this.socket.on("error", (err) => this._handleDisconnect(err));
         this.socket.on("close", () => this._handleDisconnect(null));
+    }
+    get usesTls() {
+        return this.tlsOptions !== null;
     }
     disconnect() {
         this.destroyed = true;

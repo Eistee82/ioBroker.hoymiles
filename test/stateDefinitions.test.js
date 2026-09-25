@@ -7,6 +7,14 @@ import {
 	stationStates,
 	meterMeasurementStates,
 	meterControlStates,
+	hybridChannels,
+	hybridStates,
+	hybridStateMap,
+	batterySettingStates,
+	hybridExtraStates,
+	stationIndicatorChannels,
+	stationIndicatorStates,
+	stationIndicatorStateMap,
 } from "../build/lib/stateDefinitions.js";
 
 // ============================================================
@@ -181,9 +189,38 @@ describe("stateDefinitions – station", function () {
 		assert.strictEqual(def.max, 100, "max must be 100");
 	});
 
-	it("station states are all read-only", function () {
+	it("station states are all read-only — there is no writable station state at all", function () {
 		for (const s of stationStates) {
 			assert.ok(!s.write, `Station state ${s.id} should not be writable`);
+		}
+	});
+
+	it("carries the cloud's own income/cost accounting (grid.monthIncome etc.), next to the existing today/total income", function () {
+		const ids = stationStates.map(s => s.id);
+		for (const id of [
+			"grid.todayIncome",
+			"grid.totalIncome",
+			"grid.monthIncome",
+			"grid.yearIncome",
+			"grid.todayCost",
+			"grid.monthCost",
+			"grid.yearCost",
+			"grid.totalCost",
+		]) {
+			assert.ok(ids.includes(id), `Missing ${id}`);
+		}
+	});
+
+	it("carries the battery's day energy balance again (grid.batteryChargeToday/DischargeToday)", function () {
+		const ids = stationStates.map(s => s.id);
+		assert.ok(ids.includes("grid.batteryChargeToday"), "Missing grid.batteryChargeToday");
+		assert.ok(ids.includes("grid.batteryDischargeToday"), "Missing grid.batteryDischargeToday");
+	});
+
+	it("does not contain any other battery state — there is exactly one battery place, below the device", function () {
+		const ids = stationStates.map(s => s.id);
+		for (const removed of ["grid.batterySoc", "info.batteryCapacity", "info.workMode"]) {
+			assert.ok(!ids.includes(removed), `${removed} must not exist in stationStates`);
 		}
 	});
 });
@@ -201,7 +238,14 @@ describe("stateDefinitions – state value translations", function () {
 	/** Collect every `states` value used anywhere in the definitions. */
 	function allStateValues() {
 		const values = new Set();
-		for (const def of [...states, ...stationStates, ...meterMeasurementStates, ...meterControlStates]) {
+		for (const def of [
+			...states,
+			...stationStates,
+			...meterMeasurementStates,
+			...meterControlStates,
+			...hybridStates,
+			...stationIndicatorStates,
+		]) {
 			for (const text of Object.values(def.states ?? {})) {
 				values.add(text);
 			}
@@ -232,5 +276,216 @@ describe("stateDefinitions – state value translations", function () {
 		assert.strictEqual(mode.states[1], "meter only");
 		assert.strictEqual(mode.states[2], "zero export");
 		assert.strictEqual(mode.write, true);
+	});
+});
+
+// ============================================================
+// stateDefinitions – hybrid (storage) inverter states
+// ============================================================
+describe("stateDefinitions – hybrid inverter states", function () {
+	it("hybridStates array is not empty", function () {
+		assert.ok(hybridStates.length > 0);
+	});
+
+	it("no duplicate hybrid state IDs", function () {
+		const ids = hybridStates.map(s => s.id);
+		assert.strictEqual(ids.length, new Set(ids).size, "Duplicate hybrid state IDs found");
+	});
+
+	it("no hybrid state ID collides with an existing device state ID", function () {
+		const stateIds = new Set(states.map(s => s.id));
+		const collisions = hybridStates.filter(s => stateIds.has(s.id)).map(s => s.id);
+		assert.deepStrictEqual(
+			collisions,
+			[],
+			`hybrid state(s) collide with existing states: ${collisions.join(", ")}`,
+		);
+	});
+
+	it("every hybrid state's channel prefix is a known hybrid or device channel", function () {
+		const channelIds = new Set([...channels, ...hybridChannels].map(c => c.id));
+		for (const s of hybridStates) {
+			const channelId = s.id.split(".")[0];
+			assert.ok(channelIds.has(channelId), `Hybrid state ${s.id} belongs to undefined channel "${channelId}"`);
+		}
+	});
+
+	it("every hybrid state is sourced from the cloud", function () {
+		for (const s of hybridStates) {
+			assert.strictEqual(s.source, "cloud", `Hybrid state ${s.id} must have source "cloud"`);
+		}
+	});
+
+	it("no hybrid state uses role 'state' (they are all typed measurements/indicators/text)", function () {
+		for (const s of hybridStates) {
+			assert.notStrictEqual(s.role, "state", `Hybrid state ${s.id} must not use the generic "state" role`);
+		}
+	});
+
+	it("every hybrid state has en and de translations", function () {
+		for (const s of hybridStates) {
+			assert.ok(typeof s.name === "object" && s.name.en, `Hybrid state ${s.id} missing English name`);
+			assert.ok(typeof s.name === "object" && s.name.de, `Hybrid state ${s.id} missing German name`);
+		}
+	});
+
+	it("hybridStateMap indexes every hybrid state exactly once", function () {
+		assert.strictEqual(hybridStateMap.size, hybridStates.length);
+	});
+
+	it("hybridChannels is eps, battery, dryContact, history — the grid meter moved to the station", function () {
+		assert.deepStrictEqual(hybridChannels.map(c => c.id).sort(), ["battery", "dryContact", "eps", "history"]);
+	});
+
+	it("no longer contains battery.chargeToday / battery.dischargeToday (they live in stationStates now)", function () {
+		const ids = hybridStates.map(s => s.id);
+		assert.ok(!ids.includes("battery.chargeToday"));
+		assert.ok(!ids.includes("battery.dischargeToday"));
+	});
+
+	it("contains every batterySettingStates entry (they are pushed into hybridStates)", function () {
+		const ids = new Set(hybridStates.map(s => s.id));
+		for (const def of batterySettingStates) {
+			assert.ok(ids.has(def.id), `${def.id} missing from hybridStates`);
+			assert.strictEqual(hybridStateMap.get(def.id), def);
+		}
+	});
+
+	it("battery.readSettings and dryContact.readSettings are the ONLY writable hybrid states", function () {
+		const writable = hybridStates.filter(s => s.write).map(s => s.id);
+		assert.deepStrictEqual(writable.sort(), ["battery.readSettings", "dryContact.readSettings"]);
+	});
+
+	it("battery.readSettings is a button", function () {
+		const def = hybridStates.find(s => s.id === "battery.readSettings");
+		assert.ok(def, "battery.readSettings must exist");
+		assert.strictEqual(def.type, "boolean");
+		assert.strictEqual(def.role, "button");
+	});
+
+	it("battery.workMode has a states map covering the app's mode table (1-8)", function () {
+		const def = hybridStates.find(s => s.id === "battery.workMode");
+		assert.ok(def, "battery.workMode must exist in hybridStates");
+		assert.strictEqual(def.type, "number", "type must be number");
+		assert.deepStrictEqual(
+			Object.keys(def.states)
+				.map(Number)
+				.sort((a, b) => a - b),
+			[1, 2, 3, 4, 5, 6, 7, 8],
+		);
+	});
+
+	it("contains every hybridExtraStates entry (they are pushed into hybridStates)", function () {
+		const ids = new Set(hybridStates.map(s => s.id));
+		for (const def of hybridExtraStates) {
+			assert.ok(ids.has(def.id), `${def.id} missing from hybridStates`);
+			assert.strictEqual(hybridStateMap.get(def.id), def);
+		}
+	});
+
+	it("dryContact.readSettings is a button", function () {
+		const def = hybridStates.find(s => s.id === "dryContact.readSettings");
+		assert.ok(def, "dryContact.readSettings must exist");
+		assert.strictEqual(def.type, "boolean");
+		assert.strictEqual(def.role, "button");
+	});
+
+	it("every hybridExtraStates suffix belongs to a known hybrid or device channel", function () {
+		const channelIds = new Set([...channels, ...hybridChannels].map(c => c.id));
+		for (const s of hybridExtraStates) {
+			const channelId = s.id.split(".")[0];
+			assert.ok(channelIds.has(channelId), `${s.id} belongs to undefined channel "${channelId}"`);
+		}
+	});
+});
+
+// ============================================================
+// stateDefinitions – station-level measuring points (gridMeter/load/pvMeter/generator)
+// ============================================================
+describe("stateDefinitions – station indicator states", function () {
+	it("stationIndicatorStates array is not empty", function () {
+		assert.ok(stationIndicatorStates.length > 0);
+	});
+
+	it("no duplicate station indicator state IDs", function () {
+		const ids = stationIndicatorStates.map(s => s.id);
+		assert.strictEqual(ids.length, new Set(ids).size, "Duplicate station indicator state IDs found");
+	});
+
+	it("no station indicator state ID collides with an existing station state ID", function () {
+		const stateIds = new Set(stationStates.map(s => s.id));
+		const collisions = stationIndicatorStates.filter(s => stateIds.has(s.id)).map(s => s.id);
+		assert.deepStrictEqual(
+			collisions,
+			[],
+			`station indicator state(s) collide with existing station states: ${collisions.join(", ")}`,
+		);
+	});
+
+	it("every station indicator state's channel prefix is a known station-indicator channel", function () {
+		const channelIds = new Set(stationIndicatorChannels.map(c => c.id));
+		for (const s of stationIndicatorStates) {
+			const channelId = s.id.split(".")[0];
+			assert.ok(
+				channelIds.has(channelId),
+				`Station indicator state ${s.id} belongs to undefined channel "${channelId}"`,
+			);
+		}
+	});
+
+	it("station indicator channels are not part of stationChannels (they live below the station device too, but are a separate on-demand set)", function () {
+		const stationChannelIds = new Set(stationChannels.map(c => c.id));
+		for (const c of stationIndicatorChannels) {
+			assert.ok(!stationChannelIds.has(c.id), `${c.id} unexpectedly duplicated in stationChannels`);
+		}
+	});
+
+	it("every station indicator state is sourced from the cloud", function () {
+		for (const s of stationIndicatorStates) {
+			assert.strictEqual(s.source, "cloud", `Station indicator state ${s.id} must have source "cloud"`);
+		}
+	});
+
+	it("no station indicator state uses role 'state' (they are all typed measurements/indicators/text)", function () {
+		for (const s of stationIndicatorStates) {
+			assert.notStrictEqual(
+				s.role,
+				"state",
+				`Station indicator state ${s.id} must not use the generic "state" role`,
+			);
+		}
+	});
+
+	it("every station indicator state has en and de translations", function () {
+		for (const s of stationIndicatorStates) {
+			assert.ok(typeof s.name === "object" && s.name.en, `Station indicator state ${s.id} missing English name`);
+			assert.ok(typeof s.name === "object" && s.name.de, `Station indicator state ${s.id} missing German name`);
+		}
+	});
+
+	it("stationIndicatorStateMap indexes every station indicator state exactly once", function () {
+		assert.strictEqual(stationIndicatorStateMap.size, stationIndicatorStates.length);
+	});
+
+	it("contains the four expected channels: gridMeter, load, pvMeter, generator — no battery here", function () {
+		assert.deepStrictEqual(stationIndicatorChannels.map(c => c.id).sort(), [
+			"generator",
+			"gridMeter",
+			"load",
+			"pvMeter",
+		]);
+	});
+
+	it("has no writable state at all — there is exactly one battery place, and it is not here", function () {
+		const writable = stationIndicatorStates.filter(s => s.write).map(s => s.id);
+		assert.deepStrictEqual(writable, []);
+	});
+
+	it("no longer contains any battery.* state (moved below the device — see hybridStates)", function () {
+		const ids = stationIndicatorStates.map(s => s.id);
+		assert.deepStrictEqual(
+			ids.filter(id => id.startsWith("battery.")),
+			[],
+		);
 	});
 });

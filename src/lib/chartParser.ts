@@ -93,4 +93,60 @@ async function parseChartResponse(rawBuf: Buffer, log?: (msg: string) => void): 
 	return result;
 }
 
+/** One indicator's day curve as `indicators/data/cid_g_a` delivers it. */
+export interface IndicatorDayCurve {
+	/** Minute of the station-local day of each sample (0, 5, 10, …). */
+	minutes: number[];
+	/** Sample values in the indicator's unit (W, %, …). */
+	values: number[];
+}
+
+/**
+ * Decode the protobuf answer of `indicators/data/cid_g_a` — the day curve of one indicator of a
+ * storage-plant device. The message is not in the adapter's .proto set; its shape was read off live
+ * answers: a repeated outer message whose fields are 1 = "id,sn", 2 = date, 3 = indicator key,
+ * 4 = packed varint minutes of day, 5 = packed doubles. The first series with samples is returned.
+ *
+ * @param rawBuf - Raw response body.
+ * @returns The curve, or null when the answer carries no samples.
+ */
+export function decodeIndicatorDayCurve(rawBuf: Uint8Array): IndicatorDayCurve | null {
+	const outer = protobuf.Reader.create(rawBuf);
+	while (outer.pos < outer.len) {
+		const tag = outer.uint32();
+		if ((tag & 7) !== 2) {
+			outer.skipType(tag & 7);
+			continue;
+		}
+		const inner = protobuf.Reader.create(outer.bytes());
+		const minutes: number[] = [];
+		const values: number[] = [];
+		while (inner.pos < inner.len) {
+			const t = inner.uint32();
+			const field = t >>> 3;
+			const wire = t & 7;
+			if (wire !== 2) {
+				inner.skipType(wire);
+				continue;
+			}
+			const b = inner.bytes();
+			if (field === 4) {
+				const r = protobuf.Reader.create(b);
+				while (r.pos < r.len) {
+					minutes.push(r.uint32());
+				}
+			} else if (field === 5) {
+				const view = Buffer.from(b.buffer, b.byteOffset, b.length);
+				for (let i = 0; i + 8 <= b.length; i += 8) {
+					values.push(view.readDoubleLE(i));
+				}
+			}
+		}
+		if (minutes.length > 0 && minutes.length === values.length) {
+			return { minutes, values };
+		}
+	}
+	return null;
+}
+
 export { parseChartResponse };

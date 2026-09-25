@@ -1,7 +1,9 @@
 import type * as net from "node:net";
+import * as tls from "node:tls";
 import TcpConnection, { type TimerScheduler } from "./tcpConnection.js";
 import type { ProtobufHandler } from "./protobufHandler.js";
 import { unixSeconds } from "./utils.js";
+import { HOYMILES_ROOT_CA_PEM } from "./hoymilesCa.js";
 import {
 	CLOUD_RECONNECT_DELAY_MIN_MS,
 	CLOUD_RECONNECT_DELAY_MAX_MS,
@@ -24,10 +26,25 @@ const CLOUD_CMD_REALDATA_STATUS: [number, number] = [0x22, 0x0d]; // RealDataReq
  */
 const ACK_ONLY = new Set([0x01, 0x02, 0x0c, 0x0d]);
 
+/** Options for {@link CloudRelay}. */
+export interface CloudRelayOptions {
+	/**
+	 * Talk TLS to the cloud, as a DTU with firmware V01.01.01+ does on port 10083. The server is
+	 * verified against Hoymiles' own root CA (the one the DTU firmware carries) and, in case
+	 * Hoymiles ever moves to a public CA, the system's trusted roots.
+	 */
+	tls?: boolean;
+}
+
 /**
  * Cloud Relay: Sends DTU data to the Hoymiles cloud server.
  * Uses the cloud protocol (0x22/0x23 tags) instead of local protocol (0xa2/0xa3).
  * Emulates the DTU's cloud connection: periodic heartbeats + RealData forwarding.
+ *
+ * The HM frames are plain in both transports — a DTU with firmware V01.01.01+ only wraps the
+ * connection in TLS (port 10083), the frames inside are unchanged; older firmware sends the same
+ * frames over plain TCP (port 10081). The DTU authenticates with nothing but its serial number,
+ * so the relay can stand in for it on either transport.
  *
  * Emits "dataSent" after each RealData upload so the adapter can schedule a cloud poll.
  */
@@ -52,9 +69,17 @@ class CloudRelay extends TcpConnection {
 	 * @param host - Cloud relay server hostname
 	 * @param port - Cloud relay server port
 	 * @param timers - Adapter-managed timer scheduler; falls back to native timers when omitted
+	 * @param options - Transport options (TLS)
 	 */
-	constructor(host: string, port: number, timers?: TimerScheduler) {
-		super(host, port, CLOUD_RECONNECT_DELAY_MIN_MS, CLOUD_RECONNECT_DELAY_MAX_MS, timers);
+	constructor(host: string, port: number, timers?: TimerScheduler, options?: CloudRelayOptions) {
+		super(
+			host,
+			port,
+			CLOUD_RECONNECT_DELAY_MIN_MS,
+			CLOUD_RECONNECT_DELAY_MAX_MS,
+			timers,
+			options?.tls ? { ca: [HOYMILES_ROOT_CA_PEM, ...tls.rootCertificates], minVersion: "TLSv1.2" } : null,
+		);
 		this.paused = false;
 		this.heartbeatTimer = undefined;
 		this.realDataTimer = undefined;

@@ -6,12 +6,12 @@ import { executeCommand, executeCloudCommand, flashWritingStateForAction, } from
 import Encryption from "./encryption.js";
 import { buildShellyBindData, encodeShellyBindBody, parseEnergyFlow, parseMeterDevices, SHELLY_DEV_TYPE_GRID, SHELLY_DEV_TYPE_METER_ONLY, } from "./shellyProtocol.js";
 const SHELLY_CMD_TAG = [0xa3, 0x18];
-import { channels, states, meterMeasurementStates, meterControlStates, buildStateCommon } from "./stateDefinitions.js";
+import { channels, states, meterMeasurementStates, meterControlStates, hybridChannels, hybridStates, buildStateCommon, } from "./stateDefinitions.js";
 import { getAlarmDescription } from "./alarmCodes.js";
 import { decodeGridProfile, byteSwap16 } from "./gridProfile.js";
 import EnergyGuard from "./energyGuard.js";
 import { cloudTagLabel, describeCloudTag, refusalReason } from "./cloudTranslator.js";
-import { INFO_FALLBACK_TIMEOUT_MS, SCALE_POWER, SCALE_POWER_LIMIT_BLE, SCALE_POWER_LIMIT_TCP, CLOUD_DEV_TYPE_DTU, POWER_LIMIT_DEADBAND_DEFAULT, POWER_LIMIT_MIN_INTERVAL_SEC_DEFAULT, HIST_MAX_PAGES, } from "./constants.js";
+import { INFO_FALLBACK_TIMEOUT_MS, SCALE_POWER, SCALE_POWER_LIMIT_BLE, SCALE_POWER_LIMIT_TCP, CLOUD_DEV_TYPE_DTU, POWER_LIMIT_DEADBAND_DEFAULT, POWER_LIMIT_MIN_INTERVAL_SEC_DEFAULT, HIST_MAX_PAGES, HM_HEADER_SIZE, LOCAL_GCM_TAG_LEN, CLOUD_RELAY_TLS_PORT, } from "./constants.js";
 import { whToKwh } from "./convert.js";
 import { anonymize, errorMessage, safeJsonStringify, unixSeconds } from "./utils.js";
 import { inverterIcon } from "./deviceIcons.js";
@@ -63,7 +63,6 @@ class DeviceContext {
     protobuf;
     encryption;
     encryptionRequired;
-    warnedEncryptedRelay;
     flashGuard;
     flashWrites;
     energyGuard;
@@ -77,6 +76,7 @@ class DeviceContext {
     pvStatesCreated;
     pvCount;
     burstActive;
+    hybridInverter = false;
     meterStatesCreated;
     meterMeasurementStatesCreated;
     meterControlStatesCreated;
@@ -139,7 +139,6 @@ class DeviceContext {
         this.protobuf = options.protobuf;
         this.encryption = null;
         this.encryptionRequired = false;
-        this.warnedEncryptedRelay = false;
         this.cloudStationId = null;
         this.pollTimer = undefined;
         this.pvStatesCreated = false;
@@ -197,7 +196,7 @@ class DeviceContext {
             }
             this.connection = new DtuConnection(this.host, 10081, () => {
                 const ts = unixSeconds();
-                return this.protobuf.encodeHeartbeat(ts);
+                return this.wireFrame(this.protobuf.encodeHeartbeat(ts));
             }, this.adapter);
         }
         let lastErrorMsg = "";
@@ -259,7 +258,7 @@ class DeviceContext {
         this.adapter.onLocalConnected(this);
         this.infoReceived = false;
         const ts = unixSeconds();
-        this.connection?.send(this.protobuf.encodeInfoRequest(ts)).catch(e => {
+        this.connection?.send(this.wireFrame(this.protobuf.encodeInfoRequest(ts))).catch(e => {
             this.adapter.log.debug(`[${this.deviceId}] InfoRequest send failed: ${errorMessage(e)}`);
         });
         this.infoFallbackTimer = this.adapter.setTimeout(() => {
@@ -347,8 +346,8 @@ class DeviceContext {
         this.adapter.log.info(`[${this.deviceId}] Device states created`);
     }
     async cleanupObsoleteObjects() {
-        const knownStates = new Set(states.map(d => d.id));
-        const knownChannels = new Set(channels.map(c => c.id));
+        const knownStates = new Set([...states, ...hybridStates].map(d => d.id));
+        const knownChannels = new Set([...channels, ...hybridChannels].map(c => c.id));
         const isKnown = (rel) => knownStates.has(rel) ||
             knownChannels.has(rel) ||
             /^pv\d+(\.|$)/.test(rel) ||
@@ -504,7 +503,7 @@ class DeviceContext {
         }
         this.gridChunks.clear();
         this.connection
-            .send(this.protobuf.encodeDevConfigFetch(unixSeconds(), this.dtuSerial, this.inverterSn))
+            .send(this.wireFrame(this.protobuf.encodeDevConfigFetch(unixSeconds(), this.dtuSerial, this.inverterSn)))
             .catch(e => {
             this.adapter.log.debug(`[${this.deviceId}] DevConfigFetch send failed: ${errorMessage(e)}`);
         });
@@ -569,7 +568,7 @@ class DeviceContext {
             this.adapter.log.info(`[${this.deviceId}] cloud action ${action} (tid=${tid}) not executed — no local connection`);
             return;
         }
-        const frame = this.protobuf.buildMessage(cmd.cmdHigh, cmd.cmdLow, cmd.payload);
+        const frame = this.wireFrame(this.protobuf.buildMessage(cmd.cmdHigh, cmd.cmdLow, cmd.payload));
         this.connection.send(frame).catch(e => {
             this.adapter.log.warn(`[${this.deviceId}] forwarding cloud action ${action} failed: ${errorMessage(e)}`);
         });
@@ -705,7 +704,7 @@ class DeviceContext {
                 settle(false);
             }, timeoutMs);
             this.pendingResponse = { cmdKey, resolve: () => settle(true), timer };
-            conn.send(message).catch(err => {
+            conn.send(this.wireFrame(message)).catch(err => {
                 this.adapter.log.debug(`[${this.host}] sendAndWait send failed: ${errorMessage(err)}`);
                 if (this.pendingResponse?.cmdKey === cmdKey) {
                     this.adapter.clearTimeout(timer);
@@ -769,21 +768,26 @@ class DeviceContext {
             const msgId = (message[2] << 8) | message[3];
             const seqNum = (message[4] << 8) | message[5];
             let decryptedPayload = payload;
-            if (this.encryptionRequired && this.encryption) {
-                if (!(cmdHigh === 0xa2 && cmdLow === 0x01)) {
-                    try {
-                        decryptedPayload = this.encryption.decrypt(payload, msgId, seqNum);
-                    }
-                    catch (err) {
-                        this.adapter.log.warn(`[${this.host}] Decryption failed: ${errorMessage(err)}`);
-                        return;
-                    }
+            if (this.encryptionRequired && this.encryption && payload.length > 0 && Encryption.isEncryptedTag(msgId)) {
+                const body = message.subarray(HM_HEADER_SIZE, parsed.totalLen + LOCAL_GCM_TAG_LEN);
+                if (body.length < payload.length + LOCAL_GCM_TAG_LEN) {
+                    this.adapter.log.warn(`[${this.host}] Decryption failed: frame 0x${msgId.toString(16)} arrived without its authentication tag`);
+                    return;
+                }
+                try {
+                    decryptedPayload = this.encryption.decrypt(body, msgId, seqNum);
+                }
+                catch (err) {
+                    this.adapter.log.warn(`[${this.host}] Decryption failed: ${errorMessage(err)}`);
+                    return;
                 }
             }
             const tag = this.deviceId || this.host;
             switch ((cmdHigh << 8) | cmdLow) {
                 case 0xa211:
-                    this.relayRealData(message);
+                    this.relayRealData(decryptedPayload === payload
+                        ? message
+                        : Buffer.concat([message.subarray(0, HM_HEADER_SIZE), decryptedPayload]));
                     this.handleRealData(decryptedPayload).catch(err => this.adapter.log.warn(`[${tag}] handleRealData error: ${errorMessage(err)}`));
                     break;
                 case 0xa201:
@@ -842,16 +846,10 @@ class DeviceContext {
         if (!this.cloudRelay) {
             return;
         }
-        if (this.encryptionRequired) {
-            if (!this.warnedEncryptedRelay) {
-                this.warnedEncryptedRelay = true;
-                this.adapter.log.warn(`[${this.deviceId || this.host}] This DTU encrypts its local messages, so the cloud relay ` +
-                    `cannot forward RealData — the cloud would not be able to decrypt it. Relay uploads are ` +
-                    `skipped; local states are unaffected.`);
-            }
-            return;
-        }
         this.cloudRelay.updateRealData(message);
+    }
+    wireFrame(frame) {
+        return this.encryptionRequired && this.encryption ? this.encryption.encryptFrame(frame) : frame;
     }
     static Q_GOOD = 0x00;
     static Q_DEVICE_DISCONNECTED = 0x42;
@@ -988,7 +986,7 @@ class DeviceContext {
         const frame = this.protobuf.buildMessage(SHELLY_CMD_TAG[0], SHELLY_CMD_TAG[1], body);
         this.adapter.log.info(`[${this.deviceId || this.host}] Binding Shelly meter ${anonymize(mac)} as ` +
             `${devType === SHELLY_DEV_TYPE_GRID ? "grid device (zero export)" : "meter only"}`);
-        return this.connection.send(frame);
+        return this.connection.send(this.wireFrame(frame));
     }
     async createShellyStates() {
         if (!this.deviceId) {
@@ -1106,6 +1104,7 @@ class DeviceContext {
             const info = this.protobuf.decodeInfoData(payload);
             const logLevel = this.deviceId ? "debug" : "info";
             this.adapter.log[logLevel](`[${this.host}] Device info: DTU SN=${info.dtuSn}, devices=${info.deviceNumber}, PVs=${info.pvNumber}`);
+            this.setupEncryption(info);
             if (!this.deviceId && info.dtuSn) {
                 const existing = this.adapter.devices.get(info.dtuSn);
                 if (existing && existing !== this) {
@@ -1131,7 +1130,6 @@ class DeviceContext {
                 this.pvStatesCreated = true;
             }
             await this.updateDtuStates(info);
-            this.setupEncryption(info);
             await this.updateInverterVersions(info);
             await this.initCloudRelay(info.dtuSn);
             this.startPollingIfReady();
@@ -1161,19 +1159,24 @@ class DeviceContext {
         }
         const di = info.dtuInfo;
         if (Encryption.isRequired(di.dfs)) {
-            this.adapter.log.info(`[${this.deviceId}] DTU requires encrypted communication`);
+            if (!this.encryptionRequired) {
+                this.adapter.log.info(`[${this.deviceId || this.host}] DTU requires encrypted communication (firmware V01.01.01+)`);
+            }
             this.encryptionRequired = true;
             if (di.encRand) {
                 this.encryption = new Encryption(di.encRand);
-                this.adapter.log.info(`[${this.deviceId}] Encryption initialized with enc_rand from DTU`);
+                this.adapter.log.debug(`[${this.deviceId || this.host}] Encryption initialized with enc_rand from DTU`);
             }
             else {
-                this.adapter.log.warn(`[${this.deviceId}] Encryption required but no enc_rand received`);
+                this.adapter.log.warn(`[${this.deviceId || this.host}] Encryption required but no enc_rand received`);
             }
         }
         else {
-            this.adapter.log.debug(`[${this.deviceId}] DTU does not require encryption`);
+            this.adapter.log.debug(`[${this.deviceId || this.host}] DTU does not require encryption`);
             this.encryptionRequired = false;
+        }
+        if (this.connection instanceof DtuConnection) {
+            this.connection.setEncryptedFrames(this.encryptionRequired);
         }
     }
     async updateInverterVersions(info) {
@@ -1201,18 +1204,27 @@ class DeviceContext {
             const serverPort = portState?.val || 10081;
             if (serverDomain) {
                 this.cloudRelayInitializing = true;
-                const relay = new CloudRelay(serverDomain, serverPort, this.adapter);
+                const useTls = serverPort === CLOUD_RELAY_TLS_PORT;
+                let warnedTls = false;
+                const relay = new CloudRelay(serverDomain, serverPort, this.adapter, { tls: useTls });
                 relay.configure(this.protobuf, dtuSn);
                 this.cloudRelay = relay;
                 this.cloudRelay.on("connected", () => {
-                    this.adapter.log.info(`[${this.deviceId}] Cloud relay connected to ${serverDomain}:${serverPort}`);
+                    warnedTls = false;
+                    this.adapter.log.info(`[${this.deviceId}] Cloud relay connected to ${serverDomain}:${serverPort}${useTls ? " (TLS)" : ""}`);
                 });
                 this.cloudRelay.on("disconnected", () => {
                     const msg = this.cloudRelay?.paused ? "paused" : "disconnected, will reconnect";
                     this.adapter.log.warn(`[${this.deviceId}] Cloud relay ${msg}`);
                 });
                 this.cloudRelay.on("error", (err) => {
-                    this.adapter.log.debug(`[${this.deviceId}] Cloud relay: ${err.message}`);
+                    if (/certificate|handshake|ssl|tls/i.test(err.message) && !warnedTls) {
+                        warnedTls = true;
+                        this.adapter.log.warn(`[${this.deviceId}] Cloud relay TLS to ${serverDomain}:${serverPort} failed: ${err.message}`);
+                    }
+                    else {
+                        this.adapter.log.debug(`[${this.deviceId}] Cloud relay: ${err.message}`);
+                    }
                 });
                 this.cloudRelay.on("heartbeatSent", (seq) => {
                     this.adapter.log.debug(`[${this.deviceId}] Cloud relay heartbeat sent (seq=${seq})`);
@@ -1243,7 +1255,7 @@ class DeviceContext {
             if (this.protobuf && this.connection?.connected && this.transport !== "ble") {
                 this.adapter.log.info(`[${this.host}] Enabling performance data mode`);
                 const ts = unixSeconds();
-                void this.connection.send(this.protobuf.encodePerformanceDataMode(ts)).catch(e => {
+                void this.connection.send(this.wireFrame(this.protobuf.encodePerformanceDataMode(ts))).catch(e => {
                     this.adapter.log.debug(`[${this.deviceId}] PerformanceDataMode send failed: ${errorMessage(e)}`);
                 });
             }
@@ -1347,7 +1359,7 @@ class DeviceContext {
         this.adapter.log.debug(`[${this.deviceId || this.host}] Warn list package ${now + 1}/${total} (${pageAlarms.length} entries)`);
         if (now + 1 < total) {
             this.connection
-                ?.send(this.protobuf.encodeWarnDataRequest(unixSeconds(), now + 1))
+                ?.send(this.wireFrame(this.protobuf.encodeWarnDataRequest(unixSeconds(), now + 1)))
                 .catch(e => this.adapter.log.debug(`[${this.deviceId || this.host}] warn next-pkg failed: ${errorMessage(e)}`));
             return;
         }
@@ -1454,7 +1466,7 @@ class DeviceContext {
                 this.histPage++;
                 const next = this.protobuf.encodeHistPowerRequest(unixSeconds(), this.histPage);
                 void this.connection
-                    .send(next)
+                    .send(this.wireFrame(next))
                     .catch(err => this.adapter.log.debug(`[${this.deviceId}] HistPower page ${this.histPage} request failed: ${errorMessage(err)}`));
                 return;
             }
@@ -1487,7 +1499,7 @@ class DeviceContext {
             this.adapter.log.debug(`[${this.deviceId || this.host}] grid profile package ${pkg + 1}/${total} (${chunk.length} bytes)`);
             if (pkg + 1 < total) {
                 this.connection
-                    ?.send(this.protobuf.encodeDevConfigFetch(unixSeconds(), this.dtuSerial, this.inverterSn, pkg + 1))
+                    ?.send(this.wireFrame(this.protobuf.encodeDevConfigFetch(unixSeconds(), this.dtuSerial, this.inverterSn, pkg + 1)))
                     .catch(e => this.adapter.log.debug(`[${this.deviceId}] grid profile next-pkg failed: ${errorMessage(e)}`));
                 return;
             }
@@ -1565,6 +1577,20 @@ class DeviceContext {
             await this.handleShellyStateChange(stateId, state);
             return;
         }
+        if (stateId === "battery.readSettings" || stateId === "dryContact.readSettings") {
+            if (state.val && this.cloudStationId != null) {
+                if (stateId === "battery.readSettings") {
+                    await this.adapter.readBatterySettings(this.cloudStationId);
+                }
+                else {
+                    await this.adapter.readDryContactSettings(this.cloudStationId);
+                }
+            }
+            else {
+                await this.setState(stateId, false, true);
+            }
+            return;
+        }
         if (this.connection?.connected) {
             await executeCommand(stateId, state, {
                 connection: this.connection,
@@ -1600,6 +1626,7 @@ class DeviceContext {
                 },
                 setState: (id, val, ack) => this.setState(id, val, ack),
                 resetButton: id => this.scheduleButtonReset(id),
+                storageSystem: this.hybridInverter,
             });
             if (handled) {
                 return;

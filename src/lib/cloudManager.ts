@@ -6,6 +6,7 @@ import type { ProtobufHandler } from "./protobufHandler.js";
 import { stationChannels } from "./stateDefinitions.js";
 import { CLOUD_DISCOVER_CONCURRENCY, CLOUD_RETRY_INITIAL_MS, CLOUD_RETRY_MAX_MS } from "./constants.js";
 import { errorMessage, mapLimit } from "./utils.js";
+import { CLOUD_DEV_TYPE_HYBRID_INVERTER } from "./hybridCloud.js";
 import { STATION_ICON } from "./deviceIcons.js";
 
 interface CloudManagerOptions {
@@ -60,8 +61,12 @@ class CloudManager {
 		this.slowPollFactor = options.slowPollFactor;
 		this.localContexts = options.localContexts;
 
-		this.cloud = new CloudConnection(options.cloudUser, options.cloudPassword, msg =>
-			this.adapter.log.debug(`Cloud: ${msg}`),
+		// The adapter as waiter: a device task (settings read, command) stops polling when it unloads.
+		this.cloud = new CloudConnection(
+			options.cloudUser,
+			options.cloudPassword,
+			msg => this.adapter.log.debug(`Cloud: ${msg}`),
+			this.adapter,
 		);
 		this.cloudPoller = null;
 		this.burstPoller = null;
@@ -126,6 +131,24 @@ class CloudManager {
 	/** Whether the cloud connection has a valid token. */
 	get hasToken(): boolean {
 		return !!this.cloud.token;
+	}
+
+	/**
+	 * Read the battery settings of a storage plant from the device (read-only, on demand).
+	 *
+	 * @param stationId - Cloud station id.
+	 */
+	async readBatterySettings(stationId: number): Promise<void> {
+		await this.cloudPoller?.readBatterySettings(stationId);
+	}
+
+	/**
+	 * Read the dry-contact (relay) settings of a storage plant from the device (read-only, on demand).
+	 *
+	 * @param stationId - Cloud station id.
+	 */
+	async readDryContactSettings(stationId: number): Promise<void> {
+		await this.cloudPoller?.readDryContactSettings(stationId);
 	}
 
 	/**
@@ -368,6 +391,10 @@ class CloudManager {
 								slowPollFactor: this.slowPollFactor,
 							});
 							ctx.cloudStationId = station.id;
+							// Known before the first command can arrive: a storage plant is addressed
+							// with other codes than a microinverter.
+							const children = (dtu as { children?: Array<{ type?: number }> }).children ?? [];
+							ctx.hybridInverter = children.some(c => c.type === CLOUD_DEV_TYPE_HYBRID_INVERTER);
 							await ctx.initFromSerial(dtuSerial);
 							this.adapter.devices.set(dtuSerial, ctx);
 							this.adapter.log.info(`Created cloud-only device for DTU ${dtuSerial}`);

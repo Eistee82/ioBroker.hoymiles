@@ -5,6 +5,7 @@ import DeviceContext from "./deviceContext.js";
 import { stationChannels } from "./stateDefinitions.js";
 import { CLOUD_DISCOVER_CONCURRENCY, CLOUD_RETRY_INITIAL_MS, CLOUD_RETRY_MAX_MS } from "./constants.js";
 import { errorMessage, mapLimit } from "./utils.js";
+import { CLOUD_DEV_TYPE_HYBRID_INVERTER } from "./hybridCloud.js";
 import { STATION_ICON } from "./deviceIcons.js";
 class CloudManager {
     adapter;
@@ -34,7 +35,7 @@ class CloudManager {
         this.dataInterval = options.dataInterval;
         this.slowPollFactor = options.slowPollFactor;
         this.localContexts = options.localContexts;
-        this.cloud = new CloudConnection(options.cloudUser, options.cloudPassword, msg => this.adapter.log.debug(`Cloud: ${msg}`));
+        this.cloud = new CloudConnection(options.cloudUser, options.cloudPassword, msg => this.adapter.log.debug(`Cloud: ${msg}`), this.adapter);
         this.cloudPoller = null;
         this.burstPoller = null;
         this.pendingCloudMatches = new Map();
@@ -90,6 +91,12 @@ class CloudManager {
     }
     get hasToken() {
         return !!this.cloud.token;
+    }
+    async readBatterySettings(stationId) {
+        await this.cloudPoller?.readBatterySettings(stationId);
+    }
+    async readDryContactSettings(stationId) {
+        await this.cloudPoller?.readDryContactSettings(stationId);
     }
     async sendDeviceCommand(devSn, dtuSn, action, devType) {
         await this.cloud.sendDeviceCommand(action, devSn, dtuSn, devType);
@@ -254,6 +261,8 @@ class CloudManager {
                                 slowPollFactor: this.slowPollFactor,
                             });
                             ctx.cloudStationId = station.id;
+                            const children = dtu.children ?? [];
+                            ctx.hybridInverter = children.some(c => c.type === CLOUD_DEV_TYPE_HYBRID_INVERTER);
                             await ctx.initFromSerial(dtuSerial);
                             this.adapter.devices.set(dtuSerial, ctx);
                             this.adapter.log.info(`Created cloud-only device for DTU ${dtuSerial}`);

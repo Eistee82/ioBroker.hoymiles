@@ -226,6 +226,18 @@ class Hoymiles extends utils.Adapter {
         }
         await this.cloudManager.sendDeviceCommand(devSn, dtuSn, action, devType);
     }
+    async readBatterySettings(stationId) {
+        if (!this.cloudManager) {
+            throw new Error("Cloud is not enabled");
+        }
+        await this.cloudManager.readBatterySettings(stationId);
+    }
+    async readDryContactSettings(stationId) {
+        if (!this.cloudManager) {
+            throw new Error("Cloud is not enabled");
+        }
+        await this.cloudManager.readDryContactSettings(stationId);
+    }
     async onStateChange(id, state) {
         if (!state || state.ack) {
             return;
