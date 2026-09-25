@@ -1,6 +1,6 @@
 ![Logo](../../admin/hoymiles.png)
 
-# ioBroker.hoymiles — Hoymiles HMS-xxxW-xT / HMS-xxx-xWB
+# ioBroker.hoymiles — Hoymiles HMS microinverters and HAT hybrid inverters
 
 ## Supported Inverters
 
@@ -12,12 +12,12 @@ This adapter is designed for **Hoymiles HMS microinverters with an integrated Wi
 |-------|:---:|:---:|:---:|:---:|--------|
 | HMS-300W-1T | 1 | ✅ | — | ✅ | Untested |
 | HMS-350W-1T | 1 | ✅ | — | ✅ | Untested |
-| HMS-400W-1T | 1 | ✅ | — | ✅ | Untested |
+| HMS-400W-1T | 1 | ✅ | — | ✅ | **Tested** (Local, DTU firmware V01.01.01) |
 | HMS-450W-1T | 1 | ✅ | — | ✅ | Untested |
 | HMS-500W-1T | 1 | ✅ | — | ✅ | Untested |
 | HMS-600W-2T | 2 | ✅ | — | ✅ | Untested |
 | HMS-700W-2T | 2 | ✅ | — | ✅ | Untested |
-| HMS-800W-2T | 2 | ✅ | — | ✅ | **Tested** (Local + Cloud) |
+| HMS-800W-2T | 2 | ✅ | — | ✅ | **Tested** (Local + Cloud; local also with DTU firmware V01.01.01) |
 | HMS-900W-2T | 2 | ✅ | — | ✅ | Untested |
 | HMS-1000W-2T | 2 | ✅ | — | ✅ | **Tested** (Local) |
 | HMS-1600DW-4T | 4 | ✅ | — | ✅ | Untested |
@@ -40,7 +40,7 @@ This adapter is designed for **Hoymiles HMS microinverters with an integrated Wi
 
 ### Hybrid inverters with battery (HAT series) — cloud, read-only, experimental
 
-A Hoymiles **hybrid inverter** in your S-Miles account — reference system: **HAT-6.0HV-EUG1** with a **HB-(10-23)S-G2** battery, a three-phase grid meter and a DTS-WIFI-G1 — is read out **through the cloud**: three-phase AC values, backup (EPS) output, PV inputs, the battery in detail (state of charge and health, cell and module extremes), plus the plant's power flow and daily energy balance. See [Hybrid Inverter](#dtuserial--hybrid-inverter-with-battery-hat-series-cloud-dynamic) for the states. The plant's **measuring points** — grid meter, loads, a PV meter on a third-party inverter, a generator — are read as well and appear below the station; see [Station Measuring Points](#station-id--measuring-points-grid-meter-loads-pv-meter-generator-cloud-dynamic). These work for any plant the cloud reports them for, not just for hybrid inverters.
+A Hoymiles **hybrid inverter** in your S-Miles account — reference system: **HAT-6.0HV-EUG1** with a **HB-(10-23)S-G2** battery, a three-phase grid meter and a DTS-WIFI-G1 — is read out **through the cloud**: three-phase AC values, backup (EPS) output, PV inputs, the battery in detail (state of charge and health, cell and module extremes), plus the plant's power flow and its energy balance for today, this month, this year and lifetime — grid import and export, PV used directly, consumption, battery charge and discharge and the self-sufficiency rate, with the figures of the S-Miles app's "Production & Consumption" tab — and the cloud's own income and cost figures. Below the inverter you also get today's curves of AC power, battery power and state of charge, the cloud's alarm list and, read from the device on demand, the battery and dry-contact (relay) settings. See [Hybrid Inverter](#dtuserial--hybrid-inverter-with-battery-hat-series-cloud-dynamic) for the states. The plant's **measuring points** — grid meter, loads, a PV meter on a third-party inverter, a generator — are read as well and appear below the station; see [Station Measuring Points](#station-id--measuring-points-grid-meter-loads-pv-meter-generator-cloud-dynamic). These work for any plant the cloud reports them for, not just for hybrid inverters.
 
 - **Reading, not controlling.** Working mode and battery settings are shown (`<dtuSerial>.battery.*`), but cannot be changed — the adapter has no state that would alter how the storage system operates. The grid-profile read, a command built for microinverters, is not sent to a hybrid inverter.
 - **The three existing commands work the way the S-Miles portal sends them.** The portal's device maintenance offers exactly *power on*, *shut down* and *reboot* for a HAT inverter, and a *reboot* for its DTU — these are the adapter's `inverter.active`, `inverter.reboot` and `dtu.reboot`. For a storage plant they go out with the inverter's own device type and the storage variant of the DTU reboot, as the portal does. They were verified against the portal's code, **not executed on real hardware** — shutting down a storage inverter also takes its backup output offline, so use them deliberately.
@@ -48,7 +48,7 @@ A Hoymiles **hybrid inverter** in your S-Miles account — reference system: **H
 - **Update rate:** the fast realtime channel works for a storage plant as well, also in a cloud-only setup: PV, grid, load and battery power (`station-<id>.grid.*`) and the battery's state of charge (`<dtuSerial>.battery.soc`) arrive about every 10 s — measured on the reference system, that is how often the device really delivers, polling faster brings nothing newer. Unlike for microinverters the channel has no per-device mode for a storage plant, so everything else (phases, EPS, PV inputs, battery details, meters) follows the device's regular upload to the cloud, about every 5 minutes.
 - **Which values are fast, which are not.** Live (about every 10 s) are exactly five values: `station-<id>.grid.power` (PV), `grid.gridPower`, `grid.loadPower`, `grid.batteryPower` and `<dtuSerial>.battery.soc`. `grid.gridPower` *is* the grid meter's live reading. Everything else — including the per-phase `gridMeter.*`, `load.*` and `pvMeter.*` values — is only as fresh as the device's last upload to the cloud (about every 5 minutes); the cloud offers nothing faster for them, not to the portal either.
 - **Signs.** `grid.gridPower` is +import/−export and `grid.batteryPower` +discharging/−charging, in both cases from the cloud's energy-flow graph. The per-device and per-meter values are passed through as the cloud delivers them — note that the grid *meter* reports import as a **negative** active power (`gridMeter.power` read −284 W while `grid.gridPower` showed +278 W).
-- Built against a single system without access to the hardware — please report what you see.
+- Built against a single system, accessed through its owner's cloud account (thanks to BastiBerlin) — please report what you see on yours.
 
 > This adapter does **NOT** work with: HMS-1600/1800/2000-4T without "DW", HM series, MI series, external DTU sticks, or HMT three-phase models.
 
@@ -668,7 +668,7 @@ series has neither a meter input nor a regulation for it, so these states never 
 
 ### `<dtuSerial>.*` — Hybrid Inverter with Battery (HAT series, cloud, dynamic)
 
-Created only when the cloud reports a hybrid inverter below the DTU; all of them are read-only and come from the cloud. The inverter's totals use the states every device has: `grid.power` (combined active power), `grid.frequency`, `inverter.temperature` (internal ambient temperature), `inverter.model` / `serialNumber` / `swVersion`, and `pv0.*` / `pv1.*` (`power`, `voltage`, `current`, and `dailyEnergy` when the cloud delivers it) for the PV inputs — only when PV is actually connected to the hybrid inverter; on an AC-coupled plant, where the PV comes from a separate inverter behind a PV meter (`station-<id>.pvMeter.*`), the cloud flags the inverter's inputs as unused and no `pvN` states are created. `battery.*` exists once a battery hangs below the inverter — it is the one place for everything about the battery; the station only carries the plant's power flow and daily balance (`grid.batteryPower`, `grid.batteryChargeToday`, `grid.batteryDischargeToday`). Rows marked ⁺ are part of the cloud's vocabulary for these devices but were not delivered by the reference system — they appear only if your device reports them.
+Created only when the cloud reports a hybrid inverter below the DTU; all of them are read-only and come from the cloud. The inverter's totals use the states every device has: `grid.power` (combined active power), `grid.frequency`, `inverter.temperature` (internal ambient temperature), `inverter.model` / `serialNumber` / `swVersion`, and `pv0.*` / `pv1.*` (`power`, `voltage`, `current`, and `dailyEnergy` when the cloud delivers it) for the PV inputs — only when PV is actually connected to the hybrid inverter; on an AC-coupled plant, where the PV comes from a separate inverter behind a PV meter (`station-<id>.pvMeter.*`), the cloud flags the inverter's inputs as unused and no `pvN` states are created. `battery.*` exists once a battery hangs below the inverter — it is the one place for everything about the battery; the station only carries the plant's power flow and energy balance (`grid.batteryPower`, `grid.batteryCharge*`, `grid.batteryDischarge*` for today, month, year and lifetime). Rows marked ⁺ are part of the cloud's vocabulary for these devices but were not delivered by the reference system — they appear only if your device reports them.
 
 | State | Type | Unit | Description |
 |-------|------|------|-------------|
@@ -756,23 +756,30 @@ Read from the cloud for every plant that has them — the adapter asks only for 
 - **Encoding:** Protocol Buffers (protobuf)
 - **Frame:** 10-byte header (`HM` magic + command ID + CRC16 + length) + protobuf payload, with sequence numbers (0-60000)
 - **Authentication:** None (local network only)
-- **Encryption:** Optional AES-128-CBC with SHA-256 key derivation (detected automatically via DTU info response)
-- **Heartbeat:** Protobuf heartbeat every 20s to maintain the persistent connection
-- **Reconnect:** 5-minute idle timeout, automatic reconnect with exponential backoff (1s-60s)
+- **Encryption:** none up to DTU firmware V01.00.x. From V01.01.01 on, the DTU sets bit 25 of `dfs` in its InfoData answer and expects **AES-128-GCM** on every other local frame — key and nonce are derived from the 16-byte `enc_rand` it sends in the clear, the 16-byte authentication tag follows the ciphertext beyond the frame length. The adapter detects this in the first answer and switches by itself. Only the InfoData request and answer stay plain.
+- **Heartbeat:** a protobuf heartbeat after 20 s without traffic keeps the persistent connection open
+- **Reconnect:** after 5 minutes without data, and on every disconnect, with exponential backoff from 1 s up to 5 minutes
 
 ### Cloud (S-Miles API)
 
-- **Base URL:** `https://neapi.hoymiles.com`
-- **Authentication:** MD5+SHA256 credential hash with nonce
-- **Data:** Station realtime, device tree, station details
+- **Base URL:** `https://neapi.hoymiles.com`; stations in the EU data centre are served from `https://euapi.hoymiles.com`, and the adapter picks the host per station
+- **Authentication:** challenge login; Argon2id when the server supplies a salt (S-Miles Home), otherwise the legacy MD5/SHA-256 hash the web portal sends
+- **Data:** station realtime and details, device tree, per-device realtime indicators (hybrid inverter, battery, meters), the fast realtime burst channel, day curves, the energy statistics (day, month, year, lifetime), income and cost, alarm lists, and device tasks (settings reads, power on/off, reboot)
+- **Cloud relay:** the adapter forwards the DTU's data to the server and port configured in the DTU — plain TCP on port 10081 for older firmware, TLS on port 10083 (verified against Hoymiles' own root CA) for firmware V01.01.01 and later
 - **Password:** Stored encrypted in ioBroker config
 
 ### Acknowledgments
 
-Protocol reverse-engineering by the community:
-- [hoymiles-wifi](https://github.com/suaveolent/hoymiles-wifi) — Python library (primary reference)
+Community projects that made the first steps possible:
+- [hoymiles-wifi](https://github.com/suaveolent/hoymiles-wifi) — Python library
 - [dtuGateway](https://github.com/ohAnd/dtuGateway) — ESP32 gateway
-- [Hoymiles-DTU-Proto](https://github.com/henkwiedig/Hoymiles-DTU-Proto) — Original protobuf definitions
+- [Hoymiles-DTU-Proto](https://github.com/henkwiedig/Hoymiles-DTU-Proto) — original protobuf definitions
+
+Today the protocol is checked against the S-Miles app and the DTU and inverter firmware themselves.
+
+Thanks to the users who lent their systems:
+- **BastiBerlin** — access to a HAT-6.0HV-EUG1 hybrid system with battery, the reference for the hybrid-inverter support
+- **akwf1927** — first test of DTU firmware V01.01.01 on an HMS-400W-1T and an HMS-800W-2T
 
 ## Troubleshooting
 
@@ -782,9 +789,8 @@ Protocol reverse-engineering by the community:
 - If you have the dtuGateway ESP32 running, stop it first
 
 ### No data after connecting
-- DTU firmware V01.01.00 and newer may break local protobuf communication
-- Do NOT update the DTU firmware if local access is important to you
 - Check the adapter log for protobuf decode errors
+- `Decryption failed: ... wrong final block length` or `bad decrypt` on a DTU with firmware V01.01.01 means an adapter version without support for the encrypted protocol is running. Install the current version and restart the instance; the log then says `DTU requires encrypted communication (firmware V01.01.01+)`
 
 ### Cloud login failed
 - Check your S-Miles email and password
