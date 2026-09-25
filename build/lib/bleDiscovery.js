@@ -1,6 +1,6 @@
 import { Discovery } from "@2colors/esphome-native-api";
 import { ESPHOME_API_PORT, BLE_SERVICE_UUID } from "./constants.js";
-import { NATIVE_TIMERS } from "./tcpConnection.js";
+import { NATIVE_DELAY } from "./tcpConnection.js";
 const HOYMILES_SERVICE_HINT = BLE_SERVICE_UUID.slice(4, 8);
 const HOYMILES_NAME_PREFIXES = ["AUS", "MSA", "MSH", "MI", "RMI", "RMSA"];
 export function bleNameToSn(name) {
@@ -14,11 +14,6 @@ export function isHoymilesAdvertisement(adv) {
     const name = (adv.name ?? "").trim();
     return HOYMILES_NAME_PREFIXES.some(p => name.startsWith(p));
 }
-export const NATIVE_DELAY = {
-    delay: ms => new Promise(resolve => {
-        NATIVE_TIMERS.setTimeout(resolve, ms);
-    }),
-};
 export async function discoverGateways(timeoutMs = 5000, waiter = NATIVE_DELAY, signal, createDiscovery = () => new Discovery({})) {
     const found = new Map();
     if (signal?.aborted) {

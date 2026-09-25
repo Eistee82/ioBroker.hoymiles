@@ -7,6 +7,11 @@ export const NATIVE_TIMERS = {
     setInterval: (cb, ms) => globalThis.setInterval(cb, ms),
     clearInterval: handle => globalThis.clearInterval(handle),
 };
+export const NATIVE_DELAY = {
+    delay: ms => new Promise(resolve => {
+        NATIVE_TIMERS.setTimeout(resolve, ms);
+    }),
+};
 class TcpConnection extends EventEmitter {
     connected;
     socket;

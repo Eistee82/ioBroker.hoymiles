@@ -1362,6 +1362,67 @@ describe("cloudConnection – getIndicatorDayCurve", function () {
 });
 
 // ============================================================
+// cloudConnection – runDeviceTask polling (waits through the injected delay provider)
+// ============================================================
+describe("cloudConnection – runDeviceTask polling", function () {
+	let originalPost;
+
+	beforeEach(function () {
+		originalPost = CloudConnection.prototype._post;
+	});
+
+	afterEach(function () {
+		CloudConnection.prototype._post = originalPost;
+	});
+
+	function connectedCloud(waiter) {
+		const cloud = new CloudConnection("u", "p", undefined, waiter);
+		cloud.token = "fake-token";
+		cloud.tokenTime = Date.now();
+		return cloud;
+	}
+
+	it("waits between status polls with the injected delay() and returns the terminal result", async function () {
+		const delays = [];
+		const paths = [];
+		let polls = 0;
+		CloudConnection.prototype._post = async function (apiPath) {
+			paths.push(apiPath);
+			if (apiPath === "/start") {
+				return { status: "0", data: "task-1" };
+			}
+			polls++;
+			return { status: "0", data: polls < 2 ? { code: 2 } : { code: 0, data: ["done"] } };
+		};
+		const cloud = connectedCloud({ delay: async ms => void delays.push(ms) });
+		const result = await cloud["runDeviceTask"]("/start", { action: 1 }, "/status");
+		assert.deepStrictEqual(result, { code: 0, data: ["done"] });
+		assert.deepStrictEqual(paths, ["/start", "/status", "/status"]);
+		assert.deepStrictEqual(delays, [2000, 2000], "one wait before every status poll, through delay()");
+	});
+
+	it("sends no further status poll once the adapter unloads (adapter.delay() then never settles)", async function () {
+		const paths = [];
+		CloudConnection.prototype._post = async function (apiPath) {
+			paths.push(apiPath);
+			return apiPath === "/start" ? { status: "0", data: "task-1" } : { status: "0", data: { code: 2 } };
+		};
+		let waited = 0;
+		// adapter.delay() during unload: the timer is cleared and the promise stays pending.
+		const cloud = connectedCloud({
+			delay: () => {
+				waited++;
+				return new Promise(() => {});
+			},
+		});
+		void cloud["runDeviceTask"]("/start", { action: 1 }, "/status");
+		await new Promise(resolve => setImmediate(resolve));
+		assert.deepStrictEqual(paths, ["/start"], "the task was started, nothing polled after that");
+		assert.strictEqual(waited, 1);
+	});
+});
+
+// ============================================================
 // cloudConnection – readDryContactSettings (retries SETTING_ACTIONS_DRY_CONTACT_READ while the
 // cloud reports "Not Supported"; runDeviceTask itself polls with real timers, so it is stubbed
 // out here the same way _post/_postBinary are stubbed elsewhere in this file — the retry/rethrow

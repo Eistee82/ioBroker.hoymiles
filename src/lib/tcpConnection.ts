@@ -28,6 +28,24 @@ export const NATIVE_TIMERS: TimerScheduler = {
 };
 
 /**
+ * A wait that ends with the adapter: the adapter itself, whose `delay()` the js-controller cancels
+ * on unload — the timer is cleared and the promise is left pending, so nothing after the `await`
+ * runs any more. Work that must happen on unload therefore cannot sit behind such a wait.
+ */
+export interface DelayProvider {
+	/** Resolve after `ms` milliseconds — or never, once the adapter is shutting down. */
+	delay: (ms: number) => Promise<void>;
+}
+
+/** Fallback for standalone use (tools, tests) when no adapter is at hand. */
+export const NATIVE_DELAY: DelayProvider = {
+	delay: ms =>
+		new Promise(resolve => {
+			NATIVE_TIMERS.setTimeout(resolve, ms);
+		}),
+};
+
+/**
  * Abstract base class for persistent TCP connections with reconnect logic.
  * Shared by DtuConnection (local DTU) and CloudRelay (cloud server).
  *

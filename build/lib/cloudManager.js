@@ -35,7 +35,7 @@ class CloudManager {
         this.dataInterval = options.dataInterval;
         this.slowPollFactor = options.slowPollFactor;
         this.localContexts = options.localContexts;
-        this.cloud = new CloudConnection(options.cloudUser, options.cloudPassword, msg => this.adapter.log.debug(`Cloud: ${msg}`));
+        this.cloud = new CloudConnection(options.cloudUser, options.cloudPassword, msg => this.adapter.log.debug(`Cloud: ${msg}`), this.adapter);
         this.cloudPoller = null;
         this.burstPoller = null;
         this.pendingCloudMatches = new Map();

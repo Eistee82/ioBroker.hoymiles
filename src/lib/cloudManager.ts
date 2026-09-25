@@ -61,8 +61,12 @@ class CloudManager {
 		this.slowPollFactor = options.slowPollFactor;
 		this.localContexts = options.localContexts;
 
-		this.cloud = new CloudConnection(options.cloudUser, options.cloudPassword, msg =>
-			this.adapter.log.debug(`Cloud: ${msg}`),
+		// The adapter as waiter: a device task (settings read, command) stops polling when it unloads.
+		this.cloud = new CloudConnection(
+			options.cloudUser,
+			options.cloudPassword,
+			msg => this.adapter.log.debug(`Cloud: ${msg}`),
+			this.adapter,
 		);
 		this.cloudPoller = null;
 		this.burstPoller = null;

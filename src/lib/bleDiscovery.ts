@@ -1,6 +1,6 @@
 import { Discovery } from "@2colors/esphome-native-api";
 import { ESPHOME_API_PORT, BLE_SERVICE_UUID } from "./constants.js";
-import { NATIVE_TIMERS } from "./tcpConnection.js";
+import { NATIVE_DELAY, type DelayProvider } from "./tcpConnection.js";
 
 /** A discovered ESPHome Bluetooth-Proxy gateway. */
 export interface GatewayInfo {
@@ -51,23 +51,6 @@ export function isHoymilesAdvertisement(adv: { name?: string; serviceUuidsList?:
 	const name = (adv.name ?? "").trim();
 	return HOYMILES_NAME_PREFIXES.some(p => name.startsWith(p));
 }
-
-/**
- * What the discovery needs for its wait: the adapter, whose `delay()` the js-controller cancels on
- * unload (the timer is cleared and the promise is left pending, so nothing after the `await` runs).
- */
-export interface DelayProvider {
-	/** Resolve after `ms` milliseconds — or never, once the adapter is shutting down. */
-	delay: (ms: number) => Promise<void>;
-}
-
-/** Fallback for standalone use (tools, tests) when no adapter is at hand. */
-export const NATIVE_DELAY: DelayProvider = {
-	delay: ms =>
-		new Promise(resolve => {
-			NATIVE_TIMERS.setTimeout(resolve, ms);
-		}),
-};
 
 /** An mDNS answer of the esphome-native-api `Discovery`. */
 interface DiscoveryInfo {

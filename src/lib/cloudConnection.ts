@@ -24,6 +24,7 @@ import {
 	APP_TID,
 } from "./constants.js";
 import type { CloudGridProfileParam } from "./gridProfile.js";
+import { NATIVE_DELAY, type DelayProvider } from "./tcpConnection.js";
 import {
 	ENERGY_STATS_TYPE_PRODUCTION_CONSUMPTION,
 	SETTING_ACTION_BATTERY_MODE_READ,
@@ -399,6 +400,8 @@ class CloudConnection {
 	private readonly log: (msg: string) => void;
 	private tokenTime: number;
 	private tokenRefreshPromise: Promise<void> | null;
+	/** Wait between device-task status polls — the adapter in production (see constructor). */
+	private readonly waiter: DelayProvider;
 	/**
 	 * Active API base URL. Starts at CLOUD_HOST_DEFAULT and may be replaced
 	 * once region_c maps the user's account to a different regional host.
@@ -437,9 +440,12 @@ class CloudConnection {
 	 * @param user - Hoymiles account email
 	 * @param password - Hoymiles account password
 	 * @param log - Debug log callback
+	 * @param waiter - Wait between the status polls of a device task; pass the adapter, whose
+	 *   `delay()` the js-controller cancels on unload, so a pending task stops polling with it
 	 */
-	constructor(user: string, password: string, log?: (msg: string) => void) {
+	constructor(user: string, password: string, log?: (msg: string) => void, waiter: DelayProvider = NATIVE_DELAY) {
 		this.user = user;
+		this.waiter = waiter;
 		const input = Buffer.from(password);
 		this.credentials = buildCredentialChallenges(input);
 		this.credentialInput = input;
@@ -1557,7 +1563,8 @@ class CloudConnection {
 		}
 		const taskId = started.data;
 		for (let attempt = 0; attempt < DEVICE_SETTING_POLL_MAX; attempt++) {
-			await new Promise<void>(resolve => globalThis.setTimeout(resolve, DEVICE_SETTING_POLL_INTERVAL_MS));
+			// The adapter's delay(): on unload it never settles, so no request goes out after the stop.
+			await this.waiter.delay(DEVICE_SETTING_POLL_INTERVAL_MS);
 			const status = await this._post<T>(statusPath, { id: taskId });
 			if (status.status !== "0") {
 				throw new Error(`Device task ${statusPath} failed: ${status.message}`);
