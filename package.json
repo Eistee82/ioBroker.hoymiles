@@ -1,6 +1,6 @@
 {
   "name": "iobroker.hoymiles",
-  "version": "0.4.1",
+  "version": "0.5.0",
   "description": "ioBroker adapter for Hoymiles HMS microinverters (local via WiFi or Bluetooth, or via the S-Miles cloud) and HAT hybrid inverters with battery",
   "type": "module",
   "main": "build/main.js",

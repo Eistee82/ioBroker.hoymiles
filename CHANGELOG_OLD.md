@@ -1,4 +1,8 @@
 # Older changes
+## 0.3.3 (2026-04-08)
+- (@Eistee82) Fix jsonConfig schema warnings: button color, remove unsupported table properties
+
+
 ## 0.3.2 (2026-04-03)
 - (@Eistee82) Fix remaining responsive layout issues for repochecker (staticText, header, divider)
 

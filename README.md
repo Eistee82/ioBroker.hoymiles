@@ -147,8 +147,7 @@ Each DTU creates a device node using its serial number as ID (e.g. `hoymiles.0.4
 Cloud stations create aggregated device nodes (e.g. `hoymiles.0.station-12345.*`).
 
 ## Changelog
-
-### **WORK IN PROGRESS**
+### 0.5.0 (2026-09-25)
 
 - (@Eistee82) **DTUs with firmware V01.01.01 work locally again.** That firmware encrypts the local connection and moves the DTU's cloud link to TLS on port 10083; the adapter now speaks both. DTUs with older firmware are unaffected
 - (@Eistee82) **Hybrid inverters with a battery (HAT series, e.g. HAT-6.0HV-EUG1) can be read through the cloud** — experimental, needs an installer-type S-Miles account. Everything about the battery is in one place below the inverter (`<dtuSerial>.battery.*`); the plant gets its live power flow, its energy balance for today, month, year and lifetime including the self-sufficiency rate (the figures of the app's "Production & Consumption" tab), income and cost, its measuring points (grid meter, loads, PV meter, generator), day curves, the cloud's alarm list and the relay settings. Read-only; power on/off and reboot are sent in the form such a device expects. Many thanks to BastiBerlin for providing access to a real system for development and testing
@@ -184,9 +183,6 @@ Cloud stations create aggregated device nodes (e.g. `hoymiles.0.station-12345.*`
 ### 0.3.4 (2026-04-08)
 - (@Eistee82) Fix disabled property type in jsonConfig table items (string, not boolean)
 - (@Eistee82) Add local repochecker script (`npm run test:repo`)
-
-### 0.3.3 (2026-04-08)
-- (@Eistee82) Fix jsonConfig schema warnings: button color, remove unsupported table properties
 
 Older entries: see [CHANGELOG_OLD.md](CHANGELOG_OLD.md).
 
