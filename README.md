@@ -194,7 +194,7 @@ Older entries: see [CHANGELOG_OLD.md](CHANGELOG_OLD.md).
 
 MIT License
 
-Copyright (c) 2026 Eistee82
+Copyright (c) 2026 Eistee82 (t.me/AMEistee)
 
 Permission is hereby granted, free of charge, to any person obtaining a copy
 of this software and associated documentation files (the "Software"), to deal
