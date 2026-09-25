@@ -30,7 +30,7 @@
     "test:unit": "c8 --lines 80 --branches 70 --functions 80 mocha \"test/*.test.js\" --exit",
     "test:integration": "mocha test/integration.cjs --exit",
     "test": "npm run test:package && npm run test:unit",
-    "release": "release-script in npm this --hierarchical",
+    "release": "release-script",
     "translate": "translate-adapter",
     "test:repo": "npx --yes @iobroker/repochecker https://github.com/Eistee82/ioBroker.hoymiles --local"
   },
