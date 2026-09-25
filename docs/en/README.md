@@ -12,12 +12,12 @@ This adapter is designed for **Hoymiles HMS microinverters with an integrated Wi
 |-------|:---:|:---:|:---:|:---:|--------|
 | HMS-300W-1T | 1 | ✅ | — | ✅ | Untested |
 | HMS-350W-1T | 1 | ✅ | — | ✅ | Untested |
-| HMS-400W-1T | 1 | ✅ | — | ✅ | **Tested** (Local, DTU firmware V01.01.01) |
+| HMS-400W-1T | 1 | ✅ | — | ✅ | **Tested** (Local + cloud relay, DTU firmware V01.01.01) |
 | HMS-450W-1T | 1 | ✅ | — | ✅ | Untested |
 | HMS-500W-1T | 1 | ✅ | — | ✅ | Untested |
 | HMS-600W-2T | 2 | ✅ | — | ✅ | Untested |
 | HMS-700W-2T | 2 | ✅ | — | ✅ | Untested |
-| HMS-800W-2T | 2 | ✅ | — | ✅ | **Tested** (Local + Cloud; local also with DTU firmware V01.01.01) |
+| HMS-800W-2T | 2 | ✅ | — | ✅ | **Tested** (Local + Cloud; local + cloud relay also with DTU firmware V01.01.01) |
 | HMS-900W-2T | 2 | ✅ | — | ✅ | Untested |
 | HMS-1000W-2T | 2 | ✅ | — | ✅ | **Tested** (Local) |
 | HMS-1600DW-4T | 4 | ✅ | — | ✅ | Untested |
@@ -779,7 +779,7 @@ Today the protocol is checked against the S-Miles app and the DTU and inverter f
 
 Thanks to the users who lent their systems:
 - **BastiBerlin** — access to a HAT-6.0HV-EUG1 hybrid system with battery, the reference for the hybrid-inverter support
-- **akwf1927** — first test of DTU firmware V01.01.01 on an HMS-400W-1T and an HMS-800W-2T
+- **akwf1927** — first test of DTU firmware V01.01.01 on an HMS-400W-1T and an HMS-800W-2T, locally and through the TLS cloud relay
 
 ## Troubleshooting
 

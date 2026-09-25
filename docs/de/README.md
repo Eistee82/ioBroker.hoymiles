@@ -12,12 +12,12 @@ Dieser Adapter ist für **Hoymiles HMS Mikrowechselrichter mit integrierter WiFi
 |--------|:---:|:---:|:---:|:---:|--------|
 | HMS-300W-1T | 1 | ✅ | — | ✅ | Ungetestet |
 | HMS-350W-1T | 1 | ✅ | — | ✅ | Ungetestet |
-| HMS-400W-1T | 1 | ✅ | — | ✅ | **Getestet** (Lokal, DTU-Firmware V01.01.01) |
+| HMS-400W-1T | 1 | ✅ | — | ✅ | **Getestet** (Lokal + Cloud-Relay, DTU-Firmware V01.01.01) |
 | HMS-450W-1T | 1 | ✅ | — | ✅ | Ungetestet |
 | HMS-500W-1T | 1 | ✅ | — | ✅ | Ungetestet |
 | HMS-600W-2T | 2 | ✅ | — | ✅ | Ungetestet |
 | HMS-700W-2T | 2 | ✅ | — | ✅ | Ungetestet |
-| HMS-800W-2T | 2 | ✅ | — | ✅ | **Getestet** (Lokal + Cloud; lokal auch mit DTU-Firmware V01.01.01) |
+| HMS-800W-2T | 2 | ✅ | — | ✅ | **Getestet** (Lokal + Cloud; lokal + Cloud-Relay auch mit DTU-Firmware V01.01.01) |
 | HMS-900W-2T | 2 | ✅ | — | ✅ | Ungetestet |
 | HMS-1000W-2T | 2 | ✅ | — | ✅ | **Getestet** (Lokal) |
 | HMS-1600DW-4T | 4 | ✅ | — | ✅ | Ungetestet |
@@ -784,7 +784,7 @@ Heute wird das Protokoll direkt an der S-Miles-App sowie an der Firmware von DTU
 
 Dank an die Nutzer, die ihre Anlagen zur Verfügung gestellt haben:
 - **BastiBerlin** — Zugang zu einer HAT-6.0HV-EUG1-Hybridanlage mit Batterie, der Referenz für die Hybrid-Unterstützung
-- **akwf1927** — erster Test der DTU-Firmware V01.01.01 an einem HMS-400W-1T und einem HMS-800W-2T
+- **akwf1927** — erster Test der DTU-Firmware V01.01.01 an einem HMS-400W-1T und einem HMS-800W-2T, lokal und über den TLS-Cloud-Relay
 
 ## Fehlerbehebung
 
