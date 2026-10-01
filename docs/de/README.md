@@ -796,6 +796,7 @@ Dank an die Nutzer, die ihre Anlagen zur Verfügung gestellt haben:
 ### Keine Daten nach Verbindung
 - Prüfe das Adapter-Log auf Protobuf-Dekodierfehler
 - `Decryption failed: ... wrong final block length` oder `bad decrypt` bei einer DTU mit Firmware V01.01.01 bedeutet: es läuft eine Adapter-Version ohne Unterstützung für das verschlüsselte Protokoll. Aktuelle Version installieren und die Instanz neu starten; im Log steht dann `DTU requires encrypted communication (firmware V01.01.01+)`
+- Leistungslimit, Ein/Aus, Neustart oder Einstellungsänderungen wirken bei einer DTU mit Firmware V01.01.01 nicht, obwohl im Log `Setting power limit to …` und eine Kommando-Antwort stehen: Adapter-Versionen bis 0.5.0 haben Kommandos an eine solche DTU unverschlüsselt gesendet. Die DTU antwortet zwar, kann das Kommando aber nicht entschlüsseln und führt es mit leerem Inhalt aus. Adapter aktualisieren
 
 ### Cloud-Login fehlgeschlagen
 - Prüfe E-Mail und Passwort des S-Miles Kontos

@@ -2588,8 +2588,13 @@ class DeviceContext {
 		}
 		// Local link takes precedence: a locally-connected DTU is actuated directly over TCP.
 		if (this.connection?.connected) {
+			const connection = this.connection;
 			await executeCommand(stateId, state, {
-				connection: this.connection,
+				// Commands go through wireFrame like every other local send. A DTU with firmware
+				// V01.01.01+ decrypts every command frame; a plain one fails authentication, and the
+				// firmware then handles the message with an empty payload (0x40817958 ignores the
+				// decrypt result) — it answers, but nothing happens.
+				connection: { send: frame => connection.send(this.wireFrame(frame)) },
 				protobuf: this.protobuf,
 				deviceId: this.deviceId,
 				host: this.host,

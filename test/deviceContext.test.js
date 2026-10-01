@@ -3254,6 +3254,74 @@ describe("deviceContext – handleStateChange", function () {
 	});
 
 	/**
+	 * Locally connected fixture with a real protobuf handler and a recording connection.
+	 *
+	 * @param encryptionRequired - Whether the DTU demands encrypted local frames (V01.01.01+).
+	 */
+	async function makeLocalCommandCtx(encryptionRequired) {
+		const sent = [];
+		const adapter = {
+			log: { info: () => {}, warn: () => {}, debug: () => {}, error: () => {} },
+			setStateAsync: async () => {},
+			extendObjectAsync: async () => {},
+			setObjectNotExistsAsync: async () => {},
+			getStateAsync: async () => null,
+			setInterval: () => undefined,
+			clearInterval: () => {},
+			setTimeout: () => undefined,
+			clearTimeout: () => {},
+			subscribeStates: () => {},
+			unsubscribeStates: () => {},
+			devices: new Map(),
+			matchLocalDeviceToCloud: () => {},
+			onRelayDataSent: () => {},
+			onLocalConnected: () => {},
+			onLocalDisconnected: () => {},
+			onSendTimeUpdated: () => {},
+			updateConnectionState: async () => {},
+		};
+		const protobuf = new ProtobufHandler();
+		await protobuf.loadProtos();
+		const ctx = new DeviceContext({
+			adapter,
+			protobuf,
+			host: "192.168.1.1",
+			enableLocal: true,
+			enableCloud: false,
+			enableCloudRelay: false,
+			dataInterval: 15,
+			slowPollFactor: 6,
+		});
+		await ctx.initFromSerial("TEST1234");
+		ctx.connection = {
+			connected: true,
+			send: async buf => {
+				sent.push(buf);
+				return true;
+			},
+		};
+		ctx.encryptionRequired = encryptionRequired;
+		// Marker instead of real AES: proves the frame went through the encryption hook.
+		ctx.encryption = { encryptFrame: frame => Buffer.concat([Buffer.from("ENC"), frame]) };
+		return { ctx, sent };
+	}
+
+	it("encrypts command frames when the DTU requires encryption (V01.01.01+)", async function () {
+		const { ctx, sent } = await makeLocalCommandCtx(true);
+		await ctx.handleStateChange("inverter.active", { val: true, ack: false, ts: 0, lc: 0, from: "" });
+		assert.strictEqual(sent.length, 1, "exactly one command frame expected");
+		assert.strictEqual(sent[0].subarray(0, 3).toString(), "ENC", "command must pass the encryption hook");
+	});
+
+	it("sends command frames unchanged to a DTU without encryption", async function () {
+		const { ctx, sent } = await makeLocalCommandCtx(false);
+		await ctx.handleStateChange("inverter.active", { val: true, ack: false, ts: 0, lc: 0, from: "" });
+		assert.strictEqual(sent.length, 1, "exactly one command frame expected");
+		assert.strictEqual(sent[0][0], 0x48, "plain frame starts with the HM magic");
+		assert.strictEqual(sent[0][1], 0x4d, "plain frame starts with the HM magic");
+	});
+
+	/**
 	 * Cloud-fallback fixture: no local link, cloud enabled, records sendCloudDeviceCommand args.
 	 *
 	 * @param overrides - Adapter fields to override (e.g. `readBatterySettings`).

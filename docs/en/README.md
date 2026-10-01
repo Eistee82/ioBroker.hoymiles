@@ -791,6 +791,7 @@ Thanks to the users who lent their systems:
 ### No data after connecting
 - Check the adapter log for protobuf decode errors
 - `Decryption failed: ... wrong final block length` or `bad decrypt` on a DTU with firmware V01.01.01 means an adapter version without support for the encrypted protocol is running. Install the current version and restart the instance; the log then says `DTU requires encrypted communication (firmware V01.01.01+)`
+- Power limit, on/off, reboot or settings changes have no effect on a DTU with firmware V01.01.01, although the log shows `Setting power limit to …` and a command response: adapter versions up to 0.5.0 sent commands to such a DTU unencrypted. The DTU answers, but cannot decrypt the command and carries it out with an empty content. Update the adapter
 
 ### Cloud login failed
 - Check your S-Miles email and password

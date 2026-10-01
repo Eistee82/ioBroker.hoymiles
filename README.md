@@ -147,6 +147,10 @@ Each DTU creates a device node using its serial number as ID (e.g. `hoymiles.0.4
 Cloud stations create aggregated device nodes (e.g. `hoymiles.0.station-12345.*`).
 
 ## Changelog
+### **WORK IN PROGRESS**
+
+- (@Eistee82) **Commands work again on DTUs with firmware V01.01.01.** Power limit, on/off, reboot, lock and settings changes were sent to such a DTU unencrypted. The DTU answered, but could not decrypt the command and carried it out with an empty content, so nothing happened even though the log looked fine
+
 ### 0.5.0 (2026-09-25)
 
 - (@Eistee82) **DTUs with firmware V01.01.01 work locally again.** That firmware encrypts the local connection and moves the DTU's cloud link to TLS on port 10083; the adapter now speaks both. DTUs with older firmware are unaffected

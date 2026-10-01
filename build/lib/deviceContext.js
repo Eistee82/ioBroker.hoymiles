@@ -1592,8 +1592,9 @@ class DeviceContext {
             return;
         }
         if (this.connection?.connected) {
+            const connection = this.connection;
             await executeCommand(stateId, state, {
-                connection: this.connection,
+                connection: { send: frame => connection.send(this.wireFrame(frame)) },
                 protobuf: this.protobuf,
                 deviceId: this.deviceId,
                 host: this.host,
