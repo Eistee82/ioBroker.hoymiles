@@ -50,6 +50,7 @@ const ACTION = {
     POWER_FACTOR_LIMIT: 47,
     REACTIVE_POWER_LIMIT: 48,
     ALARM_LIST: 50,
+    LIMIT_POWER_RUNTIME: 211,
 };
 const MAGIC = [HM_MAGIC_0, HM_MAGIC_1];
 const HEADER_SIZE = 10;
@@ -260,6 +261,9 @@ class ProtobufHandler {
     }
     encodeSetPowerLimit(percent, timestamp) {
         return this.encodeCommandAction(ACTION.LIMIT_POWER, timestamp, `A:${Math.round(percent * 10)},B:0,C:0\r`);
+    }
+    encodeSetPowerLimitWatt(watts, timestamp) {
+        return this.encodeCommandAction(ACTION.LIMIT_POWER_RUNTIME, timestamp, `S:1,P:${Math.round(watts * 10)}\r`);
     }
     encodeInverterOn(timestamp) {
         return this.encodeCommandAction(ACTION.MI_START, timestamp, undefined, CMD.COMMAND_CLOUD);

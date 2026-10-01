@@ -7,7 +7,8 @@ interface CommandTransport {
 import {
 	POWER_LIMIT_MIN,
 	POWER_LIMIT_MAX,
-	SCALE_POWER,
+	POWER_LIMIT_WATT_MAX,
+	POWER_LIMIT_WATT_MIN,
 	DEVICE_COMMAND_REBOOT,
 	DEVICE_COMMAND_POWER_ON,
 	DEVICE_COMMAND_POWER_OFF,
@@ -54,7 +55,15 @@ interface CommandContext {
 	 * configuration — without it a write would clear every field it does not carry.
 	 */
 	configSnapshot?: Record<string, unknown> | null;
+	/**
+	 * Set when the device echoes power limits back in RealData (local TCP). A limit command then
+	 * reports which kind it sent instead of being acknowledged on send; the echo confirms it.
+	 */
+	expectReadback?: (kind: PowerLimitKind) => void;
 }
+
+/** Unit a power-limit command is expressed in — and thus how the device's echo reads. */
+export type PowerLimitKind = "percent" | "watt";
 
 interface CommandDefinition {
 	validate?: (val: number) => string | null;
@@ -91,6 +100,12 @@ interface CommandDefinition {
 	 * only 2.0 wide. Required whenever `writesFlash` is set.
 	 */
 	valueSpan?: number;
+	/**
+	 * Power-limit commands the DTU echoes in RealData (`sgs.powerLimit`, raw value / 10). The echo
+	 * is the staged value of whichever limit command was sent last: percent after action 8, watts
+	 * after action 211 (verified live). It confirms the command when the context supports it.
+	 */
+	readback?: PowerLimitKind;
 }
 
 /**
@@ -168,6 +183,7 @@ const COMMANDS: Record<string, CommandDefinition> = {
 		log: v => `Setting power limit to ${v}%`,
 		writesFlash: true,
 		valueSpan: 100,
+		readback: "percent",
 	},
 	"inverter.active": {
 		encode: (v, ts, pb) => (v ? pb.encodeInverterOn(ts) : pb.encodeInverterOff(ts)),
@@ -219,26 +235,22 @@ const COMMANDS: Record<string, CommandDefinition> = {
 		encode: (v, ts, pb, base) => pb.encodeSetConfig(ts, { serverSendTime: Number(v) }, base),
 		log: v => `Setting cloud send interval to ${v}min`,
 	},
-	// Power limit through the DTU's config field (SetConfig limit_power_mypower), same 0.1%-unit
-	// scaling as the command above.
+	// Runtime power limit in watts (action 211, HMS-800W-2T family only). The DTU forwards it with
+	// mode byte 0 — absolute 0.1 W, RAM only — so it costs neither DTU flash nor inverter EEPROM and
+	// needs no flash guard; that is what makes it usable for a zero-export loop. It is lost when
+	// the inverter restarts, after which the persisted percentage of `inverter.powerLimit` applies
+	// again (_fwanalysis/POWER_LIMIT_CHAIN_2T.md §6, §7).
 	//
-	// This used to be documented as the "persistent" limit that survives a power cycle. That is
-	// wrong on the HMS-800W-2T, where the value does not survive a restart (firmware-verified,
-	// _fwanalysis/ADAPTER_FINDINGS.md §2) — the name says the opposite of what happens.
-	//
-	// No `writesFlash` either, and that is deliberate: SetConfig field 5 is written to `gp-108260`
-	// (`0x6c204`), outside the persisted structure `0x6b8dc`, and the decoder's dirty flag — the
-	// only thing that triggers the serializer — is set exclusively in the WiFi/AP password branch
-	// (§15). The flash guard that used to sit here was throttling writes that cost no flash at
-	// all. The persistent limit is `inverter.powerLimit`, which is guarded.
-	"config.limitPowerMyPower": {
+	// The former `config.limitPowerMyPower` (SetConfig field 5) is gone: it only overwrote a RAM
+	// working value, never reached the inverter and was replaced from flash on the next restart.
+	"inverter.powerLimitWatt": {
 		validate: v =>
-			v < POWER_LIMIT_MIN || v > POWER_LIMIT_MAX
-				? `Power limit must be between ${POWER_LIMIT_MIN} and ${POWER_LIMIT_MAX}`
+			!(v >= POWER_LIMIT_WATT_MIN) || v > POWER_LIMIT_WATT_MAX
+				? `Power limit must be between ${POWER_LIMIT_WATT_MIN} and ${POWER_LIMIT_WATT_MAX} W`
 				: null,
-		encode: (v, ts, pb, base) =>
-			pb.encodeSetConfig(ts, { limitPowerMypower: Math.round(Number(v) * SCALE_POWER) }, base),
-		log: v => `Setting power limit to ${v}% via the DTU config field`,
+		encode: (v, ts, pb) => pb.encodeSetPowerLimitWatt(Number(v), ts),
+		log: v => `Setting runtime power limit to ${v} W`,
+		readback: "watt",
 	},
 };
 
@@ -309,9 +321,14 @@ async function executeCommand(stateId: string, state: ioBroker.State, ctx: Comma
 	}
 	await connection.send(frame);
 
-	// Acknowledge non-button commands after successful send
+	// Acknowledge non-button commands after successful send — except a power limit the device will
+	// echo back: that one is acknowledged by the echo, so the state shows what the DTU accepted.
 	if (!cmd.button) {
-		await ctx.setState(stateId, state.val, true);
+		if (cmd.readback && ctx.expectReadback) {
+			ctx.expectReadback(cmd.readback);
+		} else {
+			await ctx.setState(stateId, state.val, true);
+		}
 	}
 
 	// Reset button states after 1s

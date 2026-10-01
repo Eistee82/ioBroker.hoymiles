@@ -15,6 +15,8 @@ import {
 	stationIndicatorChannels,
 	stationIndicatorStates,
 	stationIndicatorStateMap,
+	localTcpStates,
+	buildStateCommon,
 } from "../build/lib/stateDefinitions.js";
 
 // ============================================================
@@ -177,16 +179,33 @@ describe("stateDefinitions – station", function () {
 		assert.ok(writableIds.includes("dtu.reboot"), "Missing writable dtu.reboot");
 		assert.ok(writableIds.includes("inverter.lock"), "Missing writable inverter.lock");
 		assert.ok(writableIds.includes("config.serverSendTime"), "Missing writable config.serverSendTime");
-		assert.ok(writableIds.includes("config.limitPowerMyPower"), "Missing writable config.limitPowerMyPower");
+		assert.ok(!states.some(s => s.id === "config.limitPowerMyPower"), "config.limitPowerMyPower is removed");
 	});
 
-	it("config.limitPowerMyPower state has correct definition", function () {
-		const def = states.find(s => s.id === "config.limitPowerMyPower");
-		assert.ok(def, "config.limitPowerMyPower must exist in states");
-		assert.strictEqual(def.type, "number", "type must be number");
-		assert.strictEqual(def.write, true, "must be writable");
-		assert.strictEqual(def.min, 2, "min must be 2");
-		assert.strictEqual(def.max, 100, "max must be 100");
+	it("inverter.powerLimitWatt is a TCP-only writable watt state", function () {
+		assert.ok(!states.some(s => s.id === "inverter.powerLimitWatt"), "must not be created for every device");
+		const def = localTcpStates.find(s => s.id === "inverter.powerLimitWatt");
+		assert.ok(def, "inverter.powerLimitWatt must exist in localTcpStates");
+		assert.strictEqual(def.type, "number");
+		assert.strictEqual(def.unit, "W");
+		assert.strictEqual(def.role, "level");
+		assert.strictEqual(def.write, true);
+		assert.strictEqual(def.min, 0.1, "one step of the 0.1 W resolution");
+		assert.strictEqual(def.max, 3276.7, "signed 16-bit range of 0.1 W in the inverter");
+	});
+
+	it("inverter.powerLimit stays a percent state", function () {
+		const def = states.find(s => s.id === "inverter.powerLimit");
+		assert.strictEqual(def.unit, "%");
+		assert.strictEqual(def.min, 2);
+		assert.strictEqual(def.max, 100);
+	});
+
+	it("buildStateCommon carries the value range", function () {
+		const common = buildStateCommon(localTcpStates.find(s => s.id === "inverter.powerLimitWatt"));
+		assert.strictEqual(common.min, 0.1);
+		assert.strictEqual(common.max, 3276.7);
+		assert.strictEqual(common.def, 0);
 	});
 
 	it("station states are all read-only — there is no writable station state at all", function () {

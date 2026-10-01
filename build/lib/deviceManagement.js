@@ -1,4 +1,5 @@
 import { DeviceManagement } from "@iobroker/dm-utils";
+import { POWER_LIMIT_WATT_MAX, POWER_LIMIT_WATT_MIN } from "./constants.js";
 import { MAX_PV_PORTS } from "./deviceContext.js";
 import { ACK_ICON, ACK_GROUND_ICON, inverterIcon, METER_ICON, STATION_ICON } from "./deviceIcons.js";
 import { states as DTU_STATES, stationStates as STATION_STATES } from "./stateDefinitions.js";
@@ -283,18 +284,18 @@ export const DM_I18N = {
         uk: "Інтервал надсилання в хмару",
         "zh-cn": "云端发送间隔",
     },
-    limitPowerMyPower: {
-        en: "Power limit (DTU config field)",
-        de: "Leistungslimit (DTU-Konfigfeld)",
-        ru: "Ограничение мощности (поле конфигурации DTU)",
-        pt: "Limite de potência (campo de config. do DTU)",
-        nl: "Vermogenslimiet (DTU-configuratieveld)",
-        fr: "Limite de puissance (champ de config. DTU)",
-        it: "Limite di potenza (campo di config. DTU)",
-        es: "Límite de potencia (campo de config. del DTU)",
-        pl: "Limit mocy (pole konfiguracji DTU)",
-        uk: "Обмеження потужності (поле конфігурації DTU)",
-        "zh-cn": "功率限制（DTU 配置字段）",
+    powerLimitWatt: {
+        en: "Power limit (watts, runtime)",
+        de: "Leistungslimit (Watt, Laufzeit)",
+        ru: "Ограничение мощности (Вт, во время работы)",
+        pt: "Limite de potência (watts, em execução)",
+        nl: "Vermogenslimiet (watt, runtime)",
+        fr: "Limite de puissance (watts, à l'exécution)",
+        it: "Limite di potenza (watt, runtime)",
+        es: "Límite de potencia (vatios, en ejecución)",
+        pl: "Limit mocy (waty, w czasie pracy)",
+        uk: "Обмеження потужності (Вт, під час роботи)",
+        "zh-cn": "功率限制（瓦，运行时）",
     },
     confirmRebootInverter: {
         en: "Really reboot the inverter?",
@@ -626,16 +627,17 @@ export const COMMAND_DEFS = [
     { id: "inverter.active", ui: "control", kind: "switch", label: "active", group: "operation", cloudCapable: true },
     { id: "inverter.lock", ui: "control", kind: "switch", label: "lock", group: "operation", cloudCapable: false },
     {
-        id: "config.limitPowerMyPower",
+        id: "inverter.powerLimitWatt",
         ui: "control",
-        kind: "slider",
-        label: "limitPowerMyPower",
+        kind: "number",
+        label: "powerLimitWatt",
         help: "helpVolatile",
-        min: 2,
-        max: 100,
-        unit: "%",
+        min: POWER_LIMIT_WATT_MIN,
+        max: POWER_LIMIT_WATT_MAX,
+        unit: "W",
         group: "runtime",
         cloudCapable: false,
+        tcpOnly: true,
     },
     {
         id: "config.serverSendTime",
@@ -731,6 +733,10 @@ export function isLocalDevice(obj) {
     const host = obj.native?.host;
     return typeof host === "string" && host.length > 0;
 }
+export function isLocalTcpDevice(obj) {
+    const transport = obj.native?.transport;
+    return isLocalDevice(obj) && transport === "tcp";
+}
 export function classifyDevice(obj) {
     const native = (obj.native ?? {});
     if (native.stationId !== undefined && native.stationId !== null) {
@@ -752,11 +758,14 @@ const VALUE_SUFFIX = "#value";
 function formKey(stateId) {
     return stateId.replace(/\./g, "_");
 }
-export function buildControls(adapter, deviceId, isLocal) {
+export function buildControls(adapter, deviceId, isLocal, isLocalTcp = false) {
     const controls = [];
     const readState = (suffix) => async () => (await adapter.getStateAsync(`${deviceId}.${suffix}`)) ?? STATE_NOT_FOUND;
     for (const group of CONTROL_GROUPS) {
-        const defs = COMMAND_DEFS.filter(d => d.ui === "control" && d.group === group.key && (isLocal || d.cloudCapable));
+        const defs = COMMAND_DEFS.filter(d => d.ui === "control" &&
+            d.group === group.key &&
+            (isLocal || d.cloudCapable) &&
+            (!d.tcpOnly || isLocalTcp));
         if (!defs.length) {
             continue;
         }
@@ -1042,7 +1051,7 @@ export async function buildDtuDeviceInfo(adapter, deviceId, obj, stationName) {
             version: { stateId: sid(adapter, deviceId, "dtu.swVersion") },
         },
         customInfo: await buildDtuCardInfo(adapter, deviceId),
-        controls: buildControls(adapter, deviceId, local),
+        controls: buildControls(adapter, deviceId, local, isLocalTcpDevice(obj)),
         actions: await buildDeviceActions(adapter, deviceId, local, model),
         hasDetails: true,
     };

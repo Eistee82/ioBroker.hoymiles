@@ -15,6 +15,7 @@ import {
 	flashWritingStateForAction,
 	type FlashGuardOptions,
 	type FlashWriteState,
+	type PowerLimitKind,
 } from "./commandHandler.js";
 import Encryption from "./encryption.js";
 import {
@@ -28,11 +29,15 @@ import {
 
 /** `CommCmd` carrier tag — the same one the pairing handshake uses. */
 const SHELLY_CMD_TAG = [0xa3, 0x18] as const;
+/** Cloud action codes of the two power-limit commands (percent, persistent / watts, runtime). */
+const CLOUD_ACTION_LIMIT_POWER = 8;
+const CLOUD_ACTION_LIMIT_POWER_RUNTIME = 211;
 import {
 	channels,
 	states,
 	meterMeasurementStates,
 	meterControlStates,
+	localTcpStates,
 	hybridChannels,
 	hybridStates,
 	buildStateCommon,
@@ -43,7 +48,6 @@ import EnergyGuard from "./energyGuard.js";
 import { cloudTagLabel, describeCloudTag, refusalReason } from "./cloudTranslator.js";
 import {
 	INFO_FALLBACK_TIMEOUT_MS,
-	SCALE_POWER,
 	SCALE_POWER_LIMIT_BLE,
 	SCALE_POWER_LIMIT_TCP,
 	CLOUD_DEV_TYPE_DTU,
@@ -159,7 +163,6 @@ const WRITABLE_STATES = [
 	"inverter.cleanGroundingFault",
 	"inverter.lock",
 	"config.serverSendTime",
-	"config.limitPowerMyPower",
 	"dtu.reboot",
 ];
 
@@ -255,6 +258,12 @@ class DeviceContext {
 	private meterStatesCreated: boolean;
 	private meterMeasurementStatesCreated: boolean;
 	private meterControlStatesCreated: boolean;
+	/**
+	 * Unit of the power-limit command last sent to the DTU, or null before any. RealData echoes only
+	 * the last staged limit (raw / 10): percent after action 8, watts after action 211. This decides
+	 * which state that echo confirms — and keeps watts out of the percent state `activePowerLimit`.
+	 */
+	private lastPowerLimitKind: PowerLimitKind | null;
 	/** Set once the "device sends unmapped lists" hint has been logged, so it stays a one-off. */
 	private extraListsReported: boolean;
 	private histStatesCreated: boolean;
@@ -355,6 +364,7 @@ class DeviceContext {
 		this.meterStatesCreated = false;
 		this.meterMeasurementStatesCreated = false;
 		this.meterControlStatesCreated = false;
+		this.lastPowerLimitKind = null;
 		this.extraListsReported = false;
 		this.histStatesCreated = false;
 		this.pollCount = 0;
@@ -541,7 +551,9 @@ class DeviceContext {
 				// the overwhelming majority. The Device Manager card refines this per model.
 				icon: inverterIcon(""),
 			},
-			native: { host: this.host },
+			// `transport` lets the Device Manager tell a TCP DTU (which knows action 211) from a
+			// Bluetooth one — both carry a non-empty `host`.
+			native: { host: this.host, transport: this.transport },
 		});
 
 		// Create info channel under device
@@ -611,6 +623,21 @@ class DeviceContext {
 			this.adapter.subscribeStates(`${this.deviceId}.${stateId}`);
 		}
 
+		// Only a DTU on local TCP (HMS-800W-2T family) knows action 211, the runtime watt limit; the
+		// WB series lacks it, and neither the cloud nor Bluetooth carries it here.
+		if (this.transport === "tcp" && this.enableLocal) {
+			for (const def of localTcpStates) {
+				await this.adapter.extendObjectAsync(`${this.deviceId}.${def.id}`, {
+					type: "state",
+					common: buildStateCommon(def),
+					native: {},
+				});
+				if (def.write) {
+					this.adapter.subscribeStates(`${this.deviceId}.${def.id}`);
+				}
+			}
+		}
+
 		// A BLE device can take a Shelly/ecotracker meter — the 2T cannot (no meter input, no
 		// energy management). Its controls have to exist before a meter is bound, otherwise there
 		// would be no way to bind one in the first place.
@@ -646,7 +673,7 @@ class DeviceContext {
 	private async cleanupObsoleteObjects(): Promise<void> {
 		// The hybrid-inverter states are created on demand by the cloud poller, not from `states` —
 		// they count as known all the same, or every adapter start would delete and recreate them.
-		const knownStates = new Set([...states, ...hybridStates].map(d => d.id));
+		const knownStates = new Set([...states, ...hybridStates, ...localTcpStates].map(d => d.id));
 		const knownChannels = new Set([...channels, ...hybridChannels].map(c => c.id));
 		const isKnown = (rel: string): boolean =>
 			knownStates.has(rel) ||
@@ -987,6 +1014,13 @@ class DeviceContext {
 			this.adapter.log.warn(`[${this.deviceId}] forwarding cloud action ${action} failed: ${errorMessage(e)}`);
 		});
 		this.bookCloudFlashWrite(action);
+		// A limit the cloud forwards changes the DTU's staged value just like a local one, so the
+		// next RealData echo has to be read in the unit of this command.
+		if (action === CLOUD_ACTION_LIMIT_POWER) {
+			this.expectLimitEcho("percent");
+		} else if (action === CLOUD_ACTION_LIMIT_POWER_RUNTIME) {
+			this.expectLimitEcho("watt");
+		}
 		const ts = unixSeconds();
 		relay.sendFrame(this.protobuf.encodeCloudCommandAck(ts, this.dtuSerial, action, tid));
 		relay.sendFrame(this.protobuf.encodeCloudCommandStatus(ts, this.dtuSerial, action, tid));
@@ -1424,6 +1458,49 @@ class DeviceContext {
 		return this.encryptionRequired && this.encryption ? this.encryption.encryptFrame(frame) : frame;
 	}
 
+	/**
+	 * Note that a power-limit command of the given unit was just sent, so the next RealData echo
+	 * confirms it.
+	 *
+	 * @param kind - Unit of the command that went out.
+	 */
+	private expectLimitEcho(kind: PowerLimitKind): void {
+		this.lastPowerLimitKind = kind;
+		// The user's own write (ack=false) never enters the cache. Without dropping the entry, an
+		// echo equal to the cached value would be skipped and the state would stay unconfirmed.
+		this.stateCache.delete(kind === "watt" ? "inverter.powerLimitWatt" : "inverter.powerLimit");
+	}
+
+	/**
+	 * Turn the power limit RealData echoes (`sgs.powerLimit`) into state writes.
+	 *
+	 * On the TCP path the field is the DTU's staged value of the last limit command, raw / 10: a
+	 * percentage after action 8, watts after action 211 (verified live on an HMS-800W-2T). It
+	 * confirms the commanded state, and it must not land in the percent state `activePowerLimit`
+	 * while a watt limit is in force. Before any limit was sent in this session its unit is
+	 * unknown, so it only feeds `activePowerLimit`, as it always did. On the WB series the field
+	 * carries the EMS set point instead and is passed through unchanged.
+	 *
+	 * Only a reported limit is written. The 2T leaves the field empty until a limit has been set
+	 * (measured: 0 while producing 82.9 W), and proto3 cannot tell "absent" from 0 — writing it
+	 * anyway would claim the inverter is throttled to a standstill.
+	 *
+	 * @param echo - `sgs.powerLimit` as decoded (raw / 10).
+	 */
+	private powerLimitEcho(echo: number): Array<[string, ioBroker.StateValue]> {
+		if (!(echo > 0)) {
+			return [];
+		}
+		if (this.transport === "tcp" && this.lastPowerLimitKind === "watt") {
+			return [["inverter.powerLimitWatt", echo]];
+		}
+		const writes: Array<[string, ioBroker.StateValue]> = [["inverter.activePowerLimit", echo]];
+		if (this.transport === "tcp" && this.lastPowerLimitKind === "percent") {
+			writes.push(["inverter.powerLimit", echo]);
+		}
+		return writes;
+	}
+
 	// --- State management ---
 
 	/** Quality type alias for readability. */
@@ -1505,7 +1582,7 @@ class DeviceContext {
 
 	/** Regex matching data-channel state IDs that should receive quality updates on disconnect. */
 	private static readonly DATA_STATE_PATTERN =
-		/^(grid\.|pv\d+\.|inverter\.(temperature|active|warnCount|warnMessage|activePowerLimit)|meter\.)/;
+		/^(grid\.|pv\d+\.|inverter\.(temperature|active|warnCount|warnMessage|activePowerLimit|powerLimitWatt)|meter\.)/;
 
 	/**
 	 * Mark all cached data states as disconnected (q=0x42).
@@ -1774,12 +1851,7 @@ class DeviceContext {
 						? [["inverter.linkStatus", sgs.linkStatus] as [string, ioBroker.StateValue]]
 						: []),
 					["inverter.serialNumber", sgs.serialNumber],
-					// Only write a limit the device actually reported. The 2T leaves this field empty
-					// (measured: 0 while producing 82.9 W), and proto3 cannot tell "absent" from 0 —
-					// so writing it anyway would claim the inverter is throttled to a standstill.
-					...(sgs.powerLimit > 0
-						? [["inverter.activePowerLimit", sgs.powerLimit] as [string, ioBroker.StateValue]]
-						: []),
+					...this.powerLimitEcho(sgs.powerLimit),
 				);
 			}
 
@@ -2120,15 +2192,12 @@ class DeviceContext {
 				`[${this.deviceId || this.host}] Config: server=${config.serverDomain}:${config.serverPort}, sendTime=${config.serverSendTime}min`,
 			);
 
-			// limit_power_mypower is the DTU-stored (persistent) limit. The 2WB briefly reports 0,
-			// which is below the state's 2 % minimum ("0 %" is not a valid limit) — treat 0 as
-			// "not reported" and skip the write rather than emit an out-of-range warning.
-			const limitPct = config.limitPower / SCALE_POWER;
+			// limit_power_mypower (field 5) is deliberately not published: it is the DTU's RAM working
+			// value of the limit, which holds a percentage after action 8 but raw 0.1 W after action
+			// 211, and setting it never reached the inverter. The limits live in inverter.powerLimit
+			// (percent, persistent) and inverter.powerLimitWatt (watts, runtime).
 			await this.setStates(
 				[
-					...(limitPct >= 2
-						? ([["config.limitPowerMyPower", limitPct]] as Array<[string, ioBroker.StateValue]>)
-						: []),
 					["config.serverDomain", config.serverDomain],
 					["config.serverPort", config.serverPort],
 					["config.serverSendTime", config.serverSendTime],
@@ -2588,8 +2657,13 @@ class DeviceContext {
 		}
 		// Local link takes precedence: a locally-connected DTU is actuated directly over TCP.
 		if (this.connection?.connected) {
+			const connection = this.connection;
 			await executeCommand(stateId, state, {
-				connection: this.connection,
+				// Commands go through wireFrame like every other local send. A DTU with firmware
+				// V01.01.01+ decrypts every command frame; a plain one fails authentication, and the
+				// firmware then handles the message with an empty payload (0x40817958 ignores the
+				// decrypt result) — it answers, but nothing happens.
+				connection: { send: frame => connection.send(this.wireFrame(frame)) },
 				protobuf: this.protobuf,
 				deviceId: this.deviceId,
 				host: this.host,
@@ -2606,6 +2680,11 @@ class DeviceContext {
 					}
 					return entry;
 				},
+				// Only the TCP path echoes the commanded limit. On the WB series the RealData field
+				// carries the EMS set point instead, which would not confirm anything.
+				...(this.transport === "tcp"
+					? { expectReadback: (kind: PowerLimitKind) => this.expectLimitEcho(kind) }
+					: {}),
 			});
 			return;
 		}
@@ -2717,6 +2796,13 @@ class DeviceContext {
 		if (this.deviceId) {
 			for (const stateId of WRITABLE_STATES) {
 				this.adapter.unsubscribeStates(`${this.deviceId}.${stateId}`);
+			}
+			if (this.transport === "tcp" && this.enableLocal) {
+				for (const def of localTcpStates) {
+					if (def.write) {
+						this.adapter.unsubscribeStates(`${this.deviceId}.${def.id}`);
+					}
+				}
 			}
 		}
 	}

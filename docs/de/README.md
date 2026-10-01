@@ -178,12 +178,12 @@ Der Adapter ist in den ioBroker-**Konfig-Manager** eingebunden: Jeder Wechselric
 
 Die Kachel spiegelt die schreibbaren Datenpunkte, ein Klick läuft also über den normalen Befehlsweg (lokaler TCP-Link bevorzugt, Cloud als Fallback). Die beiden Dialoge sind strikt danach getrennt, **was das Gerät behält**:
 
-> ⚠️ Die Namen der Datenpunkte führen hier in die Irre, die Firmware entscheidet anders: `inverter.powerLimit` klingt nach Laufzeitwert, wird aber in die persistierte Struktur geschrieben und kostet zwei 4-KB-Flash-Sektoren pro Änderung; `config.limitPowerMyPower` heißt „persistent", liegt aber nur im RAM und ist nach einem Neustart weg. Beides ist firmware-belegt (`_fwanalysis/ADAPTER_FINDINGS.md` §1, §2, §15).
+> ⚠️ Die Aufteilung folgt der Persistenz, firmware-belegt (`_fwanalysis/POWER_LIMIT_CHAIN_2T.md`): `inverter.powerLimit` (Prozent) wird im Flash der DTU und im EEPROM des Wechselrichters gespeichert und kostet pro Änderung zwei 4-KB-Flash-Sektoren, ist also eine Einstellung. `inverter.powerLimitWatt` (Watt, nur HMS-800W-2T-Familie über lokales TCP) bleibt auf beiden Seiten im RAM und ist nach einem Neustart des Wechselrichters weg, ist also ein Steuerelement.
 
 **Steuern** (Regler-Symbol) — nichts davon übersteht einen Neustart der DTU:
 
 - **Betrieb (Schalter):** Wechselrichter ein/aus, Wechselrichter sperren.
-- **Laufzeit:** Leistungslimit (DTU-Konfigfeld) als Schieberegler, Cloud-Sendeintervall. Beide sind mit dem Hinweis versehen, dass die DTU sie beim Neustart vergisst.
+- **Laufzeit:** Leistungslimit in Watt (nur HMS-800W-2T-Familie über lokales TCP) und Cloud-Sendeintervall. Beide sind mit dem Hinweis versehen, dass das Gerät sie beim Neustart vergisst.
 
 Über jedem Schieberegler steht der aktuelle Wert mit Einheit, da der Schieber selbst ihn nur während des Ziehens anzeigt.
 
@@ -269,7 +269,7 @@ Der Adapter nutzt das ioBroker State-Quality-Attribut (`q`), um die Zuverlässig
 | Ersatzwert | `0x40` (64) | Cloud-Daten als Fallback | Wechselrichter-Daten von der Hoymiles Cloud-API statt lokal (Cloud-only Geräte) |
 | Gerät nicht verbunden | `0x42` (66) | Veraltete Daten, Gerät offline | DTU-Verbindung verloren — Werte sind die letzten bekannten Messwerte vor dem Disconnect. Wird auch bei Cloud-Station-`grid.*` gesetzt, wenn der letzte Cloud-Upload der Station älter als ~20 min ist (DTU sendet nicht). |
 
-**Betroffene Datenpunkte:** `grid.*`, `pv*.*`, `inverter.temperature`, `inverter.active`, `inverter.warnCount`, `inverter.warnMessage`, `inverter.activePowerLimit`, `meter.*` — sowie die Cloud-Station-Messwerte `station-<id>.grid.*` (mit `0x42` markiert, solange die Station offline/veraltet ist).
+**Betroffene Datenpunkte:** `grid.*`, `pv*.*`, `inverter.temperature`, `inverter.active`, `inverter.warnCount`, `inverter.warnMessage`, `inverter.activePowerLimit`, `inverter.powerLimitWatt`, `meter.*` — sowie die Cloud-Station-Messwerte `station-<id>.grid.*` (mit `0x42` markiert, solange die Station offline/veraltet ist).
 
 Info-States (`info.*`), Config-States (`config.*`) und statische Cloud-Stationsdaten (Name, Adresse, Koordinaten, Warn-Flags) werden **nicht** von Quality-Änderungen betroffen.
 
@@ -347,8 +347,9 @@ Die Anzahl ermittelt der Adapter in dieser Reihenfolge:
 | `inverter.hwVersion` | string | — | nein | Hardware-Version |
 | `inverter.swVersion` | string | — | nein | Software-Version |
 | `inverter.temperature` | number | °C | nein | Temperatur |
-| `inverter.powerLimit` | number | % | **ja** | Leistungslimit, 2–100 %, lokal. **Mit diesem Datenpunkt lässt sich eine Nulleinspeisung realisieren.** ⚠️ Jedes Setzen beschreibt Flash im Gerät (siehe Warnung unten) — der Adapter drosselt das deshalb über Totzone und Mindestabstand |
-| `inverter.activePowerLimit` | number | % | nein | Aktives Leistungslimit (live, lokal) |
+| `inverter.powerLimit` | number | % | **ja** | Leistungslimit, 2–100 %, lokal. **Persistent:** die DTU speichert es in ihrem Flash und der Wechselrichter in seinem EEPROM, es ist also auch der Wert, mit dem der Wechselrichter jeden Morgen startet. ⚠️ Jedes Setzen beschreibt Flash in beiden (siehe Warnung unten) — der Adapter drosselt es deshalb mit Totzone und Mindestabstand. Für eine schnelle Nulleinspeisungs-Regelung bei der HMS-800W-2T-Familie stattdessen `inverter.powerLimitWatt` verwenden. Über lokales TCP wird der Datenpunkt durch das Echo der DTU bestätigt (siehe unten) |
+| `inverter.powerLimitWatt` | number | W | **ja** | Laufzeit-Leistungslimit in Watt, 0,1–3276,7 W in Schritten von 0,1 W. **Nur HMS-800W-2T-Familie über lokales TCP** — die WB-Serie kennt dieses Kommando nicht, dort wird der Datenpunkt nicht angelegt. Wirkt sofort und schreibt **weder den Flash der DTU noch das EEPROM des Wechselrichters** (action 211, firmware-belegt und live getestet), braucht also keine Drosselung und eignet sich für eine Nulleinspeisungs-Regelung. **Geht beim Neustart des Wechselrichters verloren** (jede Nacht) — danach gilt wieder `inverter.powerLimit`; der Adapter sendet es nicht erneut. Unterhalb von etwa 2 % der Nennleistung greift die eigene 2-%-Untergrenze des Wechselrichters. Bestätigung durch das Echo der DTU; Qualität `0x42` nach einem Verbindungsabbruch |
+| `inverter.activePowerLimit` | number | % | nein | Aktives Leistungslimit in Prozent (live, lokal). Solange ein Watt-Limit (`inverter.powerLimitWatt`) gilt, wird es nicht aktualisiert — die DTU meldet dann Watt, das stattdessen in `inverter.powerLimitWatt` bestätigt wird |
 | `inverter.active` | boolean | — | **ja** | Wechselrichter ein/aus (lokal; bei reinen Cloud-Geräten über die Cloud). Bei einem Hybrid-Wechselrichter wird der Wert aus der Cloud zurückgelesen: ein, solange die Cloud ihn als verbunden und im Netzbetrieb („On-grid Mode“) oder mit AC-Leistungsfluss meldet, aus bei getrennter Verbindung |
 | `inverter.reboot` | boolean | — | **ja** | Wechselrichter neustarten (lokal; bei reinen Cloud-Geräten über die Cloud) |
 | `inverter.powerFactorLimit` | number | — | **ja** | Leistungsfaktor-Limit (-1 bis 1, lokal). ⚠️ Beschreibt Flash wie das Leistungslimit (action 47, gleicher Erfolgspfad) — gedrosselt |
@@ -359,6 +360,8 @@ Die Anzahl ermittelt der Adapter in dieser Reihenfolge:
 | `inverter.warnCount` | number | — | nein | SGSMO-Feld `warning_number`, Rohwert (lokal) — kein dokumentierter Warn-Code |
 | `inverter.warnMessage` | string | — | nein | Aktive Warnungsmeldung aus der WCode-Alarmliste (lokal) |
 | `inverter.linkStatus` | number | — | nein | Verbindungsstatus |
+
+> **Bestätigung der beiden Leistungslimits (lokales TCP).** Die DTU meldet das zuletzt übernommene Limit in ihren Live-Daten zurück — nach `inverter.powerLimit` als Prozent, nach `inverter.powerLimitWatt` in Watt (live geprüft). Der Adapter bestätigt diese beiden Datenpunkte deshalb erst, wenn dieses Echo eintrifft, und zwar mit dem Wert, den die DTU meldet — nicht schon beim Senden. Ein unbestätigter Datenpunkt heißt also: die DTU hat ihn noch nicht übernommen. Das Echo enthält nur das **letzte** Kommando; es gilt also immer das zuletzt gesetzte der beiden Limits. Bei der WB-Serie und über die Cloud werden die Datenpunkte wie bisher beim Senden bestätigt (dort enthält das Feld die Stellgröße der Energieverwaltung, nicht das Kommando).
 
 ### `<dtuSerial>.dtu.*` — DTU-Information (pro DTU, nur lokal außer `dtu.reboot`)
 
@@ -496,10 +499,9 @@ Zeitstempel eines Punktes: `history.startTime + index * history.stepTime * 1000`
 >
 > Betroffen sind **`inverter.powerLimit`, `inverter.powerFactorLimit` und
 > `inverter.reactivePowerLimit`** — die drei laufen über denselben Erfolgspfad (actions 8, 47
-> und 48). **Nicht** betroffen ist `config.limitPowerMyPower`: das Konfigurationsfeld landet
-> nur im RAM. Frühere Fassungen dieser Doku hatten beides vertauscht — `inverter.powerLimit`
-> galt als reiner RAM-Befehl, `config.limitPowerMyPower` als Flash-Schreiber. Beides war
-> falsch. Die Firmware ruft am Ende des erfolgreichen Kommandos den Konfigurations-Serialisierer
+> und 48). **Nicht** betroffen ist `inverter.powerLimitWatt` (action 211), das im RAM bleibt.
+> Der Wechselrichter schreibt bei jedem dieser Kommandos zusätzlich sein EEPROM neu (34 Wörter,
+> jedes zurückgelesen). Die Firmware ruft am Ende des erfolgreichen Kommandos den Konfigurations-Serialisierer
 > auf, der **zwei 4-KB-Flash-Sektoren löscht und neu schreibt** (HMS-800W-2T: `0x4080d642` →
 > erase + write für Region 3 und Region 0xe; HMS-800-2WB: `sys_cfg_write` führt
 > `nv_erase`+`nv_write` zweimal aus). Flash hat eine begrenzte Lebensdauer von einigen zehntausend
@@ -512,10 +514,12 @@ Zeitstempel eines Punktes: `history.startTime + index * history.stepTime * 1000`
 > bestätigt, und im Log steht der Grund. Beide Werte lassen sich anpassen oder mit 0 abschalten —
 > wer bewusst schneller regeln will, kann das tun und trägt den Verschleiß.
 >
-> Für eine Nulleinspeisung ist `inverter.powerLimit` weiterhin der richtige Datenpunkt: er wirkt
-> sofort. Er ist aber **kein flash-freier Weg** — genau deshalb greifen Totzone und Mindestabstand.
-> `config.limitPowerMyPower` kostet zwar keinen Flash, überlebt dafür auf dem HMS-800W-2T
-> keinen Neustart und setzt kein Kommando an den Wechselrichter ab.
+> **Für eine Nulleinspeisung bei der HMS-800W-2T-Familie `inverter.powerLimitWatt` verwenden:** es
+> wirkt sofort, in Watt, und schreibt weder den Flash der DTU noch das EEPROM des Wechselrichters.
+> Es geht beim Neustart des Wechselrichters verloren — jede Nacht, weil er ohne Sonne abschaltet —
+> danach gilt wieder der Prozentwert aus `inverter.powerLimit`. Die WB-Serie kennt dieses Kommando
+> nicht: dort ist `inverter.powerLimit` das einzige Limit, mit dem oben beschriebenen Verschleiß, oder
+> der Wechselrichter regelt die Nulleinspeisung mit einem angebundenen Zähler selbst (`meter.mode`).
 
 > ⚠️ **Konfiguration schreiben — der Adapter liest immer zuerst.**
 >
@@ -538,7 +542,6 @@ Zeitstempel eines Punktes: `history.startTime + index * history.stepTime * 1000`
 | `config.serverDomain` | string | — | nein | Cloud-Server Domain |
 | `config.serverPort` | number | — | nein | Cloud-Server Port |
 | `config.serverSendTime` | number | min | **ja** | Cloud-Sendeintervall (Minuten). ⚠️ **Nicht persistent und ohne Flash-Schreibvorgang** (firmware-belegt): SetConfig Feld 10 landet nur im RAM (`gp-110188`); Flash schreibt der SetConfig-Weg ausschließlich im WLAN-/AP-Passwort-Zweig. Frühere Fassungen dieser Doku nannten es „Persistent (DTU-Flash)" — das war falsch. Nach einem Geräteneustart neu setzen |
-| `config.limitPowerMyPower` | number | % | **ja** | Leistungslimit über das **Konfigurationsfeld** der DTU (2–100 %, lokal). ⚠️ **Auf dem HMS-800W-2T überlebt dieser Wert einen Neustart NICHT** (firmware-belegt) — frühere Fassungen dieser Doku haben das Gegenteil behauptet. Nach einem Geräteneustart neu setzen. **Schreibt entgegen früheren Angaben auch keinen Flash** — das Ziel `gp-108260` (`0x6c204`) liegt außerhalb der persistierten Struktur `0x6b8dc` |
 | `config.wifiSsid` | string | — | nein | WLAN SSID |
 | `config.wifiSignalQuality` | number | % | nein | WLAN-**Signalqualität 0–100**, trotz des Feldnamens **keine dBm**. Die Firmware rechnet sie aus dem rohen RSSI als `clamp(2*(95 - |rssi|), 0, 100)` und benennt beide Werte in ihrer eigenen Debug-Ausgabe `rssi` (roh) und `wifi_rssi` (dieser Wert). 46 entspricht etwa −72 dBm. Frühere Fassungen dieser Doku nannten es „echtes dBm, z. B. −65“ — das war falsch. Der rohe dBm-Wert liegt im Nachbarbyte und ist über keine vom Adapter genutzte Nachricht erreichbar. Dieselbe Größe führt das Gerät in der NetworkInfo-Nachricht als `csq` — dasselbe Byte, ein separater State wäre ein Duplikat |
 | `config.invType` | number | — | nein | Wechselrichter-Typ |
@@ -796,6 +799,7 @@ Dank an die Nutzer, die ihre Anlagen zur Verfügung gestellt haben:
 ### Keine Daten nach Verbindung
 - Prüfe das Adapter-Log auf Protobuf-Dekodierfehler
 - `Decryption failed: ... wrong final block length` oder `bad decrypt` bei einer DTU mit Firmware V01.01.01 bedeutet: es läuft eine Adapter-Version ohne Unterstützung für das verschlüsselte Protokoll. Aktuelle Version installieren und die Instanz neu starten; im Log steht dann `DTU requires encrypted communication (firmware V01.01.01+)`
+- Leistungslimit, Ein/Aus, Neustart oder Einstellungsänderungen wirken bei einer DTU mit Firmware V01.01.01 nicht, obwohl im Log `Setting power limit to …` und eine Kommando-Antwort stehen: Adapter-Versionen bis 0.5.0 haben Kommandos an eine solche DTU unverschlüsselt gesendet. Die DTU antwortet zwar, kann das Kommando aber nicht entschlüsseln und führt es mit leerem Inhalt aus. Adapter aktualisieren
 
 ### Cloud-Login fehlgeschlagen
 - Prüfe E-Mail und Passwort des S-Miles Kontos

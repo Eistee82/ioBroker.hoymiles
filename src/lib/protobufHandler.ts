@@ -100,6 +100,12 @@ const ACTION = {
 	POWER_FACTOR_LIMIT: 47,
 	REACTIVE_POWER_LIMIT: 48,
 	ALARM_LIST: 50,
+	/**
+	 * Runtime power limit in absolute watts (HMS-800W-2T family only — the WB series has no such
+	 * action). Firmware-verified: the DTU forwards it to the inverter with mode byte 0, i.e. in
+	 * 0.1 W and RAM-only, and writes neither its own flash nor the inverter EEPROM.
+	 */
+	LIMIT_POWER_RUNTIME: 211,
 } as const;
 
 const MAGIC = [HM_MAGIC_0, HM_MAGIC_1] as const;
@@ -509,6 +515,21 @@ class ProtobufHandler {
 	 */
 	encodeSetPowerLimit(percent: number, timestamp: number): Buffer {
 		return this.encodeCommandAction(ACTION.LIMIT_POWER, timestamp, `A:${Math.round(percent * 10)},B:0,C:0\r`);
+	}
+
+	/**
+	 * Set a runtime power limit in watts (action 211).
+	 *
+	 * The value travels in 0.1 W. Unlike {@link encodeSetPowerLimit} the limit lives in RAM only:
+	 * no DTU flash write, no inverter EEPROM write, and it is gone once the inverter restarts —
+	 * then the persisted percentage applies again. Verified live on an HMS-800W-2T with DTU
+	 * firmware V01.01.01: `S:1,P:100` limited the output to about 10 W.
+	 *
+	 * @param watts - Power limit in watts
+	 * @param timestamp - Unix timestamp in seconds
+	 */
+	encodeSetPowerLimitWatt(watts: number, timestamp: number): Buffer {
+		return this.encodeCommandAction(ACTION.LIMIT_POWER_RUNTIME, timestamp, `S:1,P:${Math.round(watts * 10)}\r`);
 	}
 
 	/**

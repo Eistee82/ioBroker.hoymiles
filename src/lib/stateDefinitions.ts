@@ -1,3 +1,4 @@
+import { POWER_LIMIT_WATT_MAX, POWER_LIMIT_WATT_MIN } from "./constants.js";
 import { GRID_PROFILE_SCHEMA } from "./gridProfile.js";
 
 // source?: "local" = only from local TCP, "cloud" = only from cloud API, undefined = available from both
@@ -82,6 +83,25 @@ export const meterControlStates: StateDefinition[] = [
 		source: "local",
 	}),
 	n("meter.lastData", "Last meter reading", "Letzter Zählerwert", "value.time", "", { source: "local" }),
+];
+
+/**
+ * States only a DTU reached over local TCP can serve — **not** part of {@link states}.
+ *
+ * `inverter.powerLimitWatt` rides on action 211, which exists on the HMS-800W-2T family but not on
+ * the WB series (firmware-verified), and only the local link carries it. `DeviceContext` therefore
+ * creates these for TCP devices only, the same way it creates the meter states for BLE devices.
+ *
+ * The limit is absolute (0.1 W on the wire), RAM-only and lost when the inverter restarts — see
+ * the command definition. The upper bound is the signed 16-bit range of the inverter's input.
+ */
+export const localTcpStates: StateDefinition[] = [
+	n("inverter.powerLimitWatt", "Power limit (watts, runtime)", "Leistungslimit (Watt, Laufzeit)", "level", "W", {
+		source: "local",
+		write: true,
+		min: POWER_LIMIT_WATT_MIN,
+		max: POWER_LIMIT_WATT_MAX,
+	}),
 ];
 
 /**
@@ -512,6 +532,9 @@ const states: StateDefinition[] = [
 	s("inverter.hwVersion", "Hardware version", "Hardware-Version", "text"),
 	s("inverter.swVersion", "Software version", "Software-Version", "text"),
 	n("inverter.temperature", "Temperature", "Temperatur", "value.temperature", "\u00b0C"),
+	// Persistent power limit (action 8): the DTU stores it in its flash and the inverter in its
+	// EEPROM, so it is also the value the inverter starts with every morning. Every write wears
+	// both, hence the flash guard. For a fast control loop use inverter.powerLimitWatt (2T only).
 	n("inverter.powerLimit", "Power limit", "Leistungslimit", "level", "%", {
 		write: true,
 		// 2, not 0: the command handler rejects anything below POWER_LIMIT_MIN, so a state that
@@ -629,17 +652,6 @@ const states: StateDefinition[] = [
 	n("config.serverPort", "Cloud server port", "Cloud-Server Port", "value", "", { source: "local" }),
 	n("config.serverSendTime", "Cloud send interval", "Cloud-Sendeintervall", "level", "min", {
 		write: true,
-		source: "local",
-	}),
-	// Persistent power limit stored in the DTU (SetConfig limit_power_mypower). Survives a
-	// power cycle because the DTU re-applies it to the inverter on startup. For dynamic
-	// zero-export use inverter.powerLimit (runtime, RAM-only) instead — see README.
-	// Deliberately NOT called "persistent": on the HMS-800W-2T the value does not survive a
-	// restart (firmware-verified), and the adapter used to promise the opposite.
-	n("config.limitPowerMyPower", "Power limit (DTU config field)", "Leistungslimit (DTU-Konfigfeld)", "level", "%", {
-		write: true,
-		min: 2,
-		max: 100,
 		source: "local",
 	}),
 	s("config.wifiSsid", "WiFi SSID", "WLAN SSID", "text", { source: "local" }),
@@ -812,6 +824,8 @@ function buildStateCommon(def: StateDefinition): ioBroker.StateCommon {
 		read: true,
 		write: !!def.write,
 		def: def.type === "boolean" ? false : def.type === "number" ? 0 : "",
+		min: def.min,
+		max: def.max,
 		states: def.states,
 	};
 }
