@@ -1,4 +1,4 @@
-import { POWER_LIMIT_MIN, POWER_LIMIT_MAX, SCALE_POWER, DEVICE_COMMAND_REBOOT, DEVICE_COMMAND_POWER_ON, DEVICE_COMMAND_POWER_OFF, DTU_COMMAND_REBOOT, DTU_COMMAND_REBOOT_STORAGE, CLOUD_DEV_TYPE_DTU, CLOUD_DEV_TYPE_MICRO, CLOUD_DEV_TYPE_STORAGE_INVERTER, } from "./constants.js";
+import { POWER_LIMIT_MIN, POWER_LIMIT_MAX, POWER_LIMIT_WATT_MAX, DEVICE_COMMAND_REBOOT, DEVICE_COMMAND_POWER_ON, DEVICE_COMMAND_POWER_OFF, DTU_COMMAND_REBOOT, DTU_COMMAND_REBOOT_STORAGE, CLOUD_DEV_TYPE_DTU, CLOUD_DEV_TYPE_MICRO, CLOUD_DEV_TYPE_STORAGE_INVERTER, } from "./constants.js";
 import { unixSeconds } from "./utils.js";
 export function shouldSkipFlashWrite(value, last, guard, nowMs, valueSpan = 100) {
     if (last.lastValue !== null && guard.deadband > 0) {
@@ -28,6 +28,7 @@ const COMMANDS = {
         log: v => `Setting power limit to ${v}%`,
         writesFlash: true,
         valueSpan: 100,
+        readback: "percent",
     },
     "inverter.active": {
         encode: (v, ts, pb) => (v ? pb.encodeInverterOn(ts) : pb.encodeInverterOff(ts)),
@@ -76,12 +77,13 @@ const COMMANDS = {
         encode: (v, ts, pb, base) => pb.encodeSetConfig(ts, { serverSendTime: Number(v) }, base),
         log: v => `Setting cloud send interval to ${v}min`,
     },
-    "config.limitPowerMyPower": {
-        validate: v => v < POWER_LIMIT_MIN || v > POWER_LIMIT_MAX
-            ? `Power limit must be between ${POWER_LIMIT_MIN} and ${POWER_LIMIT_MAX}`
+    "inverter.powerLimitWatt": {
+        validate: v => !(v > 0) || v > POWER_LIMIT_WATT_MAX
+            ? `Power limit must be above 0 and at most ${POWER_LIMIT_WATT_MAX} W`
             : null,
-        encode: (v, ts, pb, base) => pb.encodeSetConfig(ts, { limitPowerMypower: Math.round(Number(v) * SCALE_POWER) }, base),
-        log: v => `Setting power limit to ${v}% via the DTU config field`,
+        encode: (v, ts, pb) => pb.encodeSetPowerLimitWatt(Number(v), ts),
+        log: v => `Setting runtime power limit to ${v} W`,
+        readback: "watt",
     },
 };
 async function executeCommand(stateId, state, ctx) {
@@ -131,7 +133,12 @@ async function executeCommand(stateId, state, ctx) {
     }
     await connection.send(frame);
     if (!cmd.button) {
-        await ctx.setState(stateId, state.val, true);
+        if (cmd.readback && ctx.expectReadback) {
+            ctx.expectReadback(cmd.readback);
+        }
+        else {
+            await ctx.setState(stateId, state.val, true);
+        }
     }
     if (cmd.button) {
         ctx.resetButton(stateId);

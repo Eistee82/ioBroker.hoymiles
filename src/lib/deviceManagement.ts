@@ -12,6 +12,7 @@ import type {
 	JsonFormSchema,
 	ErrorResponse,
 } from "@iobroker/dm-utils";
+import { POWER_LIMIT_WATT_MAX } from "./constants.js";
 import { MAX_PV_PORTS } from "./deviceContext.js";
 import { ACK_ICON, ACK_GROUND_ICON, inverterIcon, METER_ICON, STATION_ICON } from "./deviceIcons.js";
 import { states as DTU_STATES, stationStates as STATION_STATES } from "./stateDefinitions.js";
@@ -366,18 +367,18 @@ export const DM_I18N = {
 		uk: "Інтервал надсилання в хмару",
 		"zh-cn": "云端发送间隔",
 	},
-	limitPowerMyPower: {
-		en: "Power limit (DTU config field)",
-		de: "Leistungslimit (DTU-Konfigfeld)",
-		ru: "Ограничение мощности (поле конфигурации DTU)",
-		pt: "Limite de potência (campo de config. do DTU)",
-		nl: "Vermogenslimiet (DTU-configuratieveld)",
-		fr: "Limite de puissance (champ de config. DTU)",
-		it: "Limite di potenza (campo di config. DTU)",
-		es: "Límite de potencia (campo de config. del DTU)",
-		pl: "Limit mocy (pole konfiguracji DTU)",
-		uk: "Обмеження потужності (поле конфігурації DTU)",
-		"zh-cn": "功率限制（DTU 配置字段）",
+	powerLimitWatt: {
+		en: "Power limit (watts, runtime)",
+		de: "Leistungslimit (Watt, Laufzeit)",
+		ru: "Ограничение мощности (Вт, во время работы)",
+		pt: "Limite de potência (watts, em execução)",
+		nl: "Vermogenslimiet (watt, runtime)",
+		fr: "Limite de puissance (watts, à l'exécution)",
+		it: "Limite di potenza (watt, runtime)",
+		es: "Límite de potencia (vatios, en ejecución)",
+		pl: "Limit mocy (waty, w czasie pracy)",
+		uk: "Обмеження потужності (Вт, під час роботи)",
+		"zh-cn": "功率限制（瓦，运行时）",
 	},
 	confirmRebootInverter: {
 		en: "Really reboot the inverter?",
@@ -712,11 +713,11 @@ type ControlGroup = "operation" | "runtime";
 /**
  * A controllable writable state, and how it should appear on the device card.
  *
- * The split between `control` and `setting` follows what the firmware actually does, not what the
- * state names suggest — and the two disagree. `inverter.powerLimit` sounds like a runtime knob but
- * is written into the persisted structure `0x6b8dc+0x40` and costs two 4 KB flash sectors per
- * change; `config.limitPowerMyPower` is named "persistent" but lands in `0x6c204`, outside that
- * structure, and is gone after a restart. See _fwanalysis/ADAPTER_FINDINGS.md §1, §2 and §15.
+ * The split between `control` and `setting` follows what the firmware actually does.
+ * `inverter.powerLimit` (action 8) is written into the persisted structure `0x6b8dc+0x40` and the
+ * inverter EEPROM, costing two 4 KB flash sectors per change, so it is a setting.
+ * `inverter.powerLimitWatt` (action 211) stays in RAM on both sides and is gone after an inverter
+ * restart, so it is a control. See _fwanalysis/POWER_LIMIT_CHAIN_2T.md §0, §6 and §7.
  */
 interface CommandDef {
 	/** State id relative to the device node, e.g. `inverter.powerLimit`. Must be in WRITABLE_STATES. */
@@ -760,6 +761,11 @@ interface CommandDef {
 	uselessOn?: RegExp;
 	/** Available on cloud-only devices (subset the cloud control channel can actuate). */
 	cloudCapable: boolean;
+	/**
+	 * Only for a DTU on local TCP (HMS-800W-2T family). The WB series reached over Bluetooth lacks
+	 * the command (action 211 does not exist in its firmware).
+	 */
+	tcpOnly?: boolean;
 }
 
 /**
@@ -773,18 +779,19 @@ export const COMMAND_DEFS: CommandDef[] = [
 	// would render as a broken image. The label alone carries the meaning here.
 	{ id: "inverter.active", ui: "control", kind: "switch", label: "active", group: "operation", cloudCapable: true },
 	{ id: "inverter.lock", ui: "control", kind: "switch", label: "lock", group: "operation", cloudCapable: false },
-	// --- Runtime values (RAM-only, firmware-verified §2/§15) ---
+	// --- Runtime values (RAM-only, firmware-verified) ---
 	{
-		id: "config.limitPowerMyPower",
+		id: "inverter.powerLimitWatt",
 		ui: "control",
-		kind: "slider",
-		label: "limitPowerMyPower",
+		kind: "number",
+		label: "powerLimitWatt",
 		help: "helpVolatile",
-		min: 2,
-		max: 100,
-		unit: "%",
+		min: 0,
+		max: POWER_LIMIT_WATT_MAX,
+		unit: "W",
 		group: "runtime",
 		cloudCapable: false,
+		tcpOnly: true,
 	},
 	{
 		id: "config.serverSendTime",
@@ -933,6 +940,17 @@ export function isLocalDevice(obj: ioBroker.Object): boolean {
 }
 
 /**
+ * True if a device object is a DTU reached over local TCP — not over Bluetooth, whose devices
+ * also carry a `host` (the BLE MAC). Only such a DTU accepts the runtime watt limit (action 211).
+ *
+ * @param obj - The ioBroker device object created by this adapter.
+ */
+export function isLocalTcpDevice(obj: ioBroker.Object): boolean {
+	const transport = (obj.native as { transport?: unknown } | undefined)?.transport;
+	return isLocalDevice(obj) && transport === "tcp";
+}
+
+/**
  * Classify a device object created by this adapter as a DTU, a cloud station, or neither.
  *
  * @param obj - The ioBroker device object (its `native` carries `host` or `stationId`).
@@ -992,9 +1010,15 @@ function formKey(stateId: string): string {
  *
  * @param adapter - Adapter surface used to read/write states.
  * @param deviceId - DTU device id (its serial), the state-tree prefix.
- * @param isLocal - Whether the DTU has a local TCP link (enables the local-only controls).
+ * @param isLocal - Whether the DTU has a local link (enables the local-only controls).
+ * @param isLocalTcp - Whether that link is TCP (enables the controls only the 2T family accepts).
  */
-export function buildControls(adapter: DmAdapterLike, deviceId: string, isLocal: boolean): DeviceControl<string>[] {
+export function buildControls(
+	adapter: DmAdapterLike,
+	deviceId: string,
+	isLocal: boolean,
+	isLocalTcp = false,
+): DeviceControl<string>[] {
 	const controls: DeviceControl<string>[] = [];
 
 	// Reads the state a control is bound to, regardless of the control's own id — the read-out
@@ -1004,7 +1028,11 @@ export function buildControls(adapter: DmAdapterLike, deviceId: string, isLocal:
 
 	for (const group of CONTROL_GROUPS) {
 		const defs = COMMAND_DEFS.filter(
-			d => d.ui === "control" && d.group === group.key && (isLocal || d.cloudCapable),
+			d =>
+				d.ui === "control" &&
+				d.group === group.key &&
+				(isLocal || d.cloudCapable) &&
+				(!d.tcpOnly || isLocalTcp),
 		);
 		if (!defs.length) {
 			continue;
@@ -1500,7 +1528,7 @@ export async function buildDtuDeviceInfo(
 			version: { stateId: sid(adapter, deviceId, "dtu.swVersion") },
 		},
 		customInfo: await buildDtuCardInfo(adapter, deviceId),
-		controls: buildControls(adapter, deviceId, local),
+		controls: buildControls(adapter, deviceId, local, isLocalTcpDevice(obj)),
 		actions: await buildDeviceActions(adapter, deviceId, local, model),
 		hasDetails: true,
 	};

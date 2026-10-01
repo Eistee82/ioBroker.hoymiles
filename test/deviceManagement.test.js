@@ -13,9 +13,11 @@ import {
 	buildInstanceInfo,
 	classifyDevice,
 	isLocalDevice,
+	isLocalTcpDevice,
 	resolveStationId,
 } from "../build/lib/deviceManagement.js";
 import { WRITABLE_STATES } from "../build/lib/deviceContext.js";
+import { localTcpStates } from "../build/lib/stateDefinitions.js";
 import { ACK_ICON, ACK_GROUND_ICON, inverterIcon } from "../build/lib/deviceIcons.js";
 
 /**
@@ -75,8 +77,14 @@ describe("deviceManagement – DM_I18N", function () {
 describe("deviceManagement – COMMAND_DEFS", function () {
 	it("covers exactly the writable states (no drift)", function () {
 		const cmdIds = COMMAND_DEFS.map(d => d.id).sort();
-		const writable = [...WRITABLE_STATES].sort();
+		const tcpOnly = localTcpStates.filter(d => d.write).map(d => d.id);
+		const writable = [...WRITABLE_STATES, ...tcpOnly].sort();
 		assert.deepStrictEqual(cmdIds, writable);
+	});
+
+	it("marks exactly the TCP-only states as tcpOnly", function () {
+		const flagged = COMMAND_DEFS.filter(d => d.tcpOnly).map(d => d.id);
+		assert.deepStrictEqual(flagged, ["inverter.powerLimitWatt"]);
 	});
 
 	it("every command label resolves to a translation", function () {
@@ -92,15 +100,15 @@ describe("deviceManagement – COMMAND_DEFS", function () {
 		}
 	});
 
-	it("splits control and setting by what the firmware persists, not by name", function () {
-		// The names mislead here: inverter.powerLimit sounds like a runtime knob but is written
-		// into the persisted structure 0x6b8dc+0x40 (two 4 KB sectors per change, §1), while
-		// config.limitPowerMyPower is named "persistent" and lands in RAM only (§2, §15).
+	it("splits control and setting by what the firmware persists", function () {
+		// inverter.powerLimit (action 8) is written into the persisted structure 0x6b8dc+0x40 and
+		// the inverter EEPROM; inverter.powerLimitWatt (action 211) stays in RAM on both sides.
 		const byUi = id => COMMAND_DEFS.find(d => d.id === id)?.ui;
 		assert.strictEqual(byUi("inverter.powerLimit"), "setting");
 		assert.strictEqual(byUi("inverter.powerFactorLimit"), "setting");
 		assert.strictEqual(byUi("inverter.reactivePowerLimit"), "setting");
-		assert.strictEqual(byUi("config.limitPowerMyPower"), "control");
+		assert.strictEqual(byUi("inverter.powerLimitWatt"), "control");
+		assert.strictEqual(byUi("config.limitPowerMyPower"), undefined, "removed: it had no effect");
 		assert.strictEqual(byUi("config.serverSendTime"), "control");
 		assert.strictEqual(byUi("inverter.active"), "control");
 		assert.strictEqual(byUi("inverter.lock"), "control");
@@ -149,6 +157,14 @@ describe("deviceManagement – classifyDevice / isLocalDevice", function () {
 		assert.strictEqual(isLocalDevice({ native: { host: "" } }), false);
 	});
 
+	it("tells a TCP DTU from a Bluetooth one, which also carries a host (its MAC)", function () {
+		assert.strictEqual(isLocalTcpDevice({ native: { host: "192.168.1.5", transport: "tcp" } }), true);
+		assert.strictEqual(isLocalTcpDevice({ native: { host: "AA:BB:CC:DD:EE:FF", transport: "ble" } }), false);
+		assert.strictEqual(isLocalTcpDevice({ native: { host: "", transport: "tcp" } }), false, "cloud-only");
+		// Objects created before the transport was recorded get it on the next adapter start.
+		assert.strictEqual(isLocalTcpDevice({ native: { host: "192.168.1.5" } }), false);
+	});
+
 	it("classifies a station by native.stationId", function () {
 		assert.strictEqual(classifyDevice({ native: { stationId: 42 } }), "station");
 	});
@@ -165,12 +181,19 @@ describe("deviceManagement – buildControls", function () {
 	// Ids of the real controls, without the layout-only header/divider/read-out entries.
 	const commandIds = controls => controls.filter(c => !["header", "divider", "info"].includes(c.type)).map(c => c.id);
 
+	it("offers the runtime watt limit only for a DTU on local TCP", function () {
+		assert.ok(commandIds(buildControls(makeMock(), "SN1", true, true)).includes("inverter.powerLimitWatt"));
+		// A Bluetooth device is local too, but the WB series has no action 211.
+		assert.ok(!commandIds(buildControls(makeMock(), "SN1", true, false)).includes("inverter.powerLimitWatt"));
+		assert.ok(!commandIds(buildControls(makeMock(), "SN1", false, false)).includes("inverter.powerLimitWatt"));
+	});
+
 	it("offers the volatile controls for a local device", function () {
 		const ids = commandIds(buildControls(makeMock(), "SN1", true));
 		assert.ok(ids.includes("inverter.active"));
 		assert.ok(ids.includes("inverter.lock"));
 		assert.ok(ids.includes("config.serverSendTime"));
-		assert.ok(ids.includes("config.limitPowerMyPower"));
+		assert.ok(!ids.includes("config.limitPowerMyPower"));
 		// Momentary commands are actions, not controls.
 		assert.ok(!ids.includes("inverter.reboot"));
 		// Persisted values belong behind the gear icon, not in the control dialog.
@@ -191,12 +214,42 @@ describe("deviceManagement – buildControls", function () {
 	});
 
 	it("control handler writes the underlying state with ack=false", async function () {
-		const mock = makeMock({ "SN1.config.limitPowerMyPower": { val: 50, ack: false } });
-		const controls = buildControls(mock, "SN1", true);
-		const limit = controls.find(c => c.id === "config.limitPowerMyPower");
-		await limit.handler("SN1", "config.limitPowerMyPower", 50);
-		assert.deepStrictEqual(mock.setCalls, [{ id: "SN1.config.limitPowerMyPower", val: 50, ack: false }]);
+		const mock = makeMock({ "SN1.inverter.powerLimitWatt": { val: 300, ack: false } });
+		const controls = buildControls(mock, "SN1", true, true);
+		const limit = controls.find(c => c.id === "inverter.powerLimitWatt");
+		assert.strictEqual(limit.type, "number");
+		assert.strictEqual(limit.unit, "W");
+		await limit.handler("SN1", "inverter.powerLimitWatt", 300);
+		assert.deepStrictEqual(mock.setCalls, [{ id: "SN1.inverter.powerLimitWatt", val: 300, ack: false }]);
 	});
+
+	/**
+	 * Run `fn` with a temporary slider control in COMMAND_DEFS. No control is a slider at the moment
+	 * (the watt limit is a number field), but the read-out branch for sliders stays generic.
+	 *
+	 * @param fn - Test body.
+	 */
+	async function withSliderControl(fn) {
+		const def = {
+			id: "config.serverSendTime",
+			ui: "control",
+			kind: "slider",
+			label: "serverSendTime",
+			min: 1,
+			max: 60,
+			unit: "min",
+			group: "runtime",
+			cloudCapable: false,
+		};
+		const idx = COMMAND_DEFS.findIndex(d => d.id === def.id);
+		const original = COMMAND_DEFS[idx];
+		COMMAND_DEFS[idx] = def;
+		try {
+			await fn();
+		} finally {
+			COMMAND_DEFS[idx] = original;
+		}
+	}
 
 	it("groups the controls under section headings, in a fixed order", function () {
 		const controls = buildControls(makeMock(), "SN1", true);
@@ -223,35 +276,39 @@ describe("deviceManagement – buildControls", function () {
 		assert.ok(first.style.minWidth, "the first heading must carry the dialog's minimum width");
 	});
 
-	it("puts a live read-out with label and unit in front of every slider", function () {
-		const controls = buildControls(makeMock(), "SN1", true);
-		const sliders = controls.filter(c => c.type === "slider");
-		assert.ok(sliders.length >= 1);
-		for (const slider of sliders) {
-			// The slider itself carries no label — the read-out above it names the value, which
-			// also keeps the slider from overlapping a label.
-			assert.strictEqual(slider.label, undefined);
-			const readout = controls[controls.indexOf(slider) - 1];
-			assert.strictEqual(readout.type, "info");
-			assert.strictEqual(readout.stateId, slider.stateId);
-			assert.strictEqual(readout.unit, slider.unit);
-			// The label carries its own trailing gap, because the GUI puts none between the two.
-			for (const lang of REQUIRED_LANGS) {
-				assert.ok(
-					readout.label[lang].endsWith(":\u00A0"),
-					`read-out label "${readout.label[lang]}" (${lang}) lacks the trailing gap`,
-				);
+	it("puts a live read-out with label and unit in front of every slider", async function () {
+		await withSliderControl(() => {
+			const controls = buildControls(makeMock(), "SN1", true);
+			const sliders = controls.filter(c => c.type === "slider");
+			assert.ok(sliders.length >= 1);
+			for (const slider of sliders) {
+				// The slider itself carries no label — the read-out above it names the value, which
+				// also keeps the slider from overlapping a label.
+				assert.strictEqual(slider.label, undefined);
+				const readout = controls[controls.indexOf(slider) - 1];
+				assert.strictEqual(readout.type, "info");
+				assert.strictEqual(readout.stateId, slider.stateId);
+				assert.strictEqual(readout.unit, slider.unit);
+				// The label carries its own trailing gap, because the GUI puts none between the two.
+				for (const lang of REQUIRED_LANGS) {
+					assert.ok(
+						readout.label[lang].endsWith(": "),
+						`read-out label "${readout.label[lang]}" (${lang}) lacks the trailing gap`,
+					);
+				}
 			}
-		}
+		});
 	});
 
 	it("read-out reads the slider's state although its own id differs", async function () {
-		const mock = makeMock({ "SN1.config.limitPowerMyPower": { val: 70, ack: true } });
-		const controls = buildControls(mock, "SN1", true);
-		const readout = controls.find(c => c.id === "config.limitPowerMyPower#value");
-		assert.ok(readout, "read-out control missing");
-		const state = await readout.getStateHandler("SN1", "config.limitPowerMyPower#value");
-		assert.strictEqual(state.val, 70);
+		await withSliderControl(async () => {
+			const mock = makeMock({ "SN1.config.serverSendTime": { val: 7, ack: true } });
+			const controls = buildControls(mock, "SN1", true);
+			const readout = controls.find(c => c.id === "config.serverSendTime#value");
+			assert.ok(readout, "read-out control missing");
+			const state = await readout.getStateHandler("SN1", "config.serverSendTime#value");
+			assert.strictEqual(state.val, 7);
+		});
 	});
 });
 

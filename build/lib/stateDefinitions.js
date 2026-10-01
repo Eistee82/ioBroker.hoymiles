@@ -1,3 +1,4 @@
+import { POWER_LIMIT_WATT_MAX } from "./constants.js";
 import { GRID_PROFILE_SCHEMA } from "./gridProfile.js";
 const n = (id, en, de, role, unit, extra) => ({
     id,
@@ -37,6 +38,14 @@ export const meterControlStates = [
         source: "local",
     }),
     n("meter.lastData", "Last meter reading", "Letzter Zählerwert", "value.time", "", { source: "local" }),
+];
+export const localTcpStates = [
+    n("inverter.powerLimitWatt", "Power limit (watts, runtime)", "Leistungslimit (Watt, Laufzeit)", "level", "W", {
+        source: "local",
+        write: true,
+        min: 0,
+        max: POWER_LIMIT_WATT_MAX,
+    }),
 ];
 export const meterMeasurementStates = [
     n("meter.gridPower", "Grid exchange power", "Netzaustauschleistung", "value.power", "W", {
@@ -379,12 +388,6 @@ const states = [
         write: true,
         source: "local",
     }),
-    n("config.limitPowerMyPower", "Power limit (DTU config field)", "Leistungslimit (DTU-Konfigfeld)", "level", "%", {
-        write: true,
-        min: 2,
-        max: 100,
-        source: "local",
-    }),
     s("config.wifiSsid", "WiFi SSID", "WLAN SSID", "text", { source: "local" }),
     n("config.wifiSignalQuality", "WiFi signal quality", "WLAN-Signalqualität", "value.signal", "%", {
         source: "local",
@@ -504,6 +507,8 @@ function buildStateCommon(def) {
         read: true,
         write: !!def.write,
         def: def.type === "boolean" ? false : def.type === "number" ? 0 : "",
+        min: def.min,
+        max: def.max,
         states: def.states,
     };
 }

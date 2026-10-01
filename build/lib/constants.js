@@ -53,6 +53,7 @@ export const CLOUD_DISCOVER_CONCURRENCY = 5;
 export const HIST_MAX_PAGES = 16;
 export const POWER_LIMIT_MIN = 2;
 export const POWER_LIMIT_MAX = 100;
+export const POWER_LIMIT_WATT_MAX = 3276.7;
 export const POWER_LIMIT_DEADBAND_DEFAULT = 1;
 export const POWER_LIMIT_MIN_INTERVAL_SEC_DEFAULT = 60;
 export const CLOUD_HOST_DEFAULT = "https://neapi.hoymiles.com";

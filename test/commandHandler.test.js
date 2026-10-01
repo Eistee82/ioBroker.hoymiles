@@ -23,7 +23,7 @@ describe("commandHandler – COMMANDS", function () {
 		"inverter.cleanGroundingFault",
 		"inverter.lock",
 		"config.serverSendTime",
-		"config.limitPowerMyPower",
+		"inverter.powerLimitWatt",
 	];
 
 	it("contains all expected command keys", function () {
@@ -48,7 +48,7 @@ describe("commandHandler – COMMANDS", function () {
 		for (const key of buttons) {
 			assert.strictEqual(COMMANDS[key].button, true, `${key} should be a button`);
 		}
-		const nonButtons = ["inverter.powerLimit", "inverter.active", "inverter.lock", "config.limitPowerMyPower"];
+		const nonButtons = ["inverter.powerLimit", "inverter.active", "inverter.lock", "inverter.powerLimitWatt"];
 		for (const key of nonButtons) {
 			assert.ok(!COMMANDS[key].button, `${key} should not be a button`);
 		}
@@ -94,14 +94,26 @@ describe("commandHandler – COMMANDS", function () {
 		assert.strictEqual(v(5), null, "5 should be valid");
 	});
 
-	it("limitPowerMyPower validate rejects out of range", function () {
-		const v = COMMANDS["config.limitPowerMyPower"].validate;
+	it("powerLimitWatt validate accepts (0, 3276.7] W only", function () {
+		const v = COMMANDS["inverter.powerLimitWatt"].validate;
 		assert.ok(v, "validate function must exist");
-		assert.ok(v(1) !== null, "1 should be rejected (below min 2)");
-		assert.ok(v(101) !== null, "101 should be rejected (above max 100)");
-		assert.strictEqual(v(2), null, "2 should be valid (min)");
-		assert.strictEqual(v(50), null, "50 should be valid");
-		assert.strictEqual(v(100), null, "100 should be valid (max)");
+		assert.ok(v(0) !== null, "0 should be rejected — the inverter floors it to 2 % anyway");
+		assert.ok(v(-5) !== null, "negative should be rejected");
+		assert.ok(v(NaN) !== null, "NaN should be rejected");
+		assert.ok(v(3276.8) !== null, "3276.8 should be rejected (signed 16-bit 0.1 W)");
+		assert.strictEqual(v(0.1), null, "0.1 W should be valid");
+		assert.strictEqual(v(800), null, "800 W should be valid");
+		assert.strictEqual(v(3276.7), null, "3276.7 W should be valid (max)");
+	});
+
+	it("powerLimitWatt writes no flash, powerLimit does", function () {
+		assert.ok(!COMMANDS["inverter.powerLimitWatt"].writesFlash, "action 211 is RAM-only");
+		assert.strictEqual(COMMANDS["inverter.powerLimit"].writesFlash, true);
+	});
+
+	it("both limit commands are confirmed by the RealData echo in their own unit", function () {
+		assert.strictEqual(COMMANDS["inverter.powerLimit"].readback, "percent");
+		assert.strictEqual(COMMANDS["inverter.powerLimitWatt"].readback, "watt");
 	});
 
 	it("log functions return strings", function () {
@@ -166,17 +178,43 @@ describe("commandHandler – executeCommand", function () {
 		assert.strictEqual(sent.length, 0);
 	});
 
-	it("limitPowerMyPower encode produces buffer with limitPowerMypower 500 for value 50", async function () {
-		const cmd = COMMANDS["config.limitPowerMyPower"];
-		const buf = cmd.encode(50, 1700000000, handler, {});
-		assert.ok(Buffer.isBuffer(buf), "encode must return a Buffer");
-		assert.ok(buf.length > 0, "buffer must not be empty");
-		// Decode the protobuf payload to verify the scaled value
+	it("powerLimitWatt encodes action 211 with S:1 and the value in 0.1 W", async function () {
+		const buf = COMMANDS["inverter.powerLimitWatt"].encode(123.4, 1700000000, handler, null);
 		const parsed = handler.parseResponse(buf);
 		assert.ok(parsed, "buffer must be a parseable protobuf message");
-		const ResDTO = handler.protos.SetConfig.lookupType("SetConfigResDTO");
+		assert.strictEqual(buf[2], 0xa3, "local command tag high byte");
+		assert.strictEqual(buf[3], 0x05, "local command tag low byte");
+		const ResDTO = handler.protos.CommandPB.lookupType("CommandResDTO");
 		const obj = ResDTO.toObject(ResDTO.decode(parsed.payload), { longs: Number, defaults: true });
-		assert.strictEqual(obj.limitPowerMypower, 500, "50% * SCALE_POWER(10) must equal 500");
+		assert.strictEqual(obj.action, 211);
+		assert.strictEqual(obj.data, "S:1,P:1234\r", "123.4 W travels as 1234 tenths of a watt");
+	});
+
+	it("defers the ack of a limit command to the echo when the context expects one", async function () {
+		const { ctx, sent, states } = createMockContext(handler);
+		const kinds = [];
+		ctx.expectReadback = kind => kinds.push(kind);
+		await executeCommand("inverter.powerLimitWatt", { val: 300, ack: false, ts: 0, lc: 0, from: "", q: 0 }, ctx);
+		await executeCommand("inverter.powerLimit", { val: 60, ack: false, ts: 0, lc: 0, from: "", q: 0 }, ctx);
+		assert.strictEqual(sent.length, 2);
+		assert.deepStrictEqual(kinds, ["watt", "percent"]);
+		assert.strictEqual(states["inverter.powerLimitWatt"], undefined, "no ack on send");
+		assert.strictEqual(states["inverter.powerLimit"], undefined, "no ack on send");
+	});
+
+	it("acknowledges a limit command on send when no echo is expected (Bluetooth, cloud)", async function () {
+		const { ctx, states } = createMockContext(handler);
+		await executeCommand("inverter.powerLimit", { val: 60, ack: false, ts: 0, lc: 0, from: "", q: 0 }, ctx);
+		assert.deepStrictEqual(states["inverter.powerLimit"], { val: 60, ack: true });
+	});
+
+	it("never throttles the runtime watt limit, even with a flash guard set", async function () {
+		const { ctx, sent } = createMockContext(handler);
+		ctx.flashGuard = { deadband: 50, minIntervalMs: 3600000 };
+		ctx.flashWriteState = () => ({ lastValue: 300, lastWriteMs: Date.now(), skipsLogged: 0 });
+		await executeCommand("inverter.powerLimitWatt", { val: 301, ack: false, ts: 0, lc: 0, from: "", q: 0 }, ctx);
+		await executeCommand("inverter.powerLimitWatt", { val: 302, ack: false, ts: 0, lc: 0, from: "", q: 0 }, ctx);
+		assert.strictEqual(sent.length, 2, "a zero-export loop must reach the inverter every time");
 	});
 
 	it("sends inverter on/off command", async function () {

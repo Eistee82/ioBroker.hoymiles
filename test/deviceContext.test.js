@@ -1,5 +1,6 @@
 import assert from "node:assert";
 import DeviceContext, { WRITABLE_STATES } from "../build/lib/deviceContext.js";
+import { localTcpStates } from "../build/lib/stateDefinitions.js";
 import { COMMANDS } from "../build/lib/commandHandler.js";
 import { ProtobufHandler } from "../build/lib/protobufHandler.js";
 import { byteSwap16 } from "../build/lib/gridProfile.js";
@@ -19,7 +20,9 @@ describe("deviceContext – WRITABLE_STATES", function () {
 		assert.ok(WRITABLE_STATES.includes("dtu.reboot"));
 		assert.ok(WRITABLE_STATES.includes("inverter.lock"));
 		assert.ok(WRITABLE_STATES.includes("config.serverSendTime"));
-		assert.ok(WRITABLE_STATES.includes("config.limitPowerMyPower"));
+		assert.ok(!WRITABLE_STATES.includes("config.limitPowerMyPower"), "removed: it never reached the inverter");
+		// TCP-only: subscribed together with its object in createDeviceAndStates, not for every device.
+		assert.ok(!WRITABLE_STATES.includes("inverter.powerLimitWatt"));
 	});
 
 	it("all writable states have a matching COMMANDS entry", function () {
@@ -28,9 +31,13 @@ describe("deviceContext – WRITABLE_STATES", function () {
 		}
 	});
 
-	it("all COMMANDS entries have a matching WRITABLE_STATES entry", function () {
+	it("all COMMANDS entries are subscribed somewhere (WRITABLE_STATES or the TCP-only states)", function () {
+		const tcpOnly = localTcpStates.filter(d => d.write).map(d => d.id);
 		for (const key of Object.keys(COMMANDS)) {
-			assert.ok(WRITABLE_STATES.includes(key), `COMMAND "${key}" not in WRITABLE_STATES`);
+			assert.ok(
+				WRITABLE_STATES.includes(key) || tcpOnly.includes(key),
+				`COMMAND "${key}" is neither in WRITABLE_STATES nor a writable TCP-only state`,
+			);
 		}
 	});
 });
@@ -1597,15 +1604,12 @@ describe("deviceContext – handleConfigData", function () {
 		const newCalls = calls.slice(callsBefore);
 
 		const stateIds = newCalls.map(c => c[0]);
-		// limitPower from GetConfig is now written as config.limitPowerMyPower (persistent, DTU-stored)
-		// rather than inverter.powerLimit (runtime setpoint) — see handleConfigData change.
-		assert.ok(stateIds.includes("TEST1234.config.limitPowerMyPower"), "Should write config.limitPowerMyPower");
+		// limit_power_mypower is the DTU's RAM working value (percent after action 8, 0.1 W after
+		// action 211) — it is no longer published anywhere.
+		assert.ok(!stateIds.some(id => id.endsWith(".config.limitPowerMyPower")), "field 5 must not be published");
+		assert.ok(!stateIds.includes("TEST1234.inverter.powerLimit"), "GetConfig must not overwrite the command state");
 		assert.ok(stateIds.includes("TEST1234.config.serverDomain"), "Should write config.serverDomain");
 		assert.ok(stateIds.includes("TEST1234.config.wifiSsid"), "Should write config.wifiSsid");
-
-		// limitPower = 8000 / 10 = 800
-		const powerLimitCall = newCalls.find(c => c[0] === "TEST1234.config.limitPowerMyPower");
-		assert.strictEqual(powerLimitCall[1], 800);
 
 		// cloudServerDomain should be set
 		assert.strictEqual(ctx.cloudServerDomain, "cloud.hoymiles.com:10081");
@@ -1862,6 +1866,62 @@ describe("deviceContext – createDeviceAndStates", function () {
 			subscribeCalls.some(c => c[0].includes("powerLimit")),
 			"Should subscribe to powerLimit",
 		);
+	});
+
+	/**
+	 * Create a device of the given transport and report what it created and subscribed.
+	 *
+	 * @param transport - "tcp" or "ble".
+	 * @param enableLocal - Whether the local link is enabled.
+	 */
+	async function createFor(transport, enableLocal) {
+		const { extendCalls, subscribeCalls, adapter } = createTrackingAdapter();
+		const ctx = new DeviceContext({
+			adapter,
+			protobuf: null,
+			host: transport === "ble" ? "AA:BB:CC:DD:EE:FF" : "192.168.1.5",
+			transport,
+			enableLocal,
+			enableCloud: false,
+			enableCloudRelay: false,
+			dataInterval: 15,
+			slowPollFactor: 6,
+		});
+		await ctx.initFromSerial("DTU_SERIAL");
+		return {
+			created: extendCalls.map(c => c[0]),
+			subscribed: subscribeCalls.map(c => c[0]),
+			device: extendCalls.find(c => c[0] === "DTU_SERIAL" && c[1].type === "device"),
+			watt: extendCalls.find(c => c[0] === "DTU_SERIAL.inverter.powerLimitWatt"),
+		};
+	}
+
+	it("creates and subscribes the runtime watt limit for a local TCP DTU", async function () {
+		const r = await createFor("tcp", true);
+		assert.ok(r.watt, "inverter.powerLimitWatt must be created");
+		assert.strictEqual(r.watt[1].common.unit, "W");
+		assert.strictEqual(r.watt[1].common.write, true);
+		assert.strictEqual(r.watt[1].common.min, 0);
+		assert.strictEqual(r.watt[1].common.max, 3276.7);
+		assert.ok(r.subscribed.includes("DTU_SERIAL.inverter.powerLimitWatt"));
+		assert.strictEqual(r.device[1].native.transport, "tcp");
+	});
+
+	it("does not offer the watt limit over Bluetooth (the WB series lacks action 211)", async function () {
+		const r = await createFor("ble", true);
+		assert.ok(!r.created.includes("DTU_SERIAL.inverter.powerLimitWatt"));
+		assert.ok(!r.subscribed.includes("DTU_SERIAL.inverter.powerLimitWatt"));
+		assert.strictEqual(r.device[1].native.transport, "ble");
+	});
+
+	it("does not offer the watt limit without a local link", async function () {
+		const r = await createFor("tcp", false);
+		assert.ok(!r.created.includes("DTU_SERIAL.inverter.powerLimitWatt"));
+	});
+
+	it("no longer creates config.limitPowerMyPower", async function () {
+		const r = await createFor("tcp", true);
+		assert.ok(!r.created.includes("DTU_SERIAL.config.limitPowerMyPower"));
 	});
 
 	it("is idempotent — calling initFromSerial twice does not re-create states", async function () {
@@ -3311,6 +3371,58 @@ describe("deviceContext – handleStateChange", function () {
 		await ctx.handleStateChange("inverter.active", { val: true, ack: false, ts: 0, lc: 0, from: "" });
 		assert.strictEqual(sent.length, 1, "exactly one command frame expected");
 		assert.strictEqual(sent[0].subarray(0, 3).toString(), "ENC", "command must pass the encryption hook");
+	});
+
+	it("confirms a watt limit by the echo and keeps watts out of activePowerLimit", async function () {
+		const { ctx } = await makeLocalCommandCtx(false);
+		await ctx.handleStateChange("inverter.powerLimitWatt", { val: 300, ack: false, ts: 0, lc: 0, from: "" });
+		assert.deepStrictEqual(ctx["powerLimitEcho"](300), [["inverter.powerLimitWatt", 300]]);
+	});
+
+	it("confirms a percent limit by the echo and keeps feeding activePowerLimit", async function () {
+		const { ctx } = await makeLocalCommandCtx(false);
+		await ctx.handleStateChange("inverter.powerLimit", { val: 60, ack: false, ts: 0, lc: 0, from: "" });
+		assert.deepStrictEqual(ctx["powerLimitEcho"](60), [
+			["inverter.activePowerLimit", 60],
+			["inverter.powerLimit", 60],
+		]);
+	});
+
+	it("treats an echo before any limit command as the plain live value", async function () {
+		const { ctx } = await makeLocalCommandCtx(false);
+		assert.deepStrictEqual(ctx["powerLimitEcho"](100), [["inverter.activePowerLimit", 100]]);
+		assert.deepStrictEqual(ctx["powerLimitEcho"](0), [], "0 means 'not reported' and is skipped");
+	});
+
+	it("drops the cached value on send so an identical echo still confirms the user's write", async function () {
+		const { ctx } = await makeLocalCommandCtx(false);
+		ctx.stateCache.set("inverter.powerLimit", { val: 60, q: 0 });
+		await ctx.handleStateChange("inverter.powerLimit", { val: 60, ack: false, ts: 0, lc: 0, from: "" });
+		assert.ok(!ctx.stateCache.has("inverter.powerLimit"));
+	});
+
+	it("does not treat the echo as a confirmation on the WB series (Bluetooth)", async function () {
+		const { ctx } = await makeLocalCommandCtx(false);
+		ctx.transport = "ble";
+		await ctx.handleStateChange("inverter.powerLimit", { val: 60, ack: false, ts: 0, lc: 0, from: "" });
+		// There the field carries the EMS set point, not the commanded limit.
+		assert.deepStrictEqual(ctx["powerLimitEcho"](83.68), [["inverter.activePowerLimit", 83.68]]);
+	});
+
+	it("reads the echo in the unit of a limit the cloud relay forwarded", async function () {
+		const { ctx, sent } = await makeLocalCommandCtx(false);
+		const acks = [];
+		ctx.cloudRelay = { sendFrame: frame => acks.push(frame) };
+		const cmd = { cmdHigh: 0x23, cmdLow: 0x05, payload: Buffer.alloc(0) };
+		ctx["forwardCloudActionToDevice"](cmd, 211, 7);
+		assert.strictEqual(sent.length, 1, "the downlink is forwarded to the DTU");
+		assert.strictEqual(acks.length, 2, "and acknowledged upstream (ack + status)");
+		assert.deepStrictEqual(ctx["powerLimitEcho"](50), [["inverter.powerLimitWatt", 50]]);
+		ctx["forwardCloudActionToDevice"](cmd, 8, 8);
+		assert.deepStrictEqual(ctx["powerLimitEcho"](60), [
+			["inverter.activePowerLimit", 60],
+			["inverter.powerLimit", 60],
+		]);
 	});
 
 	it("sends command frames unchanged to a DTU without encryption", async function () {
@@ -6181,6 +6293,26 @@ describe("deviceContext – cleanupObsoleteObjects", function () {
 		await ctx["cleanupObsoleteObjects"]();
 
 		assert.deepStrictEqual(deleted, ["hoymiles.0.TESTDTU.gridMeter"]);
+	});
+
+	it("removes config.limitPowerMyPower from existing installations but keeps the watt limit", async function () {
+		const stateRows = ["inverter.powerLimit", "inverter.powerLimitWatt", "config.limitPowerMyPower"];
+		const { adapter, deleted } = createTrackingAdapter(stateRows, []);
+		const ctx = new DeviceContext({
+			adapter,
+			protobuf: null,
+			host: "",
+			enableLocal: false,
+			enableCloud: false,
+			enableCloudRelay: false,
+			dataInterval: 15,
+			slowPollFactor: 6,
+		});
+		ctx.deviceId = "TESTDTU";
+
+		await ctx["cleanupObsoleteObjects"]();
+
+		assert.deepStrictEqual(deleted, ["hoymiles.0.TESTDTU.config.limitPowerMyPower"]);
 	});
 });
 

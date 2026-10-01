@@ -6,12 +6,14 @@ import { executeCommand, executeCloudCommand, flashWritingStateForAction, } from
 import Encryption from "./encryption.js";
 import { buildShellyBindData, encodeShellyBindBody, parseEnergyFlow, parseMeterDevices, SHELLY_DEV_TYPE_GRID, SHELLY_DEV_TYPE_METER_ONLY, } from "./shellyProtocol.js";
 const SHELLY_CMD_TAG = [0xa3, 0x18];
-import { channels, states, meterMeasurementStates, meterControlStates, hybridChannels, hybridStates, buildStateCommon, } from "./stateDefinitions.js";
+const CLOUD_ACTION_LIMIT_POWER = 8;
+const CLOUD_ACTION_LIMIT_POWER_RUNTIME = 211;
+import { channels, states, meterMeasurementStates, meterControlStates, localTcpStates, hybridChannels, hybridStates, buildStateCommon, } from "./stateDefinitions.js";
 import { getAlarmDescription } from "./alarmCodes.js";
 import { decodeGridProfile, byteSwap16 } from "./gridProfile.js";
 import EnergyGuard from "./energyGuard.js";
 import { cloudTagLabel, describeCloudTag, refusalReason } from "./cloudTranslator.js";
-import { INFO_FALLBACK_TIMEOUT_MS, SCALE_POWER, SCALE_POWER_LIMIT_BLE, SCALE_POWER_LIMIT_TCP, CLOUD_DEV_TYPE_DTU, POWER_LIMIT_DEADBAND_DEFAULT, POWER_LIMIT_MIN_INTERVAL_SEC_DEFAULT, HIST_MAX_PAGES, HM_HEADER_SIZE, LOCAL_GCM_TAG_LEN, CLOUD_RELAY_TLS_PORT, } from "./constants.js";
+import { INFO_FALLBACK_TIMEOUT_MS, SCALE_POWER_LIMIT_BLE, SCALE_POWER_LIMIT_TCP, CLOUD_DEV_TYPE_DTU, POWER_LIMIT_DEADBAND_DEFAULT, POWER_LIMIT_MIN_INTERVAL_SEC_DEFAULT, HIST_MAX_PAGES, HM_HEADER_SIZE, LOCAL_GCM_TAG_LEN, CLOUD_RELAY_TLS_PORT, } from "./constants.js";
 import { whToKwh } from "./convert.js";
 import { anonymize, errorMessage, safeJsonStringify, unixSeconds } from "./utils.js";
 import { inverterIcon } from "./deviceIcons.js";
@@ -35,7 +37,6 @@ const WRITABLE_STATES = [
     "inverter.cleanGroundingFault",
     "inverter.lock",
     "config.serverSendTime",
-    "config.limitPowerMyPower",
     "dtu.reboot",
 ];
 class DeviceContext {
@@ -80,6 +81,7 @@ class DeviceContext {
     meterStatesCreated;
     meterMeasurementStatesCreated;
     meterControlStatesCreated;
+    lastPowerLimitKind;
     extraListsReported;
     histStatesCreated;
     pollCount;
@@ -147,6 +149,7 @@ class DeviceContext {
         this.meterStatesCreated = false;
         this.meterMeasurementStatesCreated = false;
         this.meterControlStatesCreated = false;
+        this.lastPowerLimitKind = null;
         this.extraListsReported = false;
         this.histStatesCreated = false;
         this.pollCount = 0;
@@ -280,7 +283,7 @@ class DeviceContext {
                 statusStates: { onlineId: "info.connected" },
                 icon: inverterIcon(""),
             },
-            native: { host: this.host },
+            native: { host: this.host, transport: this.transport },
         });
         await this.adapter.extendObjectAsync(`${this.deviceId}.info`, {
             type: "channel",
@@ -324,6 +327,18 @@ class DeviceContext {
         for (const stateId of WRITABLE_STATES) {
             this.adapter.subscribeStates(`${this.deviceId}.${stateId}`);
         }
+        if (this.transport === "tcp" && this.enableLocal) {
+            for (const def of localTcpStates) {
+                await this.adapter.extendObjectAsync(`${this.deviceId}.${def.id}`, {
+                    type: "state",
+                    common: buildStateCommon(def),
+                    native: {},
+                });
+                if (def.write) {
+                    this.adapter.subscribeStates(`${this.deviceId}.${def.id}`);
+                }
+            }
+        }
         if (this.transport === "ble") {
             await this.adapter.setObjectNotExistsAsync(`${this.deviceId}.meter`, {
                 type: "channel",
@@ -346,7 +361,7 @@ class DeviceContext {
         this.adapter.log.info(`[${this.deviceId}] Device states created`);
     }
     async cleanupObsoleteObjects() {
-        const knownStates = new Set([...states, ...hybridStates].map(d => d.id));
+        const knownStates = new Set([...states, ...hybridStates, ...localTcpStates].map(d => d.id));
         const knownChannels = new Set([...channels, ...hybridChannels].map(c => c.id));
         const isKnown = (rel) => knownStates.has(rel) ||
             knownChannels.has(rel) ||
@@ -573,6 +588,12 @@ class DeviceContext {
             this.adapter.log.warn(`[${this.deviceId}] forwarding cloud action ${action} failed: ${errorMessage(e)}`);
         });
         this.bookCloudFlashWrite(action);
+        if (action === CLOUD_ACTION_LIMIT_POWER) {
+            this.expectLimitEcho("percent");
+        }
+        else if (action === CLOUD_ACTION_LIMIT_POWER_RUNTIME) {
+            this.expectLimitEcho("watt");
+        }
         const ts = unixSeconds();
         relay.sendFrame(this.protobuf.encodeCloudCommandAck(ts, this.dtuSerial, action, tid));
         relay.sendFrame(this.protobuf.encodeCloudCommandStatus(ts, this.dtuSerial, action, tid));
@@ -851,6 +872,23 @@ class DeviceContext {
     wireFrame(frame) {
         return this.encryptionRequired && this.encryption ? this.encryption.encryptFrame(frame) : frame;
     }
+    expectLimitEcho(kind) {
+        this.lastPowerLimitKind = kind;
+        this.stateCache.delete(kind === "watt" ? "inverter.powerLimitWatt" : "inverter.powerLimit");
+    }
+    powerLimitEcho(echo) {
+        if (!(echo > 0)) {
+            return [];
+        }
+        if (this.transport === "tcp" && this.lastPowerLimitKind === "watt") {
+            return [["inverter.powerLimitWatt", echo]];
+        }
+        const writes = [["inverter.activePowerLimit", echo]];
+        if (this.transport === "tcp" && this.lastPowerLimitKind === "percent") {
+            writes.push(["inverter.powerLimit", echo]);
+        }
+        return writes;
+    }
     static Q_GOOD = 0x00;
     static Q_DEVICE_DISCONNECTED = 0x42;
     stateCache = new Map();
@@ -896,7 +934,7 @@ class DeviceContext {
             }
         }
     }
-    static DATA_STATE_PATTERN = /^(grid\.|pv\d+\.|inverter\.(temperature|active|warnCount|warnMessage|activePowerLimit)|meter\.)/;
+    static DATA_STATE_PATTERN = /^(grid\.|pv\d+\.|inverter\.(temperature|active|warnCount|warnMessage|activePowerLimit|powerLimitWatt)|meter\.)/;
     async markStatesDisconnected() {
         if (!this.ready) {
             return;
@@ -1048,9 +1086,7 @@ class DeviceContext {
                 const sgs = data.sgs[0];
                 entries.push(["grid.power", sgs.activePower], ["grid.voltage", sgs.voltage], ["grid.current", sgs.current], ["grid.frequency", sgs.frequency], ["grid.reactivePower", sgs.reactivePower], ["grid.powerFactor", sgs.powerFactor], ["inverter.temperature", sgs.temperature], ["inverter.warnCount", sgs.warningNumber], ...(sgs.linkStatus
                     ? [["inverter.linkStatus", sgs.linkStatus]]
-                    : []), ["inverter.serialNumber", sgs.serialNumber], ...(sgs.powerLimit > 0
-                    ? [["inverter.activePowerLimit", sgs.powerLimit]]
-                    : []));
+                    : []), ["inverter.serialNumber", sgs.serialNumber], ...this.powerLimitEcho(sgs.powerLimit));
             }
             for (const pv of data.pv) {
                 const pvIndex = pv.portNumber - 1;
@@ -1272,11 +1308,7 @@ class DeviceContext {
             }
             const config = this.protobuf.decodeGetConfig(payload);
             this.adapter.log.debug(`[${this.deviceId || this.host}] Config: server=${config.serverDomain}:${config.serverPort}, sendTime=${config.serverSendTime}min`);
-            const limitPct = config.limitPower / SCALE_POWER;
             await this.setStates([
-                ...(limitPct >= 2
-                    ? [["config.limitPowerMyPower", limitPct]]
-                    : []),
                 ["config.serverDomain", config.serverDomain],
                 ["config.serverPort", config.serverPort],
                 ["config.serverSendTime", config.serverSendTime],
@@ -1611,6 +1643,9 @@ class DeviceContext {
                     }
                     return entry;
                 },
+                ...(this.transport === "tcp"
+                    ? { expectReadback: (kind) => this.expectLimitEcho(kind) }
+                    : {}),
             });
             return;
         }
@@ -1690,6 +1725,13 @@ class DeviceContext {
         if (this.deviceId) {
             for (const stateId of WRITABLE_STATES) {
                 this.adapter.unsubscribeStates(`${this.deviceId}.${stateId}`);
+            }
+            if (this.transport === "tcp" && this.enableLocal) {
+                for (const def of localTcpStates) {
+                    if (def.write) {
+                        this.adapter.unsubscribeStates(`${this.deviceId}.${def.id}`);
+                    }
+                }
             }
         }
     }
