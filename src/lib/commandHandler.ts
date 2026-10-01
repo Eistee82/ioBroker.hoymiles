@@ -8,6 +8,7 @@ import {
 	POWER_LIMIT_MIN,
 	POWER_LIMIT_MAX,
 	POWER_LIMIT_WATT_MAX,
+	POWER_LIMIT_WATT_MIN,
 	DEVICE_COMMAND_REBOOT,
 	DEVICE_COMMAND_POWER_ON,
 	DEVICE_COMMAND_POWER_OFF,
@@ -244,8 +245,8 @@ const COMMANDS: Record<string, CommandDefinition> = {
 	// working value, never reached the inverter and was replaced from flash on the next restart.
 	"inverter.powerLimitWatt": {
 		validate: v =>
-			!(v > 0) || v > POWER_LIMIT_WATT_MAX
-				? `Power limit must be above 0 and at most ${POWER_LIMIT_WATT_MAX} W`
+			!(v >= POWER_LIMIT_WATT_MIN) || v > POWER_LIMIT_WATT_MAX
+				? `Power limit must be between ${POWER_LIMIT_WATT_MIN} and ${POWER_LIMIT_WATT_MAX} W`
 				: null,
 		encode: (v, ts, pb) => pb.encodeSetPowerLimitWatt(Number(v), ts),
 		log: v => `Setting runtime power limit to ${v} W`,

@@ -94,10 +94,11 @@ describe("commandHandler – COMMANDS", function () {
 		assert.strictEqual(v(5), null, "5 should be valid");
 	});
 
-	it("powerLimitWatt validate accepts (0, 3276.7] W only", function () {
+	it("powerLimitWatt validate accepts [0.1, 3276.7] W only", function () {
 		const v = COMMANDS["inverter.powerLimitWatt"].validate;
 		assert.ok(v, "validate function must exist");
 		assert.ok(v(0) !== null, "0 should be rejected — the inverter floors it to 2 % anyway");
+		assert.ok(v(0.04) !== null, "below one 0.1 W step should be rejected — it would round to P:0");
 		assert.ok(v(-5) !== null, "negative should be rejected");
 		assert.ok(v(NaN) !== null, "NaN should be rejected");
 		assert.ok(v(3276.8) !== null, "3276.8 should be rejected (signed 16-bit 0.1 W)");

@@ -1901,7 +1901,7 @@ describe("deviceContext – createDeviceAndStates", function () {
 		assert.ok(r.watt, "inverter.powerLimitWatt must be created");
 		assert.strictEqual(r.watt[1].common.unit, "W");
 		assert.strictEqual(r.watt[1].common.write, true);
-		assert.strictEqual(r.watt[1].common.min, 0);
+		assert.strictEqual(r.watt[1].common.min, 0.1);
 		assert.strictEqual(r.watt[1].common.max, 3276.7);
 		assert.ok(r.subscribed.includes("DTU_SERIAL.inverter.powerLimitWatt"));
 		assert.strictEqual(r.device[1].native.transport, "tcp");

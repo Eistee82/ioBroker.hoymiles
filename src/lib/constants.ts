@@ -118,6 +118,11 @@ export const POWER_LIMIT_MAX = 100;
  * to the 2 % floor.
  */
 export const POWER_LIMIT_WATT_MAX = 3276.7;
+/**
+ * Lower bound of the runtime watt limit: one step of its 0.1 W resolution. Anything smaller would
+ * round to `P:0` on the wire.
+ */
+export const POWER_LIMIT_WATT_MIN = 0.1;
 
 /**
  * Flash protection for power-limit writes.

@@ -1,4 +1,4 @@
-import { POWER_LIMIT_WATT_MAX } from "./constants.js";
+import { POWER_LIMIT_WATT_MAX, POWER_LIMIT_WATT_MIN } from "./constants.js";
 import { GRID_PROFILE_SCHEMA } from "./gridProfile.js";
 const n = (id, en, de, role, unit, extra) => ({
     id,
@@ -43,7 +43,7 @@ export const localTcpStates = [
     n("inverter.powerLimitWatt", "Power limit (watts, runtime)", "Leistungslimit (Watt, Laufzeit)", "level", "W", {
         source: "local",
         write: true,
-        min: 0,
+        min: POWER_LIMIT_WATT_MIN,
         max: POWER_LIMIT_WATT_MAX,
     }),
 ];

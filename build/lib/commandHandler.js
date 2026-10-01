@@ -1,4 +1,4 @@
-import { POWER_LIMIT_MIN, POWER_LIMIT_MAX, POWER_LIMIT_WATT_MAX, DEVICE_COMMAND_REBOOT, DEVICE_COMMAND_POWER_ON, DEVICE_COMMAND_POWER_OFF, DTU_COMMAND_REBOOT, DTU_COMMAND_REBOOT_STORAGE, CLOUD_DEV_TYPE_DTU, CLOUD_DEV_TYPE_MICRO, CLOUD_DEV_TYPE_STORAGE_INVERTER, } from "./constants.js";
+import { POWER_LIMIT_MIN, POWER_LIMIT_MAX, POWER_LIMIT_WATT_MAX, POWER_LIMIT_WATT_MIN, DEVICE_COMMAND_REBOOT, DEVICE_COMMAND_POWER_ON, DEVICE_COMMAND_POWER_OFF, DTU_COMMAND_REBOOT, DTU_COMMAND_REBOOT_STORAGE, CLOUD_DEV_TYPE_DTU, CLOUD_DEV_TYPE_MICRO, CLOUD_DEV_TYPE_STORAGE_INVERTER, } from "./constants.js";
 import { unixSeconds } from "./utils.js";
 export function shouldSkipFlashWrite(value, last, guard, nowMs, valueSpan = 100) {
     if (last.lastValue !== null && guard.deadband > 0) {
@@ -78,8 +78,8 @@ const COMMANDS = {
         log: v => `Setting cloud send interval to ${v}min`,
     },
     "inverter.powerLimitWatt": {
-        validate: v => !(v > 0) || v > POWER_LIMIT_WATT_MAX
-            ? `Power limit must be above 0 and at most ${POWER_LIMIT_WATT_MAX} W`
+        validate: v => !(v >= POWER_LIMIT_WATT_MIN) || v > POWER_LIMIT_WATT_MAX
+            ? `Power limit must be between ${POWER_LIMIT_WATT_MIN} and ${POWER_LIMIT_WATT_MAX} W`
             : null,
         encode: (v, ts, pb) => pb.encodeSetPowerLimitWatt(Number(v), ts),
         log: v => `Setting runtime power limit to ${v} W`,

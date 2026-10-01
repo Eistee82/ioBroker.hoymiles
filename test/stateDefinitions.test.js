@@ -190,7 +190,7 @@ describe("stateDefinitions – station", function () {
 		assert.strictEqual(def.unit, "W");
 		assert.strictEqual(def.role, "level");
 		assert.strictEqual(def.write, true);
-		assert.strictEqual(def.min, 0);
+		assert.strictEqual(def.min, 0.1, "one step of the 0.1 W resolution");
 		assert.strictEqual(def.max, 3276.7, "signed 16-bit range of 0.1 W in the inverter");
 	});
 
@@ -203,7 +203,7 @@ describe("stateDefinitions – station", function () {
 
 	it("buildStateCommon carries the value range", function () {
 		const common = buildStateCommon(localTcpStates.find(s => s.id === "inverter.powerLimitWatt"));
-		assert.strictEqual(common.min, 0);
+		assert.strictEqual(common.min, 0.1);
 		assert.strictEqual(common.max, 3276.7);
 		assert.strictEqual(common.def, 0);
 	});

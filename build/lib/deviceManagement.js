@@ -1,5 +1,5 @@
 import { DeviceManagement } from "@iobroker/dm-utils";
-import { POWER_LIMIT_WATT_MAX } from "./constants.js";
+import { POWER_LIMIT_WATT_MAX, POWER_LIMIT_WATT_MIN } from "./constants.js";
 import { MAX_PV_PORTS } from "./deviceContext.js";
 import { ACK_ICON, ACK_GROUND_ICON, inverterIcon, METER_ICON, STATION_ICON } from "./deviceIcons.js";
 import { states as DTU_STATES, stationStates as STATION_STATES } from "./stateDefinitions.js";
@@ -632,7 +632,7 @@ export const COMMAND_DEFS = [
         kind: "number",
         label: "powerLimitWatt",
         help: "helpVolatile",
-        min: 0,
+        min: POWER_LIMIT_WATT_MIN,
         max: POWER_LIMIT_WATT_MAX,
         unit: "W",
         group: "runtime",
