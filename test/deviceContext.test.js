@@ -770,6 +770,57 @@ describe("deviceContext – markStatesDisconnected", function () {
 		assert.strictEqual(newCalls.length, 0, "Second markStatesDisconnected should be a no-op");
 	});
 
+	// The reconnect used to set the cached quality back to 0 without writing anything, so an
+	// unchanged first value was skipped and the state kept q=0x42 although data flowed again.
+	it("rewrites an unchanged value after a reconnect so q=0x42 is cleared", async function () {
+		const { calls, adapter } = createTrackingAdapter();
+		const ctx = new DeviceContext({
+			adapter,
+			protobuf: null,
+			host: "",
+			enableLocal: false,
+			enableCloud: false,
+			enableCloudRelay: false,
+			dataInterval: 15,
+			slowPollFactor: 6,
+		});
+		await ctx.initFromSerial("TEST1234");
+		await ctx["setState"]("grid.power", 100, true);
+		await ctx["markStatesDisconnected"]();
+		await ctx["onConnected"]();
+
+		const callsBefore = calls.length;
+		await ctx["setStates"]([["grid.power", 100]], true);
+		const rewrites = calls.slice(callsBefore).filter(c => c[0].endsWith("grid.power"));
+		assert.strictEqual(rewrites.length, 1, "the unchanged value must be written once with good quality");
+		assert.strictEqual(rewrites[0][1], 100);
+	});
+
+	it("leaves the meter settings alone and marks only meter measurements", async function () {
+		const { calls, adapter } = createTrackingAdapter();
+		const ctx = new DeviceContext({
+			adapter,
+			protobuf: null,
+			host: "",
+			enableLocal: false,
+			enableCloud: false,
+			enableCloudRelay: false,
+			dataInterval: 15,
+			slowPollFactor: 6,
+		});
+		await ctx.initFromSerial("TEST1234");
+		await ctx["setState"]("meter.mode", 2, true);
+		await ctx["setState"]("meter.deviceId", "bc2411b807c0", true);
+		await ctx["setState"]("meter.detected", "[]", true);
+		await ctx["setState"]("meter.connected", true, true);
+		await ctx["setState"]("meter.gridPower", 120, true);
+
+		const callsBefore = calls.length;
+		await ctx["markStatesDisconnected"]();
+		const marked = calls.slice(callsBefore).map(c => c[0].replace("TEST1234.", ""));
+		assert.deepStrictEqual(marked.sort(), ["meter.connected", "meter.gridPower"]);
+	});
+
 	it("does nothing when device is not ready", async function () {
 		const { calls, adapter } = createTrackingAdapter();
 		const ctx = new DeviceContext({
@@ -5755,6 +5806,23 @@ describe("deviceContext – counter monotonicity", function () {
 		await ctx.applyRealData(realData(100000));
 		const totals = written.filter(([id]) => id.endsWith("pv0.totalEnergy")).map(([, v]) => v);
 		assert.deepStrictEqual(totals, [100.1, 100], "after a disconnect the next device starts fresh");
+	});
+
+	// value.time is milliseconds. One spot wrote seconds, another milliseconds, so the state
+	// jumped between 1970 and today.
+	it("writes info.lastResponse in milliseconds", async function () {
+		const { ctx, written } = ctxWithWrites();
+		await ctx.initFromSerial("TEST1234");
+		ctx.pvCount = 1;
+		const before = Date.now();
+		const from = written.length;
+		await ctx.applyRealData(realData(100000));
+		const stamps = written
+			.slice(from)
+			.filter(([id]) => id.endsWith("info.lastResponse"))
+			.map(([, v]) => v);
+		assert.strictEqual(stamps.length, 1, JSON.stringify(stamps));
+		assert.ok(stamps[0] >= before && stamps[0] <= Date.now(), `expected a millisecond timestamp, got ${stamps[0]}`);
 	});
 });
 

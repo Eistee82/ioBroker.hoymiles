@@ -266,7 +266,7 @@ The adapter uses ioBroker's state quality attribute (`q`) to indicate the reliab
 | Substitute | `0x40` (64) | Cloud-sourced fallback data | Inverter data fetched from the Hoymiles Cloud API instead of local TCP (cloud-only devices) |
 | Device not connected | `0x42` (66) | Stale data, device offline | DTU connection lost — values are the last known readings before disconnect. Also set on cloud station `grid.*` when the station's last cloud upload is older than ~20 min (DTU not uploading). |
 
-**Affected states:** `grid.*`, `pv*.*`, `inverter.temperature`, `inverter.active`, `inverter.warnCount`, `inverter.warnMessage`, `inverter.activePowerLimit`, `inverter.powerLimitWatt`, `meter.*` — plus the cloud station measurements `station-<id>.grid.*` (flagged `0x42` while the station is offline/stale).
+**Affected states:** `grid.*`, `pv*.*`, `inverter.temperature`, `inverter.active`, `inverter.warnCount`, `inverter.warnMessage`, `inverter.activePowerLimit`, `inverter.powerLimitWatt`, `meter.*` except the settings `meter.mode`, `meter.deviceId` and `meter.detected` — plus the cloud station measurements `station-<id>.grid.*` (flagged `0x42` while the station is offline/stale).
 
 Info states (`info.*`), config states (`config.*`), and static station-level cloud data (name, address, coordinates, warning flags) are **not** affected by quality changes.
 
@@ -315,7 +315,7 @@ hoymiles.0.station-12345.info.stationName
 | State | Type | Description |
 |-------|------|-------------|
 | `info.connected` | boolean | Device connected (local or cloud) |
-| `info.lastResponse` | number | Last response time (Unix timestamp, local only) |
+| `info.lastResponse` | number | Time of the last live-data answer from the device (Unix timestamp in milliseconds, local only) |
 
 ### `<dtuSerial>.pv0.*` / `pv1.*` / … — PV Panel Inputs (per DTU)
 
@@ -649,7 +649,7 @@ series has neither a meter input nor a regulation for it, so these states never 
 | State | Type | Unit | Writable | Description |
 |-------|------|------|----------|-------------|
 | `meter.mode` | number | — | **yes** | Operating mode: `0` = unbound (starting value, not a command), `1` = meter only, `2` = grid meter for zero export |
-| `meter.deviceId` | string | — | **yes** | MAC of the meter to bind, bare hex or with separators |
+| `meter.deviceId` | string | — | **yes** | MAC of the meter to bind, bare hex or with separators. Once a meter is bound, the device overwrites it with the MAC it reports, as 12 hex digits including leading zeros |
 | `meter.detected` | string | — | no | Meters the inverter found on the network (JSON list) |
 | `meter.connected` | boolean | — | no | Whether the meter is currently delivering data |
 | `meter.lastData` | number | — | no | Timestamp of the last meter reading |

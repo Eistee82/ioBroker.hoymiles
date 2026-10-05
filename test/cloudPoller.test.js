@@ -253,6 +253,48 @@ describe("CloudPoller – setServerSendTime", function () {
 		assert.ok(poller.pollIntervalMs >= 60000, "pollIntervalMs should be at least 60000 (MIN_POLL_MS)");
 		poller.stop();
 	});
+
+	// Every GetConfig answer reports the interval again (every 90–120 s); restarting the 5-min timer
+	// on each report kept the cloud poll from ever firing.
+	it("setServerSendTime keeps the running timer when the interval is unchanged", function () {
+		const adapter = makeMockAdapter();
+		let cleared = 0;
+		adapter.clearTimeout = id => {
+			cleared++;
+			globalThis.clearTimeout(id);
+		};
+		const poller = makePoller({ adapter });
+		poller.state = "POLLING_ACTIVE";
+		const timer = adapter.setTimeout(() => {}, 60000);
+		poller.pollTimer = timer;
+
+		poller.setServerSendTime(5);
+		poller.setServerSendTime(5);
+
+		assert.strictEqual(cleared, 0, "an unchanged interval must not restart the timer");
+		assert.strictEqual(poller.pollTimer, timer);
+		poller.stop();
+	});
+
+	it("setServerSendTime restarts the running timer when the interval changes", function () {
+		const adapter = makeMockAdapter();
+		let cleared = 0;
+		adapter.clearTimeout = id => {
+			cleared++;
+			globalThis.clearTimeout(id);
+		};
+		const poller = makePoller({ adapter });
+		poller.state = "POLLING_ACTIVE";
+		const timer = adapter.setTimeout(() => {}, 60000);
+		poller.pollTimer = timer;
+
+		poller.setServerSendTime(10);
+
+		assert.strictEqual(cleared, 1, "a changed interval must reschedule");
+		assert.notStrictEqual(poller.pollTimer, timer);
+		assert.strictEqual(poller.pollIntervalMs, 600000);
+		poller.stop();
+	});
 });
 
 // ============================================================

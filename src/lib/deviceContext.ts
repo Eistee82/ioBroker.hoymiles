@@ -498,10 +498,13 @@ class DeviceContext {
 		if (this.deviceId) {
 			await this.adapter.setStateAsync(`${this.deviceId}.info.connected`, true, true);
 		}
-		// Reset cache quality so first data after reconnect is written even if values match
-		for (const [, cached] of this.stateCache) {
+		// Forget the states marked disconnected, so the first data after the reconnect is written
+		// even when the value has not changed. Setting the cached quality to 0 instead claimed a good
+		// quality the stored state did not have: an unchanged value was then skipped, and the state
+		// kept q=0x42 although the device was delivering again.
+		for (const [stateId, cached] of this.stateCache) {
 			if (cached.q === DeviceContext.Q_DEVICE_DISCONNECTED) {
-				cached.q = 0;
+				this.stateCache.delete(stateId);
 			}
 		}
 		await this.updateAdapterConnectionState();
@@ -1292,10 +1295,6 @@ class DeviceContext {
 					}
 				}
 			}
-
-			if (this.deviceId) {
-				await this.adapter.setStateAsync(`${this.deviceId}.info.lastResponse`, Date.now(), true);
-			}
 		} finally {
 			this.pollBusy = false;
 		}
@@ -1580,9 +1579,13 @@ class DeviceContext {
 		}
 	}
 
-	/** Regex matching data-channel state IDs that should receive quality updates on disconnect. */
+	/**
+	 * Regex matching data-channel state IDs that should receive quality updates on disconnect.
+	 * `meter.mode`, `meter.deviceId` and `meter.detected` are settings and the result of a search,
+	 * not measurements, and stay as they are.
+	 */
 	private static readonly DATA_STATE_PATTERN =
-		/^(grid\.|pv\d+\.|inverter\.(temperature|active|warnCount|warnMessage|activePowerLimit|powerLimitWatt)|meter\.)/;
+		/^(grid\.|pv\d+\.|inverter\.(temperature|active|warnCount|warnMessage|activePowerLimit|powerLimitWatt)|meter\.(?!(mode|deviceId|detected)$))/;
 
 	/**
 	 * Mark all cached data states as disconnected (q=0x42).
@@ -1825,7 +1828,10 @@ class DeviceContext {
 			const dailyEnergyWh = data.dtuDailyEnergy > 0 ? data.dtuDailyEnergy : pvDailyWh;
 
 			const entries: Array<[string, ioBroker.StateValue]> = [
-				["info.lastResponse", unixSeconds()],
+				// Milliseconds, as `value.time` expects. Written where an answer actually arrived — the
+				// poll tick used to write it as well, in milliseconds and even without any answer,
+				// while this spot wrote seconds.
+				["info.lastResponse", Date.now()],
 				["inverter.active", data.sgs.length > 0 && (data.dtuPower > 0 || sgsPower > 0)],
 				["grid.dailyEnergy", whToKwh(dailyEnergyWh)],
 			];

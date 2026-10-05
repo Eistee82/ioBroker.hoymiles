@@ -59,6 +59,9 @@ describe("commandHandler – COMMANDS", function () {
 		assert.ok(v);
 		assert.ok(v(1) !== null, "1 should be rejected");
 		assert.ok(v(101) !== null, "101 should be rejected");
+		// A non-numeric state value arrives as NaN; it must not pass, or "A:NaN" reaches the DTU,
+		// whose atoi reads it as 0 — a limit of 0 %.
+		assert.ok(v(NaN) !== null, "NaN should be rejected");
 		assert.strictEqual(v(2), null, "2 should be valid");
 		assert.strictEqual(v(100), null, "100 should be valid");
 		assert.strictEqual(v(50), null, "50 should be valid");
@@ -69,6 +72,7 @@ describe("commandHandler – COMMANDS", function () {
 		assert.ok(v);
 		assert.ok(v(0) !== null, "0 should be rejected");
 		assert.ok(v(0.5) !== null, "0.5 should be rejected");
+		assert.ok(v(NaN) !== null, "NaN should be rejected");
 		assert.strictEqual(v(0.9), null, "0.9 should be valid");
 		assert.strictEqual(v(-0.9), null, "-0.9 should be valid");
 		assert.strictEqual(v(1), null, "1 should be valid");
@@ -80,6 +84,7 @@ describe("commandHandler – COMMANDS", function () {
 		assert.ok(v);
 		assert.ok(v(-51) !== null, "-51 should be rejected");
 		assert.ok(v(51) !== null, "51 should be rejected");
+		assert.ok(v(NaN) !== null, "NaN should be rejected");
 		assert.strictEqual(v(0), null, "0 should be valid");
 		assert.strictEqual(v(-50), null, "-50 should be valid");
 		assert.strictEqual(v(50), null, "50 should be valid");
@@ -90,6 +95,7 @@ describe("commandHandler – COMMANDS", function () {
 		assert.ok(v);
 		assert.ok(v(0) !== null, "0 should be rejected");
 		assert.ok(v(-1) !== null, "-1 should be rejected");
+		assert.ok(v(NaN) !== null, "NaN should be rejected");
 		assert.strictEqual(v(1), null, "1 should be valid");
 		assert.strictEqual(v(5), null, "5 should be valid");
 	});

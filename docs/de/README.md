@@ -269,7 +269,7 @@ Der Adapter nutzt das ioBroker State-Quality-Attribut (`q`), um die Zuverlässig
 | Ersatzwert | `0x40` (64) | Cloud-Daten als Fallback | Wechselrichter-Daten von der Hoymiles Cloud-API statt lokal (Cloud-only Geräte) |
 | Gerät nicht verbunden | `0x42` (66) | Veraltete Daten, Gerät offline | DTU-Verbindung verloren — Werte sind die letzten bekannten Messwerte vor dem Disconnect. Wird auch bei Cloud-Station-`grid.*` gesetzt, wenn der letzte Cloud-Upload der Station älter als ~20 min ist (DTU sendet nicht). |
 
-**Betroffene Datenpunkte:** `grid.*`, `pv*.*`, `inverter.temperature`, `inverter.active`, `inverter.warnCount`, `inverter.warnMessage`, `inverter.activePowerLimit`, `inverter.powerLimitWatt`, `meter.*` — sowie die Cloud-Station-Messwerte `station-<id>.grid.*` (mit `0x42` markiert, solange die Station offline/veraltet ist).
+**Betroffene Datenpunkte:** `grid.*`, `pv*.*`, `inverter.temperature`, `inverter.active`, `inverter.warnCount`, `inverter.warnMessage`, `inverter.activePowerLimit`, `inverter.powerLimitWatt`, `meter.*` außer den Einstellungen `meter.mode`, `meter.deviceId` und `meter.detected` — sowie die Cloud-Station-Messwerte `station-<id>.grid.*` (mit `0x42` markiert, solange die Station offline/veraltet ist).
 
 Info-States (`info.*`), Config-States (`config.*`) und statische Cloud-Stationsdaten (Name, Adresse, Koordinaten, Warn-Flags) werden **nicht** von Quality-Änderungen betroffen.
 
@@ -318,7 +318,7 @@ hoymiles.0.station-12345.info.stationName
 | Datenpunkt | Typ | Beschreibung |
 |------------|-----|--------------|
 | `info.connected` | boolean | Gerät verbunden (lokal oder Cloud) |
-| `info.lastResponse` | number | Letzte Antwortzeit (Unix-Timestamp, nur lokal) |
+| `info.lastResponse` | number | Zeitpunkt der letzten Live-Daten-Antwort des Geräts (Unix-Timestamp in Millisekunden, nur lokal) |
 
 ### `<dtuSerial>.pv0.*` / `pv1.*` / … — PV-Eingänge (pro DTU)
 
@@ -654,7 +654,7 @@ Datenpunkte nie.
 | Datenpunkt | Typ | Einheit | Schreibbar | Beschreibung |
 |------------|-----|---------|------------|--------------|
 | `meter.mode` | number | — | **ja** | Betriebsart: `0` = nicht gekoppelt (Startwert, kein Befehl), `1` = nur auslesen, `2` = Netzzähler für Nulleinspeisung |
-| `meter.deviceId` | string | — | **ja** | MAC des zu koppelnden Zählers, reines Hex oder mit Trennzeichen |
+| `meter.deviceId` | string | — | **ja** | MAC des zu koppelnden Zählers, reines Hex oder mit Trennzeichen. Ist ein Zähler gekoppelt, überschreibt das Gerät den Wert mit der gemeldeten MAC, 12 Hex-Ziffern einschließlich führender Nullen |
 | `meter.detected` | string | — | nein | Vom Wechselrichter im Netz gefundene Zähler (JSON-Liste) |
 | `meter.connected` | boolean | — | nein | Ob der Zähler gerade Daten liefert |
 | `meter.lastData` | number | — | nein | Zeitstempel der letzten Zählermessung |

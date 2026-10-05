@@ -153,6 +153,14 @@ describe("shellyProtocol — metering devices (fields 14/15)", function () {
 		assert.deepStrictEqual(devices[0].phases, [{ phase: 1, voltage: 230.1, current: 12.34, activePower: 456 }]);
 	});
 
+	it("keeps the leading zero of a meter MAC", function () {
+		// 08:f9:e0:12:34:56 is a 48-bit number below 2^44; plain toString(16) would drop the zero.
+		const devices = parseMeterDevices(meterPayload(14, 0x08f9e0123456n, [[1, 2301, 1234, 4560]]));
+		assert.strictEqual(devices[0].serial, "08f9e0123456");
+		assert.doesNotThrow(() => buildShellyBindData(devices[0].serial, SHELLY_DEV_TYPE_GRID));
+		assert.strictEqual(parseMeterDevices(meterPayload(15, 0xffn, [[1, 0, 0, 0]]))[0].serial, "0000000000ff");
+	});
+
 	it("reads all three phases with their own numbers", function () {
 		const devices = parseMeterDevices(
 			meterPayload(14, 1n, [

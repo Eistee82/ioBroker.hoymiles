@@ -123,9 +123,10 @@ export function parseMeterDevices(payload) {
                 activePower: (slots.get(4) ?? 0) / SCALE_METER_POWER,
             };
         });
+        const id = headFields.get(1);
         devices.push({
             field: field.no,
-            serial: headFields.has(1) ? headFields.get(1).toString(16) : "",
+            serial: id ? id.toString(16).padStart(12, "0") : "",
             phases,
             frequency: asInt32(headFields.get(3) ?? 0n),
             energyImport: asInt32(headFields.get(4) ?? 0n),

@@ -149,6 +149,11 @@ Cloud stations create aggregated device nodes (e.g. `hoymiles.0.station-12345.*`
 ## Changelog
 ### **WORK IN PROGRESS**
 
+- (@Eistee82) **The cloud poll runs again while no relay is active.** Every configuration answer from the DTU (every 90–120 s) restarted the 5-minute cloud timer, so it never fired. It now restarts only when the interval actually changes
+- (@Eistee82) **Power limit and reactive power reject non-numeric values.** Such a value used to pass the check and reach the DTU as a limit of 0 %
+- (@Eistee82) **A meter MAC with a leading zero is shown with all 12 digits** (`meter.deviceId`), so it can be bound again
+- (@Eistee82) **`info.lastResponse` is always in milliseconds** and is only written when live data actually arrived; it used to switch between seconds and milliseconds
+- (@Eistee82) **After a reconnect the states lose the "not connected" quality (0x42) again** even when the value did not change. `meter.mode`, `meter.deviceId` and `meter.detected` are no longer marked as not connected on a disconnect
 - (@Eistee82) **Commands work again on DTUs with firmware V01.01.01.** Power limit, on/off, reboot, lock and settings changes were sent to such a DTU unencrypted. The DTU answered, but could not decrypt the command and carried it out with an empty content, so nothing happened even though the log looked fine
 - (@Eistee82) **New runtime power limit in watts for the HMS-800W-2T family** (`inverter.powerLimitWatt`, local TCP only). It takes effect immediately and writes neither the DTU's flash nor the inverter's memory, so a zero-export control can set it as often as it needs to. It is gone when the inverter restarts (every night); then the percentage in `inverter.powerLimit` applies again. The WB series does not have this command. Both power limits are now confirmed only when the DTU reports them back, so the state shows what the DTU actually took over
 - (@Eistee82) **Removed `config.limitPowerMyPower`:** setting it only changed a value inside the DTU that never reached the inverter and was gone after a restart. Use `inverter.powerLimit` (percent, kept across restarts) or `inverter.powerLimitWatt`. The state disappears from existing installations by itself

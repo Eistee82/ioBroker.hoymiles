@@ -248,9 +248,9 @@ class DeviceContext {
         if (this.deviceId) {
             await this.adapter.setStateAsync(`${this.deviceId}.info.connected`, true, true);
         }
-        for (const [, cached] of this.stateCache) {
+        for (const [stateId, cached] of this.stateCache) {
             if (cached.q === DeviceContext.Q_DEVICE_DISCONNECTED) {
-                cached.q = 0;
+                this.stateCache.delete(stateId);
             }
         }
         await this.updateAdapterConnectionState();
@@ -762,9 +762,6 @@ class DeviceContext {
                     }
                 }
             }
-            if (this.deviceId) {
-                await this.adapter.setStateAsync(`${this.deviceId}.info.lastResponse`, Date.now(), true);
-            }
         }
         finally {
             this.pollBusy = false;
@@ -934,7 +931,7 @@ class DeviceContext {
             }
         }
     }
-    static DATA_STATE_PATTERN = /^(grid\.|pv\d+\.|inverter\.(temperature|active|warnCount|warnMessage|activePowerLimit|powerLimitWatt)|meter\.)/;
+    static DATA_STATE_PATTERN = /^(grid\.|pv\d+\.|inverter\.(temperature|active|warnCount|warnMessage|activePowerLimit|powerLimitWatt)|meter\.(?!(mode|deviceId|detected)$))/;
     async markStatesDisconnected() {
         if (!this.ready) {
             return;
@@ -1078,7 +1075,7 @@ class DeviceContext {
             const pvDailyWh = data.pv.reduce((sum, pv) => sum + (pv.energyDaily || 0), 0);
             const dailyEnergyWh = data.dtuDailyEnergy > 0 ? data.dtuDailyEnergy : pvDailyWh;
             const entries = [
-                ["info.lastResponse", unixSeconds()],
+                ["info.lastResponse", Date.now()],
                 ["inverter.active", data.sgs.length > 0 && (data.dtuPower > 0 || sgsPower > 0)],
                 ["grid.dailyEnergy", whToKwh(dailyEnergyWh)],
             ];

@@ -394,7 +394,14 @@ class CloudPoller {
 		if (minutes <= 0) {
 			return;
 		}
-		this.pollIntervalMs = Math.max(minutes * 60 * 1000, MIN_POLL_MS);
+		const intervalMs = Math.max(minutes * 60 * 1000, MIN_POLL_MS);
+		// Every GetConfig answer reports the interval again — every 90–120 s, more often than the
+		// interval itself. Restarting the timer on each report would keep pushing the poll out, so
+		// it never fired. Only a changed interval reschedules.
+		if (intervalMs === this.pollIntervalMs) {
+			return;
+		}
+		this.pollIntervalMs = intervalMs;
 		// Restart poll timer if actively self-scheduling
 		if (this.state === "POLLING_ACTIVE" && this.pollTimer) {
 			this.adapter.clearTimeout(this.pollTimer);

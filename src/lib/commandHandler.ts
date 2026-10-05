@@ -175,8 +175,10 @@ export function flashWritingStateForAction(action: number): string | null {
 
 const COMMANDS: Record<string, CommandDefinition> = {
 	"inverter.powerLimit": {
+		// Written as a negated range test so NaN fails it: a non-numeric value would otherwise pass
+		// and go out as "A:NaN", which the DTU reads with atoi as 0 — a limit of 0 %.
 		validate: v =>
-			v < POWER_LIMIT_MIN || v > POWER_LIMIT_MAX
+			!(v >= POWER_LIMIT_MIN && v <= POWER_LIMIT_MAX)
 				? `Power limit must be between ${POWER_LIMIT_MIN} and ${POWER_LIMIT_MAX}`
 				: null,
 		encode: (v, ts, pb) => pb.encodeSetPowerLimit(Number(v), ts),
@@ -209,7 +211,7 @@ const COMMANDS: Record<string, CommandDefinition> = {
 		valueSpan: 2,
 	},
 	"inverter.reactivePowerLimit": {
-		validate: v => (v < -50 || v > 50 ? "Reactive power limit must be -50…+50°" : null),
+		validate: v => (!(v >= -50 && v <= 50) ? "Reactive power limit must be -50…+50°" : null),
 		encode: (v, ts, pb) => pb.encodeReactivePowerLimit(Number(v), ts),
 		log: v => `Setting reactive power limit to ${v}°`,
 		// action 48 (0x30), same success path and the same two flash sectors.

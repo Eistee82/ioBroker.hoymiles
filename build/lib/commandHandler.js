@@ -21,7 +21,7 @@ export function flashWritingStateForAction(action) {
 }
 const COMMANDS = {
     "inverter.powerLimit": {
-        validate: v => v < POWER_LIMIT_MIN || v > POWER_LIMIT_MAX
+        validate: v => !(v >= POWER_LIMIT_MIN && v <= POWER_LIMIT_MAX)
             ? `Power limit must be between ${POWER_LIMIT_MIN} and ${POWER_LIMIT_MAX}`
             : null,
         encode: (v, ts, pb) => pb.encodeSetPowerLimit(Number(v), ts),
@@ -52,7 +52,7 @@ const COMMANDS = {
         valueSpan: 2,
     },
     "inverter.reactivePowerLimit": {
-        validate: v => (v < -50 || v > 50 ? "Reactive power limit must be -50…+50°" : null),
+        validate: v => (!(v >= -50 && v <= 50) ? "Reactive power limit must be -50…+50°" : null),
         encode: (v, ts, pb) => pb.encodeReactivePowerLimit(Number(v), ts),
         log: v => `Setting reactive power limit to ${v}°`,
         writesFlash: true,
