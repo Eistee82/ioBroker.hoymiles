@@ -371,7 +371,7 @@ Die Anzahl ermittelt der Adapter in dieser Reihenfolge:
 | `dtu.swVersion` | string | — | Software-Version |
 | `dtu.hwVersion` | string | — | Hardware-Version |
 | `dtu.signalQuality` | number | % | WLAN-Signalqualität (0–100, **kein dBm** — die DTU meldet dieselbe abgeleitete Qualität wie `config.wifiSignalQuality`) |
-| `dtu.reboot` | boolean | — | DTU neustarten (**schreibbar**). Wird über die lokale TCP-Verbindung gesendet, falls verbunden, sonst über die Cloud für cloud-only-Geräte (z. B. HMS-800-2WB) |
+| `dtu.reboot` | boolean | — | DTU neustarten (**schreibbar**). Wird über die lokale Verbindung (TCP oder Bluetooth) gesendet, falls verbunden, sonst über die Cloud für cloud-only-Geräte |
 | `dtu.wifiVersion` | string | — | WLAN-Version |
 | `dtu.fwUpdateAvailable` | boolean | — | Firmware-Update verfügbar (1x täglich via Cloud geprüft) |
 | `dtu.stepTime` | number | s | Schrittzeit |

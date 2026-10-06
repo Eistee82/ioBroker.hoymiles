@@ -314,11 +314,11 @@ describe("protobufHandler", function () {
 	});
 
 	describe("encodeDtuReboot", function () {
-		it("creates valid message with correct command bytes", function () {
+		it("creates valid message with the local command tag 0xa305", function () {
 			const msg = handler.encodeDtuReboot(1700000000);
 			assert.ok(Buffer.isBuffer(msg));
 			assert.ok(msg.length > HEADER_SIZE);
-			assert.strictEqual(msg[2], 0x23);
+			assert.strictEqual(msg[2], 0xa3);
 			assert.strictEqual(msg[3], 0x05);
 		});
 
@@ -414,9 +414,9 @@ describe("protobufHandler – additional encoders", function () {
 		assert.strictEqual(obj.action, ACTION.READ_MI_HU_WARN);
 	});
 
-	it("encodeInverterOn creates valid message with MI_START via COMMAND_CLOUD", function () {
+	it("encodeInverterOn creates valid message with MI_START via the local tag 0xa305", function () {
 		const msg = handler.encodeInverterOn(1700000000);
-		assert.strictEqual(msg[2], 0x23); // COMMAND_CLOUD
+		assert.strictEqual(msg[2], 0xa3);
 		assert.strictEqual(msg[3], 0x05);
 		const parsed = handler.parseResponse(msg);
 		const ResDTO = handler.protos.CommandPB.lookupType("CommandResDTO");
@@ -424,22 +424,38 @@ describe("protobufHandler – additional encoders", function () {
 		assert.strictEqual(obj.action, ACTION.MI_START);
 	});
 
-	it("encodeInverterOff creates valid message with MI_SHUTDOWN via COMMAND_CLOUD", function () {
+	it("encodeInverterOff creates valid message with MI_SHUTDOWN via the local tag 0xa305", function () {
 		const msg = handler.encodeInverterOff(1700000000);
-		assert.strictEqual(msg[2], 0x23);
+		assert.strictEqual(msg[2], 0xa3);
 		const parsed = handler.parseResponse(msg);
 		const ResDTO = handler.protos.CommandPB.lookupType("CommandResDTO");
 		const obj = ResDTO.toObject(ResDTO.decode(parsed.payload), { longs: Number, defaults: true });
 		assert.strictEqual(obj.action, ACTION.MI_SHUTDOWN);
 	});
 
-	it("encodeInverterReboot creates valid message with INV_REBOOT via COMMAND_CLOUD", function () {
+	it("encodeInverterReboot creates valid message with INV_REBOOT via the local tag 0xa305", function () {
 		const msg = handler.encodeInverterReboot(1700000000);
-		assert.strictEqual(msg[2], 0x23);
+		assert.strictEqual(msg[2], 0xa3);
 		const parsed = handler.parseResponse(msg);
 		const ResDTO = handler.protos.CommandPB.lookupType("CommandResDTO");
 		const obj = ResDTO.toObject(ResDTO.decode(parsed.payload), { longs: Number, defaults: true });
 		assert.strictEqual(obj.action, ACTION.INV_REBOOT);
+	});
+
+	// Measured 2026-10-06: over BLE the 2WB ignores the cloud tag 0x2305, the 2T runs it but
+	// answers towards the cloud only. All six device commands must use the local tag.
+	it("sends on/off, both reboots and lock/unlock with the local command tag, never 0x2305", function () {
+		for (const name of [
+			"encodeInverterOn",
+			"encodeInverterOff",
+			"encodeInverterReboot",
+			"encodeDtuReboot",
+			"encodeLockInverter",
+			"encodeUnlockInverter",
+		]) {
+			const msg = handler[name](1700000000);
+			assert.strictEqual(msg.readUInt16BE(2), 0xa305, `${name} must use 0xa305`);
+		}
 	});
 
 	it("encodeSetConfig creates valid message with SET_CONFIG command", function () {

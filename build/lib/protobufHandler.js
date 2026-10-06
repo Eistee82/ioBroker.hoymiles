@@ -266,13 +266,13 @@ class ProtobufHandler {
         return this.encodeCommandAction(ACTION.LIMIT_POWER_RUNTIME, timestamp, `S:1,P:${Math.round(watts * 10)}\r`);
     }
     encodeInverterOn(timestamp) {
-        return this.encodeCommandAction(ACTION.MI_START, timestamp, undefined, CMD.COMMAND_CLOUD);
+        return this.encodeCommandAction(ACTION.MI_START, timestamp);
     }
     encodeInverterOff(timestamp) {
-        return this.encodeCommandAction(ACTION.MI_SHUTDOWN, timestamp, undefined, CMD.COMMAND_CLOUD);
+        return this.encodeCommandAction(ACTION.MI_SHUTDOWN, timestamp);
     }
     encodeInverterReboot(timestamp) {
-        return this.encodeCommandAction(ACTION.INV_REBOOT, timestamp, undefined, CMD.COMMAND_CLOUD);
+        return this.encodeCommandAction(ACTION.INV_REBOOT, timestamp);
     }
     encodeSetConfig(timestamp, config, base) {
         const ResDTO = this.getType("SetConfig", "SetConfigResDTO");
@@ -326,7 +326,7 @@ class ProtobufHandler {
         return this.buildMessage(CMD.HEARTBEAT[0], CMD.HEARTBEAT[1], payload);
     }
     encodeDtuReboot(timestamp) {
-        return this.encodeCommandAction(ACTION.DTU_REBOOT, timestamp, undefined, CMD.COMMAND_CLOUD);
+        return this.encodeCommandAction(ACTION.DTU_REBOOT, timestamp);
     }
     encodePerformanceDataMode(timestamp) {
         return this.encodeCommandAction(ACTION.PERFORMANCE_DATA_MODE, timestamp);
@@ -344,10 +344,10 @@ class ProtobufHandler {
         return this.encodeCommandAction(ACTION.CLEAN_GROUNDING_FAULT, timestamp);
     }
     encodeLockInverter(timestamp) {
-        return this.encodeCommandAction(ACTION.LOCK, timestamp, undefined, CMD.COMMAND_CLOUD);
+        return this.encodeCommandAction(ACTION.LOCK, timestamp);
     }
     encodeUnlockInverter(timestamp) {
-        return this.encodeCommandAction(ACTION.UNLOCK, timestamp, undefined, CMD.COMMAND_CLOUD);
+        return this.encodeCommandAction(ACTION.UNLOCK, timestamp);
     }
     encodeDevConfigFetch(timestamp, dtuSn, devSn, currentPackage = 0) {
         const ResDTO = this.getType("DevConfig", "DevConfigFetchResDTO");

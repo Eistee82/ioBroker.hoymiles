@@ -532,13 +532,21 @@ class ProtobufHandler {
 		return this.encodeCommandAction(ACTION.LIMIT_POWER_RUNTIME, timestamp, `S:1,P:${Math.round(watts * 10)}\r`);
 	}
 
+	// On/off, the two reboots and lock/unlock go out with the local command tag 0xa305, like
+	// every other local command. They used to carry the cloud tag 0x2305. Measured 2026-10-06:
+	// over BLE the 2WB ignores 0x2305 (no answer, a DTU reboot does not happen), while 0xa305
+	// works and is answered with 0xa205. The 2T runs 0x2305 locally too, but answers it towards
+	// the cloud only — both tags enter the same action handler (0x4081509e / 0x40816576 ->
+	// 0x40813acc); they only differ in where the answer goes (gp-108278 cloud, gp-108276 local).
+	// See _fwanalysis/LIVE_TESTLOG_2026-10-06.md.
+
 	/**
 	 * Turn inverter on.
 	 *
 	 * @param timestamp - Unix timestamp in seconds
 	 */
 	encodeInverterOn(timestamp: number): Buffer {
-		return this.encodeCommandAction(ACTION.MI_START, timestamp, undefined, CMD.COMMAND_CLOUD);
+		return this.encodeCommandAction(ACTION.MI_START, timestamp);
 	}
 
 	/**
@@ -547,7 +555,7 @@ class ProtobufHandler {
 	 * @param timestamp - Unix timestamp in seconds
 	 */
 	encodeInverterOff(timestamp: number): Buffer {
-		return this.encodeCommandAction(ACTION.MI_SHUTDOWN, timestamp, undefined, CMD.COMMAND_CLOUD);
+		return this.encodeCommandAction(ACTION.MI_SHUTDOWN, timestamp);
 	}
 
 	/**
@@ -556,7 +564,7 @@ class ProtobufHandler {
 	 * @param timestamp - Unix timestamp in seconds
 	 */
 	encodeInverterReboot(timestamp: number): Buffer {
-		return this.encodeCommandAction(ACTION.INV_REBOOT, timestamp, undefined, CMD.COMMAND_CLOUD);
+		return this.encodeCommandAction(ACTION.INV_REBOOT, timestamp);
 	}
 
 	/**
@@ -678,7 +686,7 @@ class ProtobufHandler {
 	 * @param timestamp - Unix timestamp in seconds
 	 */
 	encodeDtuReboot(timestamp: number): Buffer {
-		return this.encodeCommandAction(ACTION.DTU_REBOOT, timestamp, undefined, CMD.COMMAND_CLOUD);
+		return this.encodeCommandAction(ACTION.DTU_REBOOT, timestamp);
 	}
 
 	/**
@@ -742,7 +750,7 @@ class ProtobufHandler {
 	 * @param timestamp - Unix timestamp in seconds
 	 */
 	encodeLockInverter(timestamp: number): Buffer {
-		return this.encodeCommandAction(ACTION.LOCK, timestamp, undefined, CMD.COMMAND_CLOUD);
+		return this.encodeCommandAction(ACTION.LOCK, timestamp);
 	}
 
 	/**
@@ -751,7 +759,7 @@ class ProtobufHandler {
 	 * @param timestamp - Unix timestamp in seconds
 	 */
 	encodeUnlockInverter(timestamp: number): Buffer {
-		return this.encodeCommandAction(ACTION.UNLOCK, timestamp, undefined, CMD.COMMAND_CLOUD);
+		return this.encodeCommandAction(ACTION.UNLOCK, timestamp);
 	}
 
 	/**
