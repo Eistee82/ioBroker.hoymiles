@@ -12,9 +12,9 @@ const ACTION_STATUS = 64;
 const ACTION_PIN_VERIFY = 82;
 const STS_RUNNING = 0;
 const STS_PAIRED = 1;
-const STS_FAILED = 2;
+const STS_NOT_EVALUATED = 2;
 const STS_PIN_NEEDED = 3;
-const STS_PIN_REJECTED = 4;
+const STS_LOCKED = 4;
 const MTU_GUARD = 4096;
 const RECONNECT_DELAY_MIN_MS = 5000;
 const GATT_CONNECT_TRIES = 6;
@@ -45,6 +45,7 @@ export class BleConnection extends EventEmitter {
     establishing;
     state;
     encRand;
+    lockedWarned;
     clockOffset;
     seq;
     writeHandle;
@@ -74,6 +75,7 @@ export class BleConnection extends EventEmitter {
         this.establishing = false;
         this.state = "idle";
         this.encRand = null;
+        this.lockedWarned = false;
         this.clockOffset = 0;
         this.seq = 0;
         this.writeHandle = null;
@@ -329,6 +331,7 @@ export class BleConnection extends EventEmitter {
             this.state = "paired";
             this.connected = true;
             this.reconnectDelay = RECONNECT_DELAY_MIN_MS;
+            this.lockedWarned = false;
             this.log.info(`[ble ${this.macStr()}] paired`);
             this.emit("connected");
         }
@@ -355,16 +358,22 @@ export class BleConnection extends EventEmitter {
             case STS_PAIRED:
                 this.markPaired();
                 break;
-            case STS_FAILED:
-                this.failPairing("pairing rejected by device");
+            case STS_LOCKED:
+                this.waitWhileLocked();
                 break;
-            case STS_PIN_REJECTED:
-                this.failPairing("PIN rejected");
-                break;
+            case STS_NOT_EVALUATED:
             case STS_RUNNING:
             default:
                 break;
         }
+    }
+    waitWhileLocked() {
+        if (!this.lockedWarned) {
+            this.lockedWarned = true;
+            this.log.warn(`[ble ${this.macStr()}] the DTU reports itself locked (too many wrong PIN attempts, or locked in the app) — retrying later`);
+        }
+        this.teardownSession();
+        this.scheduleReconnect();
     }
     failPairing(reason) {
         if (this.destroyed) {

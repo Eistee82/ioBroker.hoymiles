@@ -381,7 +381,9 @@ describe("BleConnection", function () {
 		conn.disconnect();
 	});
 
-	it("emits pairingFailed and stops on a rejected PIN (sts=4)", async function () {
+	// Firmware: sts 4 on the base status means "DTU locked" (lock_state == 1), not "PIN wrong". The
+	// connection must not stop for good — it retries later and sends no PIN while locked.
+	it("treats sts=4 on the base status as a locked DTU and retries later instead of stopping", async function () {
 		const gateway = new FakeGateway();
 		const { timers, ctl } = makeTimers();
 		const conn = new BleConnection({ gateway, mac: MAC, sn: SN, pin: PIN, timers, log: silentLog });
@@ -396,12 +398,33 @@ describe("BleConnection", function () {
 		gateway.push(bootstrapFrame(1));
 		await ctl.fireTick();
 		await ctl.fireTick();
-		gateway.push(statusFrame(3, 2)); // PIN needed
-		await ctl.fireTick(); // send PIN
-		gateway.push(statusFrame(4, 3)); // rejected
+		gateway.push(statusFrame(4, 2)); // locked
 
-		assert.ok(failReason && /PIN/i.test(failReason), `pairingFailed with reason, got: ${failReason}`);
+		assert.strictEqual(failReason, null, "a locked DTU must not stop the connection for good");
 		assert.strictEqual(conn.connected, false);
+		assert.ok(reconnectDelays(ctl).length >= 1, "a reconnect must be scheduled");
+		conn.disconnect();
+	});
+
+	// Firmware: sts 2 is the status cell's start value until the first action 64 is evaluated.
+	it("keeps polling on sts=2 (not evaluated yet) and pairs on the next sts=1", async function () {
+		const gateway = new FakeGateway();
+		const { timers, ctl } = makeTimers();
+		const conn = new BleConnection({ gateway, mac: MAC, sn: SN, pin: PIN, timers, log: silentLog });
+		let failReason = null;
+		conn.on("pairingFailed", r => {
+			failReason = r;
+		});
+		conn.connect();
+		await sleep(50);
+		gateway.push(bootstrapFrame(1));
+		await ctl.fireTick();
+		await ctl.fireTick();
+		gateway.push(statusFrame(2, 2)); // not evaluated yet
+		assert.strictEqual(failReason, null, "sts=2 must not fail the pairing");
+		assert.strictEqual(conn.connected, false);
+		gateway.push(statusFrame(1, 3)); // paired
+		assert.strictEqual(conn.connected, true);
 		conn.disconnect();
 	});
 

@@ -34,9 +34,9 @@ const ACTION_PIN_VERIFY = 82; // verify an existing PIN
 // NOTE: the meaning of `sts` depends on which action was polled — see handleStatus().
 const STS_RUNNING = 0;
 const STS_PAIRED = 1;
-const STS_FAILED = 2;
+const STS_NOT_EVALUATED = 2;
 const STS_PIN_NEEDED = 3;
-const STS_PIN_REJECTED = 4;
+const STS_LOCKED = 4;
 
 const MTU_GUARD = 4096;
 /** First reconnect delay; doubles per failed round up to {@link RECONNECT_MAX_MS}. */
@@ -114,6 +114,8 @@ export class BleConnection extends EventEmitter {
 	private establishing: boolean;
 	private state: HandshakeState;
 	private encRand: Buffer | null;
+	/** Set once the "DTU is locked" warning was logged; cleared when a session pairs. */
+	private lockedWarned: boolean;
 	/** DTU clock minus host clock (a201 field 2), so the handshake's own requests fit the ±60 s window. */
 	private clockOffset: number;
 	private seq: number;
@@ -151,6 +153,7 @@ export class BleConnection extends EventEmitter {
 		this.establishing = false;
 		this.state = "idle";
 		this.encRand = null;
+		this.lockedWarned = false;
 		this.clockOffset = 0;
 		this.seq = 0;
 		this.writeHandle = null;
@@ -459,6 +462,7 @@ export class BleConnection extends EventEmitter {
 			this.state = "paired";
 			this.connected = true;
 			this.reconnectDelay = RECONNECT_DELAY_MIN_MS; // a good session earns a prompt retry again
+			this.lockedWarned = false;
 			this.log.info(`[ble ${this.macStr()}] paired`);
 			this.emit("connected");
 		}
@@ -466,9 +470,14 @@ export class BleConnection extends EventEmitter {
 
 	private handleStatus(plain: Buffer): void {
 		// The status response echoes the polled action in field 3. Its meaning of `sts` (field 11)
-		// differs by action (app-verified, see BleMasterSlaveScanPageActivity$getPinCmdStatusFromDevice):
-		//   action 64 (base): 1 = OK/paired, 3 = PIN needed, 2/4 = failed, 0 = keep polling.
-		//   action 82 (PIN):  0 = PIN ACCEPTED, anything else = rejected  ← inverted vs. base.
+		// differs by action:
+		//   action 64 (base), firmware-proven (2WB, status cell 0x90d28): the cell starts at 2 (.data)
+		//     and only the action-64 arm writes it — 1 = whitelisted/paired (0x408141b6), 3 = PIN
+		//     needed (0x408141c4), 4 = DTU locked, lock_state == 1 (0x4081417a). So 2 means "not
+		//     evaluated yet" and 4 means "locked", e.g. after too many wrong PINs — neither is a
+		//     rejection of this adapter. 0 = keep polling.
+		//   action 82 (PIN): 0 = PIN ACCEPTED, anything else = rejected  ← inverted vs. base.
+		//   Proofs: _fwanalysis/absence_audit/proofs/092.md, 238.md, 069-071.md.
 		const action = pbFindVarint(plain, 3) ?? ACTION_STATUS;
 		const sts = pbFindVarint(plain, 11) ?? STS_RUNNING;
 
@@ -491,16 +500,31 @@ export class BleConnection extends EventEmitter {
 			case STS_PAIRED:
 				this.markPaired();
 				break;
-			case STS_FAILED:
-				this.failPairing("pairing rejected by device");
+			case STS_LOCKED:
+				this.waitWhileLocked();
 				break;
-			case STS_PIN_REJECTED:
-				this.failPairing("PIN rejected");
-				break;
+			case STS_NOT_EVALUATED:
 			case STS_RUNNING:
 			default:
 				break; // keep polling
 		}
+	}
+
+	/**
+	 * The DTU reports itself locked (action 64, sts 4) — after too many wrong PINs it stays locked
+	 * for a while. That is not a rejection of this adapter: drop the session and try again later
+	 * with the usual backoff. No PIN goes out while it is locked (a PIN is only sent on sts 3), so
+	 * waiting costs no attempt.
+	 */
+	private waitWhileLocked(): void {
+		if (!this.lockedWarned) {
+			this.lockedWarned = true;
+			this.log.warn(
+				`[ble ${this.macStr()}] the DTU reports itself locked (too many wrong PIN attempts, or locked in the app) — retrying later`,
+			);
+		}
+		this.teardownSession();
+		this.scheduleReconnect();
 	}
 
 	private failPairing(reason: string): void {

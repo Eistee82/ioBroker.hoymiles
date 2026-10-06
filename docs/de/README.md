@@ -116,7 +116,7 @@ Manche Wechselrichter — die **WB-Serie** (z. B. HMS-800-2WB) — sind nur übe
 
 - Du wählst keine Brücke aus. Hast du mehrere, nutzt der Adapter automatisch die mit dem besten Signal.
 - Findet **Erkannte Wechselrichter übernehmen** nichts, ist kein Wechselrichter in Bluetooth-Reichweite einer Brücke.
-- Eine falsche PIN schaltet das Gerät wieder ab; der Grund steht im State `info.bleLastError`. PIN korrigieren und speichern, um es erneut zu versuchen.
+- Eine falsche PIN schaltet das Gerät wieder ab; der Grund steht im State `info.bleLastError`. PIN korrigieren und speichern, um es erneut zu versuchen. Jede falsche PIN kostet einen der 5 Versuche der DTU (geteilt mit der S-Miles-App); danach sperrt sich die DTU eine Zeit lang. Solange sie gesperrt ist, meldet der Adapter das einmal, sendet keine PIN und versucht es später erneut.
 - Schaltet der Wechselrichter abends ab, endet die Bluetooth-Verbindung — die States werden als veraltet markiert (`info.connected` = `false`). Am Morgen verbindet der Adapter von selbst wieder. Klappt Bluetooth einmal nicht, liefert bei aktivierter Cloud-Verbindung die Cloud die Werte, bis Bluetooth wieder steht.
 
 ### Energiezähler anschließen (Shelly / ecotracker)

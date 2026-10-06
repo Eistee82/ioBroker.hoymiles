@@ -116,7 +116,7 @@ Some inverters — the **WB series** (e.g. HMS-800-2WB) — can only be reached 
 
 - You don't choose a bridge. If you have several, the adapter automatically uses the one with the best signal.
 - If **Add discovered inverters** finds nothing, no inverter is within Bluetooth range of a bridge.
-- A wrong PIN switches the device off again; the reason is shown in the state `info.bleLastError`. Correct the PIN and save to try again.
+- A wrong PIN switches the device off again; the reason is shown in the state `info.bleLastError`. Correct the PIN and save to try again. Every wrong PIN costs one of the DTU's 5 attempts (shared with the S-Miles app); after that the DTU locks itself for a while. While it is locked the adapter logs it once, sends no PIN and simply tries again later.
 - When the inverter shuts down for the night the Bluetooth link ends and the states are flagged as stale (`info.connected` = `false`). The adapter reconnects on its own in the morning. If Bluetooth does not come back, the cloud supplies the values until it does — provided the cloud connection is enabled.
 
 ### Connecting an energy meter (Shelly / ecotracker)
