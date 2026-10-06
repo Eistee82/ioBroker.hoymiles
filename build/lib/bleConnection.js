@@ -2,9 +2,11 @@ import { EventEmitter } from "node:events";
 import { NATIVE_TIMERS } from "./tcpConnection.js";
 import { EsphomeGateway } from "./esphomeGateway.js";
 import { bleBuildFrame, bleParseFrame, bleDecrypt, snDecrypt, extractEncRand, pbFindVarint, } from "./bleCrypto.js";
-import { BLE_HANDSHAKE_TICK_MS, BLE_IDLE_TIMEOUT_MS, DTU_CLOCK_VALID_FROM, HM_MAGIC_0, HM_MAGIC_1, RECONNECT_MAX_MS, } from "./constants.js";
+import { BLE_HANDSHAKE_TICK_MS, BLE_IDLE_TIMEOUT_MS, DTU_CLOCK_VALID_FROM, HM_HEADER_SIZE, HM_MAGIC_0, HM_MAGIC_1, RECONNECT_MAX_MS, } from "./constants.js";
 import { unixSeconds, errorMessage } from "./utils.js";
+import { crc16 } from "./crc16.js";
 const TAG_INFO = 0xa301;
+const TAG_INFO_ANSWER = 0xa201;
 const TAG_COMMCMD_Y = 0xa318;
 const TAG_COMMCMD_H = 0xa319;
 const TAG_COMMCMD_STATUS = 0xa219;
@@ -389,15 +391,36 @@ export class BleConnection extends EventEmitter {
     onNotify(chunk) {
         this.lastRxTs = Date.now();
         this.notifyBuf = Buffer.concat([this.notifyBuf, chunk]);
-        while (this.notifyBuf.length >= 10 && this.notifyBuf[0] === HM_MAGIC_0 && this.notifyBuf[1] === HM_MAGIC_1) {
-            const totalLen = this.notifyBuf.readUInt16BE(8);
-            if (this.notifyBuf.length < totalLen) {
+        for (;;) {
+            const buf = this.notifyBuf;
+            if (buf.length >= 2 && (buf[0] !== HM_MAGIC_0 || buf[1] !== HM_MAGIC_1)) {
+                const next = buf.indexOf(MAGIC, 1);
+                this.notifyBuf = next > 0 ? buf.subarray(next) : buf.subarray(buf.length - 1);
+                if (next < 0) {
+                    break;
+                }
+                continue;
+            }
+            if (buf.length < HM_HEADER_SIZE) {
                 break;
             }
-            const nextHM = this.notifyBuf.indexOf(MAGIC, 2);
-            const take = nextHM > 0 ? nextHM : this.notifyBuf.length;
-            this.processFrame(this.notifyBuf.subarray(0, take));
-            this.notifyBuf = this.notifyBuf.subarray(take);
+            const tag = buf.readUInt16BE(2);
+            const totalLen = buf.readUInt16BE(8);
+            const frameLen = totalLen + (tag === TAG_INFO_ANSWER ? 0 : GCM_TAG_LEN);
+            if (totalLen < HM_HEADER_SIZE || frameLen > MTU_GUARD) {
+                this.notifyBuf = buf.subarray(1);
+                continue;
+            }
+            if (buf.length < frameLen) {
+                break;
+            }
+            if (crc16(buf.subarray(HM_HEADER_SIZE, totalLen)) !== buf.readUInt16BE(6)) {
+                this.log.debug(`[ble ${this.macStr()}] dropping a frame with a bad CRC (tag 0x${tag.toString(16)})`);
+                this.notifyBuf = buf.subarray(1);
+                continue;
+            }
+            this.processFrame(buf.subarray(0, frameLen));
+            this.notifyBuf = buf.subarray(frameLen);
         }
         if (this.notifyBuf.length > MTU_GUARD) {
             this.notifyBuf = Buffer.alloc(0);

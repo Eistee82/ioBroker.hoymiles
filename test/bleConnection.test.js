@@ -581,3 +581,82 @@ describe("BleConnection", function () {
 		conn.disconnect();
 	});
 });
+
+// Recorded on 2026-10-06 from the real HMS-800-2WB (RMI-4161A031AB61): bootstrap a201 (SN-CBC, no
+// GCM tag), CommCmd answer a218 and status a219 sts=1 (GCM, 16-byte tag behind totalLen).
+// Session encRand bb4e74eac9d4a98cc6c6fdd3ceabf354. See _fwanalysis/LIVE_TESTLOG_2026-10-06.md.
+const LIVE_A201 = Buffer.from(
+	"484da2010001240c009a46072e6e30e97268dea0296f7a7a69d41adcc274bef2c389cfcc6f8ef193ce6877c2157a36cf06a092fe558c7a216962cf59ced1f59a12e993633aecaba3cb34a1bcc90fc69813ae7946a76aa142c86b1c0019b81824e556d209f2922d76c3c84995594c00465f39b48045f95c15c1fbcde37404224dd532a64f00ad8c278bca0a8af8105c5b2ab138d170217503fb0d",
+	"hex",
+);
+const LIVE_A218 = Buffer.from(
+	"484da2180002d029001a3b85c36f8986226585cf43f223ed383867c78d922c7f8e3a8b64f213d25680f1",
+	"hex",
+);
+const LIVE_A219 = Buffer.from(
+	"484da2190003442e002ec94e424a3f085b25e1944a7065a115171120ec0104b16d0bd6665c765ee2ceacba3dcfa7ede7b58705f5c0934ece36d07b3a8352",
+	"hex",
+);
+
+describe("BleConnection — receive framing", function () {
+	this.timeout(8000);
+
+	async function connecting() {
+		const gateway = new FakeGateway();
+		const { timers, ctl } = makeTimers();
+		const conn = new BleConnection({ gateway, mac: MAC, sn: SN, pin: PIN, timers, log: silentLog });
+		conn.connect();
+		await sleep(50);
+		return { gateway, conn, ctl };
+	}
+
+	function pushInChunks(gateway, data, size) {
+		for (let i = 0; i < data.length; i += size) {
+			gateway.push(data.subarray(i, i + size));
+		}
+	}
+
+	it("pairs from the recorded device frames delivered in 7-byte chunks", async function () {
+		const { gateway, conn, ctl } = await connecting();
+		pushInChunks(gateway, LIVE_A201, 7);
+		await ctl.fireTick();
+		await ctl.fireTick();
+		// a218 and a219 arrive back to back, split so that a GCM tag straddles two chunks.
+		pushInChunks(gateway, Buffer.concat([LIVE_A218, LIVE_A219]), 7);
+		assert.strictEqual(conn.connected, true, "the recorded a219 sts=1 must pair the session");
+		conn.disconnect();
+	});
+
+	it('does not cut a frame at an "HM" inside the ciphertext', async function () {
+		const { gateway, conn, ctl } = await connecting();
+		gateway.push(bootstrapFrame(1));
+		await ctl.fireTick();
+		await ctl.fireTick();
+		// Find a status frame whose encrypted body contains the bytes "HM".
+		let frame = null;
+		for (let seq = 2; seq < 20000 && !frame; seq++) {
+			const f = statusFrame(1, seq);
+			if (f.indexOf(Buffer.from("HM"), 2) > 0) {
+				frame = f;
+			}
+		}
+		assert.ok(frame, "setup: a frame with HM in its ciphertext");
+		gateway.push(frame);
+		assert.strictEqual(conn.connected, true, "the frame must be taken whole and decrypted");
+		conn.disconnect();
+	});
+
+	it("resynchronises after foreign bytes and drops a frame with a bad CRC", async function () {
+		const { gateway, conn, ctl } = await connecting();
+		gateway.push(bootstrapFrame(1));
+		await ctl.fireTick();
+		await ctl.fireTick();
+		const bad = Buffer.from(statusFrame(1, 2));
+		bad[6] ^= 0xff; // break the CRC
+		gateway.push(Buffer.concat([Buffer.from([0x00, 0x11, 0x48]), bad]));
+		assert.strictEqual(conn.connected, false, "a frame with a bad CRC must not be taken");
+		gateway.push(statusFrame(1, 3));
+		assert.strictEqual(conn.connected, true, "the next good frame must still be read");
+		conn.disconnect();
+	});
+});

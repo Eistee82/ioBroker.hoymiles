@@ -14,14 +14,17 @@ import {
 	BLE_HANDSHAKE_TICK_MS,
 	BLE_IDLE_TIMEOUT_MS,
 	DTU_CLOCK_VALID_FROM,
+	HM_HEADER_SIZE,
 	HM_MAGIC_0,
 	HM_MAGIC_1,
 	RECONNECT_MAX_MS,
 } from "./constants.js";
 import { unixSeconds, errorMessage } from "./utils.js";
+import { crc16 } from "./crc16.js";
 
 // Command tags (msgId). Requests a3xx, responses a2xx — same family as the TCP path.
 const TAG_INFO = 0xa301; // bootstrap/keepalive (plain) → device replies 0xa201 (SN-CBC) with encRand
+const TAG_INFO_ANSWER = 0xa201; // the only answer without a GCM tag behind totalLen
 const TAG_COMMCMD_Y = 0xa318; // CommCmd "Y" / PIN carrier (GCM)
 const TAG_COMMCMD_H = 0xa319; // CommCmd "H" status poll (GCM) → response 0xa219 carries `sts`
 const TAG_COMMCMD_STATUS = 0xa219; // status response
@@ -45,6 +48,7 @@ const RECONNECT_DELAY_MIN_MS = 5000;
 const GATT_CONNECT_TRIES = 6;
 const GATT_CONNECT_RETRY_MS = 2000;
 const GCM_TAG_LEN = 16;
+
 const MAGIC = Buffer.from([HM_MAGIC_0, HM_MAGIC_1]);
 
 /** Handshake phases (mirrors the app's BleClient state machine). */
@@ -544,16 +548,41 @@ export class BleConnection extends EventEmitter {
 	private onNotify(chunk: Buffer): void {
 		this.lastRxTs = Date.now();
 		this.notifyBuf = Buffer.concat([this.notifyBuf, chunk]);
-		while (this.notifyBuf.length >= 10 && this.notifyBuf[0] === HM_MAGIC_0 && this.notifyBuf[1] === HM_MAGIC_1) {
-			const totalLen = this.notifyBuf.readUInt16BE(8);
-			if (this.notifyBuf.length < totalLen) {
-				break; // not yet complete (at least up to declared length)
+		// Frame length from the header, never from the next "HM": the ciphertext can contain those two
+		// bytes, and a GCM tag still in flight must be waited for. The DTU's encoder (0x4080935a) puts
+		// the 16-byte GCM tag behind totalLen on every answer except a201 (SN-CBC, no tag); totalLen
+		// and the CRC cover the ciphertext without the tag (proof absence_audit/proofs/072.md).
+		for (;;) {
+			const buf = this.notifyBuf;
+			if (buf.length >= 2 && (buf[0] !== HM_MAGIC_0 || buf[1] !== HM_MAGIC_1)) {
+				// Out of step (lost chunk, foreign bytes): resynchronise on the next marker.
+				const next = buf.indexOf(MAGIC, 1);
+				this.notifyBuf = next > 0 ? buf.subarray(next) : buf.subarray(buf.length - 1);
+				if (next < 0) {
+					break;
+				}
+				continue;
 			}
-			// A GCM frame carries an extra 16-byte tag beyond totalLen; take up to the next HM marker.
-			const nextHM = this.notifyBuf.indexOf(MAGIC, 2);
-			const take = nextHM > 0 ? nextHM : this.notifyBuf.length;
-			this.processFrame(this.notifyBuf.subarray(0, take));
-			this.notifyBuf = this.notifyBuf.subarray(take);
+			if (buf.length < HM_HEADER_SIZE) {
+				break;
+			}
+			const tag = buf.readUInt16BE(2);
+			const totalLen = buf.readUInt16BE(8);
+			const frameLen = totalLen + (tag === TAG_INFO_ANSWER ? 0 : GCM_TAG_LEN);
+			if (totalLen < HM_HEADER_SIZE || frameLen > MTU_GUARD) {
+				this.notifyBuf = buf.subarray(1); // not a header after all
+				continue;
+			}
+			if (buf.length < frameLen) {
+				break; // wait for the rest, GCM tag included
+			}
+			if (crc16(buf.subarray(HM_HEADER_SIZE, totalLen)) !== buf.readUInt16BE(6)) {
+				this.log.debug(`[ble ${this.macStr()}] dropping a frame with a bad CRC (tag 0x${tag.toString(16)})`);
+				this.notifyBuf = buf.subarray(1);
+				continue;
+			}
+			this.processFrame(buf.subarray(0, frameLen));
+			this.notifyBuf = buf.subarray(frameLen);
 		}
 		if (this.notifyBuf.length > MTU_GUARD) {
 			this.notifyBuf = Buffer.alloc(0);
