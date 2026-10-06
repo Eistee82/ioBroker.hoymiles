@@ -122,7 +122,7 @@ async function executeCommand(stateId, state, ctx) {
         last.lastWriteMs = Date.now();
     }
     log.info(`[${deviceId}] ${cmd.log(state.val)}`);
-    const timestamp = unixSeconds();
+    const timestamp = ctx.now ? ctx.now() : unixSeconds();
     let frame;
     try {
         frame = cmd.encode(state.val, timestamp, protobuf, ctx.configSnapshot ?? null);

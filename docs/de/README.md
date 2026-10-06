@@ -800,6 +800,7 @@ Dank an die Nutzer, die ihre Anlagen zur Verfügung gestellt haben:
 - Prüfe das Adapter-Log auf Protobuf-Dekodierfehler
 - `Decryption failed: ... wrong final block length` oder `bad decrypt` bei einer DTU mit Firmware V01.01.01 bedeutet: es läuft eine Adapter-Version ohne Unterstützung für das verschlüsselte Protokoll. Aktuelle Version installieren und die Instanz neu starten; im Log steht dann `DTU requires encrypted communication (firmware V01.01.01+)`
 - Leistungslimit, Ein/Aus, Neustart oder Einstellungsänderungen wirken bei einer DTU mit Firmware V01.01.01 nicht, obwohl im Log `Setting power limit to …` und eine Kommando-Antwort stehen: Adapter-Versionen bis 0.5.0 haben Kommandos an eine solche DTU unverschlüsselt gesendet. Die DTU antwortet zwar, kann das Kommando aber nicht entschlüsseln und führt es mit leerem Inhalt aus. Adapter aktualisieren
+- Log-Warnung `The DTU clock is … s off the host clock`: Die DTU (WB-Serie über Bluetooth sowie die HMS-800W-2T ab Firmware V01.01.01) ignoriert Anfragen still, deren Zeit mehr als 60 s von ihrer eigenen Uhr abweicht — über Bluetooth trennt sie zusätzlich die Verbindung. Der Adapter stempelt seine Anfragen deshalb mit der Uhr der DTU, die er aus deren Info-Antwort liest, und warnt einmal. Uhrzeit des ioBroker-Hosts (NTP) prüfen; eine DTU ohne Cloud-Verbindung kann auch selbst eine falsche Zeit haben
 
 ### Cloud-Login fehlgeschlagen
 - Prüfe E-Mail und Passwort des S-Miles Kontos

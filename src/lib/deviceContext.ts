@@ -57,6 +57,8 @@ import {
 	HM_HEADER_SIZE,
 	LOCAL_GCM_TAG_LEN,
 	CLOUD_RELAY_TLS_PORT,
+	DTU_TIME_WINDOW_S,
+	DTU_CLOCK_VALID_FROM,
 } from "./constants.js";
 import { whToKwh } from "./convert.js";
 import { anonymize, errorMessage, safeJsonStringify, unixSeconds } from "./utils.js";
@@ -266,6 +268,13 @@ class DeviceContext {
 	private lastPowerLimitKind: PowerLimitKind | null;
 	/** Set once the "device sends unmapped lists" hint has been logged, so it stays a one-off. */
 	private extraListsReported: boolean;
+	/**
+	 * DTU clock minus host clock, in seconds, from the last InfoData (a201 field 2). Requests to the
+	 * device are stamped on the DTU's clock, because it drops anything outside its ±60 s window.
+	 */
+	private clockOffset: number;
+	/** Set once the clock-skew warning was logged; cleared when the clocks agree again. */
+	private clockSkewWarned: boolean;
 	private histStatesCreated: boolean;
 	private pollCount: number;
 	private slowPollEvery: number;
@@ -366,6 +375,8 @@ class DeviceContext {
 		this.meterControlStatesCreated = false;
 		this.lastPowerLimitKind = null;
 		this.extraListsReported = false;
+		this.clockOffset = 0;
+		this.clockSkewWarned = false;
 		this.histStatesCreated = false;
 		this.pollCount = 0;
 
@@ -428,7 +439,7 @@ class DeviceContext {
 				this.host,
 				10081,
 				() => {
-					const ts = unixSeconds();
+					const ts = this.deviceNow();
 					return this.wireFrame(this.protobuf.encodeHeartbeat(ts));
 				},
 				this.adapter,
@@ -522,7 +533,7 @@ class DeviceContext {
 		this.infoReceived = false;
 
 		// Request device info immediately — poll cycle starts after InfoData is received
-		const ts = unixSeconds();
+		const ts = this.deviceNow();
 		this.connection?.send(this.wireFrame(this.protobuf.encodeInfoRequest(ts))).catch(e => {
 			this.adapter.log.debug(`[${this.deviceId}] InfoRequest send failed: ${errorMessage(e)}`);
 		});
@@ -884,7 +895,7 @@ class DeviceContext {
 		}
 		this.gridChunks.clear();
 		this.connection
-			.send(this.wireFrame(this.protobuf.encodeDevConfigFetch(unixSeconds(), this.dtuSerial, this.inverterSn)))
+			.send(this.wireFrame(this.protobuf.encodeDevConfigFetch(this.deviceNow(), this.dtuSerial, this.inverterSn)))
 			.catch(e => {
 				this.adapter.log.debug(`[${this.deviceId}] DevConfigFetch send failed: ${errorMessage(e)}`);
 			});
@@ -1267,7 +1278,7 @@ class DeviceContext {
 		this.pollBusy = true;
 
 		try {
-			const ts = unixSeconds();
+			const ts = this.deviceNow();
 
 			// Always send RealData and wait for response
 			await this.sendAndWait(conn, this.protobuf.encodeRealDataNewRequest(ts));
@@ -1731,7 +1742,7 @@ class DeviceContext {
 		if (!this.connection?.connected || !this.protobuf) {
 			throw new Error("Device is not connected.");
 		}
-		const body = encodeShellyBindBody(mac, devType, unixSeconds());
+		const body = encodeShellyBindBody(mac, devType, this.deviceNow());
 		const frame = this.protobuf.buildMessage(SHELLY_CMD_TAG[0], SHELLY_CMD_TAG[1], body);
 		this.adapter.log.info(
 			`[${this.deviceId || this.host}] Binding Shelly meter ${anonymize(mac)} as ` +
@@ -1959,6 +1970,34 @@ class DeviceContext {
 		return kept;
 	}
 
+	/** Unix seconds on the DTU's clock — the time to stamp requests to the device with. */
+	private deviceNow(): number {
+		return unixSeconds() + this.clockOffset;
+	}
+
+	/**
+	 * Take the DTU's clock from InfoData. An unset clock (before 2020) is ignored: the DTU does not
+	 * check the window then, and the host time is the better guess for the time fields.
+	 *
+	 * @param dtuTime - InfoData field 2, the DTU's current time in Unix seconds
+	 */
+	private learnClock(dtuTime: number): void {
+		if (!(dtuTime >= DTU_CLOCK_VALID_FROM)) {
+			return;
+		}
+		this.clockOffset = dtuTime - unixSeconds();
+		if (Math.abs(this.clockOffset) > DTU_TIME_WINDOW_S) {
+			if (!this.clockSkewWarned) {
+				this.clockSkewWarned = true;
+				this.adapter.log.warn(
+					`[${this.deviceId || this.host}] The DTU clock is ${this.clockOffset} s off the host clock. The DTU ignores requests outside ±${DTU_TIME_WINDOW_S} s, so the adapter now stamps them on the DTU clock. Check the time on this host (NTP).`,
+				);
+			}
+		} else {
+			this.clockSkewWarned = false;
+		}
+	}
+
 	private async handleInfoData(payload: Buffer): Promise<void> {
 		try {
 			const info = this.protobuf.decodeInfoData(payload);
@@ -1966,6 +2005,7 @@ class DeviceContext {
 			this.adapter.log[logLevel](
 				`[${this.host}] Device info: DTU SN=${info.dtuSn}, devices=${info.deviceNumber}, PVs=${info.pvNumber}`,
 			);
+			this.learnClock(info.timestamp);
 			// Before anything is awaited: from this frame on the DTU may encrypt (firmware
 			// V01.01.01+), and the framer must know that before the next frame arrives.
 			this.setupEncryption(info);
@@ -2171,7 +2211,7 @@ class DeviceContext {
 			// rejects the command with error 1); BLE is polled directly, so skip it there.
 			if (this.protobuf && this.connection?.connected && this.transport !== "ble") {
 				this.adapter.log.info(`[${this.host}] Enabling performance data mode`);
-				const ts = unixSeconds();
+				const ts = this.deviceNow();
 				void this.connection.send(this.wireFrame(this.protobuf.encodePerformanceDataMode(ts))).catch(e => {
 					this.adapter.log.debug(`[${this.deviceId}] PerformanceDataMode send failed: ${errorMessage(e)}`);
 				});
@@ -2314,7 +2354,7 @@ class DeviceContext {
 		// More packages outstanding → request the next one and wait for it.
 		if (now + 1 < total) {
 			this.connection
-				?.send(this.wireFrame(this.protobuf.encodeWarnDataRequest(unixSeconds(), now + 1)))
+				?.send(this.wireFrame(this.protobuf.encodeWarnDataRequest(this.deviceNow(), now + 1)))
 				.catch(e =>
 					this.adapter.log.debug(`[${this.deviceId || this.host}] warn next-pkg failed: ${errorMessage(e)}`),
 				);
@@ -2447,7 +2487,7 @@ class DeviceContext {
 			const pages = data.pageCount > 0 ? Math.min(data.pageCount, HIST_MAX_PAGES) : 1;
 			if (data.powerArray.length > 0 && this.histPage + 1 < pages && this.connection?.connected) {
 				this.histPage++;
-				const next = this.protobuf.encodeHistPowerRequest(unixSeconds(), this.histPage);
+				const next = this.protobuf.encodeHistPowerRequest(this.deviceNow(), this.histPage);
 				void this.connection
 					.send(this.wireFrame(next))
 					.catch(err =>
@@ -2508,7 +2548,12 @@ class DeviceContext {
 				this.connection
 					?.send(
 						this.wireFrame(
-							this.protobuf.encodeDevConfigFetch(unixSeconds(), this.dtuSerial, this.inverterSn, pkg + 1),
+							this.protobuf.encodeDevConfigFetch(
+								this.deviceNow(),
+								this.dtuSerial,
+								this.inverterSn,
+								pkg + 1,
+							),
 						),
 					)
 					.catch(e =>
@@ -2670,6 +2715,7 @@ class DeviceContext {
 				// firmware then handles the message with an empty payload (0x40817958 ignores the
 				// decrypt result) — it answers, but nothing happens.
 				connection: { send: frame => connection.send(this.wireFrame(frame)) },
+				now: () => this.deviceNow(),
 				protobuf: this.protobuf,
 				deviceId: this.deviceId,
 				host: this.host,

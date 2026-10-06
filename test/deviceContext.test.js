@@ -5810,6 +5810,25 @@ describe("deviceContext – counter monotonicity", function () {
 
 	// value.time is milliseconds. One spot wrote seconds, another milliseconds, so the state
 	// jumped between 1970 and today.
+	// InfoData field 2 is the DTU clock. Requests are stamped on it; an unset clock is ignored, and a
+	// skew beyond the DTU's ±60 s window is reported once.
+	it("stamps requests on the DTU clock learned from InfoData and warns once on a large skew", async function () {
+		const { ctx } = ctxWithWrites();
+		const warns = [];
+		ctx.adapter.log.warn = m => warns.push(m);
+		const host = Math.floor(Date.now() / 1000);
+		ctx["learnClock"](host + 3600);
+		assert.ok(Math.abs(ctx["deviceNow"]() - (host + 3600)) <= 2);
+		ctx["learnClock"](host + 3600);
+		assert.strictEqual(warns.length, 1, "the skew warning is logged once");
+		ctx["learnClock"](host + 5);
+		assert.ok(Math.abs(ctx["deviceNow"]() - (host + 5)) <= 2);
+		ctx["learnClock"](100); // unset DTU clock (1970) — keep the last offset
+		assert.ok(Math.abs(ctx["deviceNow"]() - (host + 5)) <= 2);
+		ctx["learnClock"](host + 3600);
+		assert.strictEqual(warns.length, 2, "warns again after the clocks had agreed in between");
+	});
+
 	it("writes info.lastResponse in milliseconds", async function () {
 		const { ctx, written } = ctxWithWrites();
 		await ctx.initFromSerial("TEST1234");

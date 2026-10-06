@@ -2,7 +2,7 @@ import { EventEmitter } from "node:events";
 import { NATIVE_TIMERS } from "./tcpConnection.js";
 import { EsphomeGateway } from "./esphomeGateway.js";
 import { bleBuildFrame, bleParseFrame, bleDecrypt, snDecrypt, extractEncRand, pbFindVarint, } from "./bleCrypto.js";
-import { BLE_HANDSHAKE_TICK_MS, BLE_IDLE_TIMEOUT_MS, HM_MAGIC_0, HM_MAGIC_1, RECONNECT_MAX_MS } from "./constants.js";
+import { BLE_HANDSHAKE_TICK_MS, BLE_IDLE_TIMEOUT_MS, DTU_CLOCK_VALID_FROM, HM_MAGIC_0, HM_MAGIC_1, RECONNECT_MAX_MS, } from "./constants.js";
 import { unixSeconds, errorMessage } from "./utils.js";
 const TAG_INFO = 0xa301;
 const TAG_COMMCMD_Y = 0xa318;
@@ -45,6 +45,7 @@ export class BleConnection extends EventEmitter {
     establishing;
     state;
     encRand;
+    clockOffset;
     seq;
     writeHandle;
     notifyHandle;
@@ -73,6 +74,7 @@ export class BleConnection extends EventEmitter {
         this.establishing = false;
         this.state = "idle";
         this.encRand = null;
+        this.clockOffset = 0;
         this.seq = 0;
         this.writeHandle = null;
         this.notifyHandle = null;
@@ -285,7 +287,7 @@ export class BleConnection extends EventEmitter {
                 this.sendInternal(TAG_INFO, Buffer.alloc(0), "plain");
                 return;
             }
-            const ts = unixSeconds();
+            const ts = unixSeconds() + this.clockOffset;
             switch (this.state) {
                 case "boot":
                     this.state = "commcmd";
@@ -402,6 +404,10 @@ export class BleConnection extends EventEmitter {
             if (this.sn && parsed.payload.length % 16 === 0) {
                 try {
                     plain = snDecrypt(this.sn, parsed.tag, parsed.seq, parsed.payload);
+                    const dtuTime = pbFindVarint(plain, 2);
+                    if (dtuTime !== null && dtuTime >= DTU_CLOCK_VALID_FROM) {
+                        this.clockOffset = dtuTime - unixSeconds();
+                    }
                     if (!this.encRand) {
                         const er = extractEncRand(plain);
                         if (er) {

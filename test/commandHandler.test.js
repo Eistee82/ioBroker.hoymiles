@@ -113,6 +113,32 @@ describe("commandHandler – COMMANDS", function () {
 		assert.strictEqual(v(3276.7), null, "3276.7 W should be valid (max)");
 	});
 
+	// The request time must come from the DTU's clock when the device layer provides one (±60 s window).
+	it("stamps the command with ctx.now() when given", async function () {
+		let stamped = null;
+		const pb = {
+			encodeUnlockInverter: ts => {
+				stamped = ts;
+				return Buffer.alloc(12);
+			},
+		};
+		await executeCommand(
+			"inverter.lock",
+			{ val: false, ack: false, ts: 0, lc: 0, from: "", q: 0 },
+			{
+				connection: { connected: true, send: async () => {} },
+				protobuf: pb,
+				deviceId: "D",
+				host: "h",
+				log: { info: () => {}, warn: () => {}, debug: () => {}, error: () => {} },
+				setState: async () => {},
+				resetButton: () => {},
+				now: () => 1234567890,
+			},
+		);
+		assert.strictEqual(stamped, 1234567890);
+	});
+
 	it("powerLimitWatt writes no flash, powerLimit does", function () {
 		assert.ok(!COMMANDS["inverter.powerLimitWatt"].writesFlash, "action 211 is RAM-only");
 		assert.strictEqual(COMMANDS["inverter.powerLimit"].writesFlash, true);

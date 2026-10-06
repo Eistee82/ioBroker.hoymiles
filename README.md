@@ -149,6 +149,7 @@ Cloud stations create aggregated device nodes (e.g. `hoymiles.0.station-12345.*`
 ## Changelog
 ### **WORK IN PROGRESS**
 
+- (@Eistee82) **Requests are stamped on the DTU's clock.** The DTU ignores requests whose time is more than 60 s off its own clock (WB series over Bluetooth, HMS-800W-2T from firmware V01.01.01), so a wrong host clock made live data, settings and pairing fail without any error. The adapter now reads the DTU clock from its info answer and warns once when the two clocks differ by more than 60 s
 - (@Eistee82) **On/off, inverter reboot, DTU reboot and lock/unlock work over Bluetooth (WB series).** They were sent with the cloud command tag, which the WB series ignores over Bluetooth — the command had no effect. They now use the local command tag; the HMS-800W-2T, which ran them already, now also confirms them locally
 - (@Eistee82) **The cloud poll runs again while no relay is active.** Every configuration answer from the DTU (every 90–120 s) restarted the 5-minute cloud timer, so it never fired. It now restarts only when the interval actually changes
 - (@Eistee82) **Power limit and reactive power reject non-numeric values.** Such a value used to pass the check and reach the DTU as a limit of 0 %

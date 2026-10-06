@@ -60,6 +60,8 @@ interface CommandContext {
 	 * reports which kind it sent instead of being acknowledged on send; the echo confirms it.
 	 */
 	expectReadback?: (kind: PowerLimitKind) => void;
+	/** Time source for the request's time field — the DTU's clock when known (±60 s window). */
+	now?: () => number;
 }
 
 /** Unit a power-limit command is expressed in — and thus how the device's echo reads. */
@@ -311,7 +313,7 @@ async function executeCommand(stateId: string, state: ioBroker.State, ctx: Comma
 	}
 
 	log.info(`[${deviceId}] ${cmd.log(state.val)}`);
-	const timestamp = unixSeconds();
+	const timestamp = ctx.now ? ctx.now() : unixSeconds();
 	let frame: Buffer;
 	try {
 		frame = cmd.encode(state.val, timestamp, protobuf, ctx.configSnapshot ?? null);

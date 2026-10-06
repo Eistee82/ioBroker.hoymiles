@@ -1,7 +1,7 @@
 import assert from "node:assert";
 import { EventEmitter } from "node:events";
 import BleConnection from "../build/lib/bleConnection.js";
-import { bleBuildFrame, bleParseFrame } from "../build/lib/bleCrypto.js";
+import { bleBuildFrame, bleParseFrame, bleDecrypt, pbFindVarint } from "../build/lib/bleCrypto.js";
 import { EsphomeGateway } from "../build/lib/esphomeGateway.js";
 
 const MAC = EsphomeGateway.macToNumber("AA:BB:CC:DD:EE:FF");
@@ -119,11 +119,33 @@ function reconnectDelays(ctl) {
  * Bootstrap a201 payload = protobuf field 8 { field 27 = encRand } (SN-CBC encrypted on the wire).
  *
  * @param seq - 16-bit sequence number
+ * @param dtuTime - optional DTU clock (Unix seconds) for field 2
  */
-function bootstrapFrame(seq) {
+function bootstrapFrame(seq, dtuTime) {
 	const inner = Buffer.concat([Buffer.from([0xda, 0x01, 0x10]), ENC_RAND]); // f27 (bytes,16)
-	const outer = Buffer.concat([Buffer.from([0x42, inner.length]), inner]); // f8 (message)
+	const f8 = Buffer.concat([Buffer.from([0x42, inner.length]), inner]); // f8 (message)
+	// Optional f2 = the DTU's clock (Unix seconds, varint).
+	const outer = dtuTime == null ? f8 : Buffer.concat([Buffer.from([0x10]), varint(dtuTime), f8]);
 	return bleBuildFrame(0xa201, outer, { mode: "sncbc", sn: SN, seq });
+}
+
+/**
+ * Protobuf varint encoding.
+ *
+ * @param n - non-negative integer
+ */
+function varint(n) {
+	const out = [];
+	let v = n;
+	do {
+		let b = v % 128;
+		v = Math.floor(v / 128);
+		if (v > 0) {
+			b += 128;
+		}
+		out.push(b);
+	} while (v > 0);
+	return Buffer.from(out);
 }
 
 /**
@@ -259,6 +281,26 @@ describe("BleConnection", function () {
 		gateway.push(statusFrame(1, 3, 82)); // action-82, sts=1 → rejected
 		assert.ok(failReason, "a rejected PIN must emit pairingFailed");
 		assert.strictEqual(conn.connected, false);
+		conn.disconnect();
+	});
+
+	// The DTU drops a time-checked request (a318 included) outside ±60 s of its own clock — so the
+	// pairing requests must carry the DTU's clock from a201 field 2, not the host clock.
+	it("stamps its pairing requests on the DTU clock taken from a201", async function () {
+		const gateway = new FakeGateway();
+		const { timers, ctl } = makeTimers();
+		const conn = new BleConnection({ gateway, mac: MAC, sn: SN, pin: PIN, timers, log: silentLog });
+		conn.connect();
+		await sleep(50);
+		const dtuTime = Math.floor(Date.now() / 1000) + 3600;
+		gateway.push(bootstrapFrame(1, dtuTime));
+		await ctl.fireTick(); // boot -> commcmd
+		await ctl.fireTick(); // sends CommCmd Y + status poll
+		const y = gateway.writes.map(w => bleParseFrame(w)).find(f => f && f.tag === 0xa318);
+		assert.ok(y, "CommCmd (a318) must have been sent");
+		const plain = bleDecrypt(ENC_RAND, 0xa318, y.seq, y.payload);
+		const ts = pbFindVarint(plain, 1);
+		assert.ok(Math.abs(ts - dtuTime) <= 2, `a318 time ${ts} should follow the DTU clock ${dtuTime}`);
 		conn.disconnect();
 	});
 

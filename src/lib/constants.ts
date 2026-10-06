@@ -125,6 +125,15 @@ export const POWER_LIMIT_WATT_MAX = 3276.7;
 export const POWER_LIMIT_WATT_MIN = 0.1;
 
 /**
+ * The DTU drops a request whose time field is more than this many seconds off its own clock —
+ * silently, and over Bluetooth it also drops the link. 2T from firmware V01.01.01 (0x40813d94),
+ * 2WB on every tag except a301/a306/a319 (0x40804114); measured live on 2026-10-06.
+ */
+export const DTU_TIME_WINDOW_S = 60;
+/** A DTU clock before 2020-01-01 is unset; the DTU then does not check the window either. */
+export const DTU_CLOCK_VALID_FROM = 1577836800;
+
+/**
  * Flash protection for power-limit writes.
  *
  * Every accepted power-limit command makes the DTU rewrite its configuration, and that costs two

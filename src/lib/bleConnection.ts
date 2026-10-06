@@ -10,7 +10,14 @@ import {
 	pbFindVarint,
 	type BleFrameMode,
 } from "./bleCrypto.js";
-import { BLE_HANDSHAKE_TICK_MS, BLE_IDLE_TIMEOUT_MS, HM_MAGIC_0, HM_MAGIC_1, RECONNECT_MAX_MS } from "./constants.js";
+import {
+	BLE_HANDSHAKE_TICK_MS,
+	BLE_IDLE_TIMEOUT_MS,
+	DTU_CLOCK_VALID_FROM,
+	HM_MAGIC_0,
+	HM_MAGIC_1,
+	RECONNECT_MAX_MS,
+} from "./constants.js";
 import { unixSeconds, errorMessage } from "./utils.js";
 
 // Command tags (msgId). Requests a3xx, responses a2xx — same family as the TCP path.
@@ -107,6 +114,8 @@ export class BleConnection extends EventEmitter {
 	private establishing: boolean;
 	private state: HandshakeState;
 	private encRand: Buffer | null;
+	/** DTU clock minus host clock (a201 field 2), so the handshake's own requests fit the ±60 s window. */
+	private clockOffset: number;
 	private seq: number;
 	private writeHandle: number | null;
 	private notifyHandle: number | null;
@@ -142,6 +151,7 @@ export class BleConnection extends EventEmitter {
 		this.establishing = false;
 		this.state = "idle";
 		this.encRand = null;
+		this.clockOffset = 0;
 		this.seq = 0;
 		this.writeHandle = null;
 		this.notifyHandle = null;
@@ -406,7 +416,7 @@ export class BleConnection extends EventEmitter {
 				this.sendInternal(TAG_INFO, Buffer.alloc(0), "plain");
 				return;
 			}
-			const ts = unixSeconds();
+			const ts = unixSeconds() + this.clockOffset;
 			switch (this.state) {
 				case "boot":
 					this.state = "commcmd";
@@ -538,6 +548,11 @@ export class BleConnection extends EventEmitter {
 			if (this.sn && parsed.payload.length % 16 === 0) {
 				try {
 					plain = snDecrypt(this.sn, parsed.tag, parsed.seq, parsed.payload);
+					// a201 carries the DTU's clock in field 2. a318 (pairing) is time-checked, a301 is not.
+					const dtuTime = pbFindVarint(plain, 2);
+					if (dtuTime !== null && dtuTime >= DTU_CLOCK_VALID_FROM) {
+						this.clockOffset = dtuTime - unixSeconds();
+					}
 					if (!this.encRand) {
 						const er = extractEncRand(plain);
 						if (er) {

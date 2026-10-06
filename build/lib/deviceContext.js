@@ -13,7 +13,7 @@ import { getAlarmDescription } from "./alarmCodes.js";
 import { decodeGridProfile, byteSwap16 } from "./gridProfile.js";
 import EnergyGuard from "./energyGuard.js";
 import { cloudTagLabel, describeCloudTag, refusalReason } from "./cloudTranslator.js";
-import { INFO_FALLBACK_TIMEOUT_MS, SCALE_POWER_LIMIT_BLE, SCALE_POWER_LIMIT_TCP, CLOUD_DEV_TYPE_DTU, POWER_LIMIT_DEADBAND_DEFAULT, POWER_LIMIT_MIN_INTERVAL_SEC_DEFAULT, HIST_MAX_PAGES, HM_HEADER_SIZE, LOCAL_GCM_TAG_LEN, CLOUD_RELAY_TLS_PORT, } from "./constants.js";
+import { INFO_FALLBACK_TIMEOUT_MS, SCALE_POWER_LIMIT_BLE, SCALE_POWER_LIMIT_TCP, CLOUD_DEV_TYPE_DTU, POWER_LIMIT_DEADBAND_DEFAULT, POWER_LIMIT_MIN_INTERVAL_SEC_DEFAULT, HIST_MAX_PAGES, HM_HEADER_SIZE, LOCAL_GCM_TAG_LEN, CLOUD_RELAY_TLS_PORT, DTU_TIME_WINDOW_S, DTU_CLOCK_VALID_FROM, } from "./constants.js";
 import { whToKwh } from "./convert.js";
 import { anonymize, errorMessage, safeJsonStringify, unixSeconds } from "./utils.js";
 import { inverterIcon } from "./deviceIcons.js";
@@ -83,6 +83,8 @@ class DeviceContext {
     meterControlStatesCreated;
     lastPowerLimitKind;
     extraListsReported;
+    clockOffset;
+    clockSkewWarned;
     histStatesCreated;
     pollCount;
     slowPollEvery;
@@ -151,6 +153,8 @@ class DeviceContext {
         this.meterControlStatesCreated = false;
         this.lastPowerLimitKind = null;
         this.extraListsReported = false;
+        this.clockOffset = 0;
+        this.clockSkewWarned = false;
         this.histStatesCreated = false;
         this.pollCount = 0;
         this.cloudServerDomain = "";
@@ -198,7 +202,7 @@ class DeviceContext {
                 return;
             }
             this.connection = new DtuConnection(this.host, 10081, () => {
-                const ts = unixSeconds();
+                const ts = this.deviceNow();
                 return this.wireFrame(this.protobuf.encodeHeartbeat(ts));
             }, this.adapter);
         }
@@ -260,7 +264,7 @@ class DeviceContext {
         }
         this.adapter.onLocalConnected(this);
         this.infoReceived = false;
-        const ts = unixSeconds();
+        const ts = this.deviceNow();
         this.connection?.send(this.wireFrame(this.protobuf.encodeInfoRequest(ts))).catch(e => {
             this.adapter.log.debug(`[${this.deviceId}] InfoRequest send failed: ${errorMessage(e)}`);
         });
@@ -518,7 +522,7 @@ class DeviceContext {
         }
         this.gridChunks.clear();
         this.connection
-            .send(this.wireFrame(this.protobuf.encodeDevConfigFetch(unixSeconds(), this.dtuSerial, this.inverterSn)))
+            .send(this.wireFrame(this.protobuf.encodeDevConfigFetch(this.deviceNow(), this.dtuSerial, this.inverterSn)))
             .catch(e => {
             this.adapter.log.debug(`[${this.deviceId}] DevConfigFetch send failed: ${errorMessage(e)}`);
         });
@@ -742,7 +746,7 @@ class DeviceContext {
         }
         this.pollBusy = true;
         try {
-            const ts = unixSeconds();
+            const ts = this.deviceNow();
             await this.sendAndWait(conn, this.protobuf.encodeRealDataNewRequest(ts));
             this.consecutivePollErrors = 0;
             this.pollCount++;
@@ -1017,7 +1021,7 @@ class DeviceContext {
         if (!this.connection?.connected || !this.protobuf) {
             throw new Error("Device is not connected.");
         }
-        const body = encodeShellyBindBody(mac, devType, unixSeconds());
+        const body = encodeShellyBindBody(mac, devType, this.deviceNow());
         const frame = this.protobuf.buildMessage(SHELLY_CMD_TAG[0], SHELLY_CMD_TAG[1], body);
         this.adapter.log.info(`[${this.deviceId || this.host}] Binding Shelly meter ${anonymize(mac)} as ` +
             `${devType === SHELLY_DEV_TYPE_GRID ? "grid device (zero export)" : "meter only"}`);
@@ -1132,11 +1136,30 @@ class DeviceContext {
         }
         return kept;
     }
+    deviceNow() {
+        return unixSeconds() + this.clockOffset;
+    }
+    learnClock(dtuTime) {
+        if (!(dtuTime >= DTU_CLOCK_VALID_FROM)) {
+            return;
+        }
+        this.clockOffset = dtuTime - unixSeconds();
+        if (Math.abs(this.clockOffset) > DTU_TIME_WINDOW_S) {
+            if (!this.clockSkewWarned) {
+                this.clockSkewWarned = true;
+                this.adapter.log.warn(`[${this.deviceId || this.host}] The DTU clock is ${this.clockOffset} s off the host clock. The DTU ignores requests outside ±${DTU_TIME_WINDOW_S} s, so the adapter now stamps them on the DTU clock. Check the time on this host (NTP).`);
+            }
+        }
+        else {
+            this.clockSkewWarned = false;
+        }
+    }
     async handleInfoData(payload) {
         try {
             const info = this.protobuf.decodeInfoData(payload);
             const logLevel = this.deviceId ? "debug" : "info";
             this.adapter.log[logLevel](`[${this.host}] Device info: DTU SN=${info.dtuSn}, devices=${info.deviceNumber}, PVs=${info.pvNumber}`);
+            this.learnClock(info.timestamp);
             this.setupEncryption(info);
             if (!this.deviceId && info.dtuSn) {
                 const existing = this.adapter.devices.get(info.dtuSn);
@@ -1287,7 +1310,7 @@ class DeviceContext {
             }
             if (this.protobuf && this.connection?.connected && this.transport !== "ble") {
                 this.adapter.log.info(`[${this.host}] Enabling performance data mode`);
-                const ts = unixSeconds();
+                const ts = this.deviceNow();
                 void this.connection.send(this.wireFrame(this.protobuf.encodePerformanceDataMode(ts))).catch(e => {
                     this.adapter.log.debug(`[${this.deviceId}] PerformanceDataMode send failed: ${errorMessage(e)}`);
                 });
@@ -1388,7 +1411,7 @@ class DeviceContext {
         this.adapter.log.debug(`[${this.deviceId || this.host}] Warn list package ${now + 1}/${total} (${pageAlarms.length} entries)`);
         if (now + 1 < total) {
             this.connection
-                ?.send(this.wireFrame(this.protobuf.encodeWarnDataRequest(unixSeconds(), now + 1)))
+                ?.send(this.wireFrame(this.protobuf.encodeWarnDataRequest(this.deviceNow(), now + 1)))
                 .catch(e => this.adapter.log.debug(`[${this.deviceId || this.host}] warn next-pkg failed: ${errorMessage(e)}`));
             return;
         }
@@ -1493,7 +1516,7 @@ class DeviceContext {
             const pages = data.pageCount > 0 ? Math.min(data.pageCount, HIST_MAX_PAGES) : 1;
             if (data.powerArray.length > 0 && this.histPage + 1 < pages && this.connection?.connected) {
                 this.histPage++;
-                const next = this.protobuf.encodeHistPowerRequest(unixSeconds(), this.histPage);
+                const next = this.protobuf.encodeHistPowerRequest(this.deviceNow(), this.histPage);
                 void this.connection
                     .send(this.wireFrame(next))
                     .catch(err => this.adapter.log.debug(`[${this.deviceId}] HistPower page ${this.histPage} request failed: ${errorMessage(err)}`));
@@ -1528,7 +1551,7 @@ class DeviceContext {
             this.adapter.log.debug(`[${this.deviceId || this.host}] grid profile package ${pkg + 1}/${total} (${chunk.length} bytes)`);
             if (pkg + 1 < total) {
                 this.connection
-                    ?.send(this.wireFrame(this.protobuf.encodeDevConfigFetch(unixSeconds(), this.dtuSerial, this.inverterSn, pkg + 1)))
+                    ?.send(this.wireFrame(this.protobuf.encodeDevConfigFetch(this.deviceNow(), this.dtuSerial, this.inverterSn, pkg + 1)))
                     .catch(e => this.adapter.log.debug(`[${this.deviceId}] grid profile next-pkg failed: ${errorMessage(e)}`));
                 return;
             }
@@ -1624,6 +1647,7 @@ class DeviceContext {
             const connection = this.connection;
             await executeCommand(stateId, state, {
                 connection: { send: frame => connection.send(this.wireFrame(frame)) },
+                now: () => this.deviceNow(),
                 protobuf: this.protobuf,
                 deviceId: this.deviceId,
                 host: this.host,
