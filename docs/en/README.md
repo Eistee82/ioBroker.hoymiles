@@ -564,7 +564,7 @@ Read on the config/alarm poll. Over TCP the adapter asks with the warning-list c
 | `config.serverSendTime` | number | min | **yes** | Cloud send interval (whole minutes, **5 to 15** — the range the DTU's own cloud path clamps to; the device keeps only the low byte, so 256 would be ignored and 300 would become 44). The state is acknowledged only once the device reports the new value; if it keeps the old one, the log says so. ⚠️ **Neither persistent nor a flash write** (firmware-verified): SetConfig field 10 only lands in RAM (2T V01.01.01 `gp-110092`, HMS-800-2WB `0x73820`); on the 2T the SetConfig path writes flash solely in the WiFi/AP password branch, on the 2WB a later write of the network or cloud settings can store it along. Earlier versions of this documentation called it "persistent (DTU flash)" — that was wrong. Set it again after a device restart |
 | `config.wifiSsid` | string | — | no | WiFi SSID |
 | `config.wifiSignalQuality` | number | % | no | WiFi **signal quality 0–100**, **not dBm** despite the field name. The firmware derives it from the raw RSSI as `clamp(2*(95 - |rssi|), 0, 100)` and names the two values `rssi` (raw) and `wifi_rssi` (this one) in its own debug output. A reading of 46 corresponds to roughly −72 dBm. Earlier versions of this documentation called it “real dBm, e.g. −65” — that was wrong. The raw dBm value stays in the neighbouring byte and is not reachable through any message the adapter uses. The device reports the same quantity as `csq` in its NetworkInfo message — the same byte, so a separate state would be a duplicate |
-| `config.invType` | number | — | no | Inverter type |
+| `config.invType` | number | — | no | Inverter type. The HMS-800-2WB always reports 0 |
 | `config.netmodeSelect` | number | — | no | Network mode (0=GPRS, 1=WiFi, 2=Ethernet). HMS-800-2WB and HMS-800W-2T always report 1 |
 | `config.netDhcpSwitch` | number | — | no | DHCP flag of the wired interface. Never filled by HMS inverters (always 0) — it does not mean "DHCP off" |
 | `config.wifiIpAddress` | string | — | no | WiFi IP address |
@@ -575,10 +575,10 @@ Read on the config/alarm poll. Over TCP the adapter asks with the warning-list c
 | `config.gateway` | string | — | no | Default gateway of the wired interface. Never filled by HMS inverters (always 0.0.0.0) |
 | `config.dnsServer` | string | — | no | The DTU's default DNS server (typically 1.1.1.1). The DTU sets it in place of the DNS server the router hands out |
 | `config.macAddress` | string | — | no | MAC address of the wired interface. Never filled by HMS inverters (always 00:00:00:00:00:00) |
-| `config.meterKind` | string | — | no | Configured meter type. Empty on devices without a meter input — the HMS-800W-2T has none (firmware-verified), so an empty value is the correct answer there |
+| `config.meterKind` | string | — | no | Configured meter type. Empty on devices without a meter input — the HMS-800W-2T has none (firmware-verified), so an empty value is the correct answer there. The HMS-800-2WB reports the same text here and in `config.meterInterface` (typically `NONE`), even with a bound Shelly meter — whether a meter is bound shows in `meter.mode` |
 | `config.meterInterface` | string | — | no | Interface the meter is attached to |
-| `config.zeroExportEnable` | number | — | no | Zero-export flag as reported by the DTU |
-| `config.zeroExport433Addr` | number | — | no | Zero-export 433 MHz address |
+| `config.zeroExportEnable` | number | — | no | Zero-export flag as reported by the DTU. Never filled by HMS inverters (always 0) — zero export with a meter shows in `meter.mode` |
+| `config.zeroExport433Addr` | number | — | no | Zero-export 433 MHz address. Never filled by HMS inverters (always 0) |
 | `config.lockTime` | number | — | no | Raw value of the lock-time field, as the DTU reports it (four bytes, big-endian). On the HMS-800-2WB the lowest byte is one the power-limit command writes (`0x7204b`), which is why a device without a lock shows e.g. 16777217. What the bytes mean as a lock duration is not established |
 
 ### `<dtuSerial>.gridProfile.*` — Grid Profile (per DTU, local — read via the cloud for cloud-only devices)

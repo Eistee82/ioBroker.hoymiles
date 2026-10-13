@@ -569,7 +569,7 @@ Gelesen beim Konfigurations-/Alarm-Poll. Über TCP fragt der Adapter mit dem War
 | `config.serverSendTime` | number | min | **ja** | Cloud-Sendeintervall (ganze Minuten, **5 bis 15** — der Bereich, auf den der Cloud-Weg der DTU selbst begrenzt; das Gerät übernimmt nur das untere Byte, 256 würde also ignoriert und aus 300 würde 44). Der Datenpunkt wird erst bestätigt, wenn das Gerät den neuen Wert meldet; behält es den alten, steht das im Log. ⚠️ **Nicht persistent und ohne Flash-Schreibvorgang** (firmware-belegt): SetConfig Feld 10 landet nur im RAM (2T V01.01.01 `gp-110092`, HMS-800-2WB `0x73820`); beim 2T schreibt der SetConfig-Weg Flash ausschließlich im WLAN-/AP-Passwort-Zweig, beim 2WB kann ein späteres Schreiben der Netz- oder Cloud-Einstellungen den Wert mitspeichern. Frühere Fassungen dieser Doku nannten es „Persistent (DTU-Flash)" — das war falsch. Nach einem Geräteneustart neu setzen |
 | `config.wifiSsid` | string | — | nein | WLAN SSID |
 | `config.wifiSignalQuality` | number | % | nein | WLAN-**Signalqualität 0–100**, trotz des Feldnamens **keine dBm**. Die Firmware rechnet sie aus dem rohen RSSI als `clamp(2*(95 - |rssi|), 0, 100)` und benennt beide Werte in ihrer eigenen Debug-Ausgabe `rssi` (roh) und `wifi_rssi` (dieser Wert). 46 entspricht etwa −72 dBm. Frühere Fassungen dieser Doku nannten es „echtes dBm, z. B. −65“ — das war falsch. Der rohe dBm-Wert liegt im Nachbarbyte und ist über keine vom Adapter genutzte Nachricht erreichbar. Dieselbe Größe führt das Gerät in der NetworkInfo-Nachricht als `csq` — dasselbe Byte, ein separater State wäre ein Duplikat |
-| `config.invType` | number | — | nein | Wechselrichter-Typ |
+| `config.invType` | number | — | nein | Wechselrichter-Typ. Der HMS-800-2WB meldet immer 0 |
 | `config.netmodeSelect` | number | — | nein | Netzwerkmodus (0=GPRS, 1=WiFi, 2=Ethernet). HMS-800-2WB und HMS-800W-2T melden immer 1 |
 | `config.netDhcpSwitch` | number | — | nein | DHCP-Schalter der Kabel-Schnittstelle. Von HMS-Wechselrichtern nie gefüllt (immer 0) — bedeutet nicht „DHCP aus" |
 | `config.wifiIpAddress` | string | — | nein | WLAN IP-Adresse |
@@ -580,10 +580,10 @@ Gelesen beim Konfigurations-/Alarm-Poll. Über TCP fragt der Adapter mit dem War
 | `config.gateway` | string | — | nein | Standard-Gateway der Kabel-Schnittstelle. Von HMS-Wechselrichtern nie gefüllt (immer 0.0.0.0) |
 | `config.dnsServer` | string | — | nein | Standard-DNS-Server der DTU (typisch 1.1.1.1). Die DTU stellt ihn anstelle des DNS-Servers ein, den der Router vergibt |
 | `config.macAddress` | string | — | nein | MAC-Adresse der Kabel-Schnittstelle. Von HMS-Wechselrichtern nie gefüllt (immer 00:00:00:00:00:00) |
-| `config.meterKind` | string | — | nein | Konfigurierter Zählertyp. Leer bei Geräten ohne Zählereingang — der HMS-800W-2T hat keinen (firmware-belegt), dort ist ein leerer Wert die richtige Antwort |
+| `config.meterKind` | string | — | nein | Konfigurierter Zählertyp. Leer bei Geräten ohne Zählereingang — der HMS-800W-2T hat keinen (firmware-belegt), dort ist ein leerer Wert die richtige Antwort. Der HMS-800-2WB meldet hier und in `config.meterInterface` denselben Text (typisch `NONE`), auch mit gebundenem Shelly-Zähler — ob ein Zähler gebunden ist, zeigt `meter.mode` |
 | `config.meterInterface` | string | — | nein | Schnittstelle, an der der Zähler hängt |
-| `config.zeroExportEnable` | number | — | nein | Nulleinspeisungs-Flag, wie von der DTU gemeldet |
-| `config.zeroExport433Addr` | number | — | nein | Nulleinspeisung 433-MHz-Adresse |
+| `config.zeroExportEnable` | number | — | nein | Nulleinspeisungs-Flag, wie von der DTU gemeldet. Von HMS-Wechselrichtern nie gefüllt (immer 0) — Nulleinspeisung mit Zähler zeigt `meter.mode` |
+| `config.zeroExport433Addr` | number | — | nein | Nulleinspeisung 433-MHz-Adresse. Von HMS-Wechselrichtern nie gefüllt (immer 0) |
 | `config.lockTime` | number | — | nein | Rohwert des Sperrzeit-Felds, so wie die DTU ihn meldet (vier Bytes, big-endian). Beim HMS-800-2WB ist das unterste Byte eines, das der Leistungslimit-Befehl schreibt (`0x7204b`), deshalb zeigt ein Gerät ohne Sperre z. B. 16777217. Was die Bytes als Sperrdauer bedeuten, ist nicht belegt |
 
 ### `<dtuSerial>.gridProfile.*` — Netzprofil (pro DTU, lokal — bei reinen Cloud-Geräten über die Cloud gelesen)
