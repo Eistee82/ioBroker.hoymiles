@@ -4,8 +4,9 @@ import CloudRelay from "./cloudRelay.js";
 import { formatDtuVersion, formatSwVersion, formatInvVersion, } from "./protobufHandler.js";
 import { executeCommand, executeCloudCommand, bookFlashWrite, flashWritingStateForAction, groupLastWriteMs, writesConfig, } from "./commandHandler.js";
 import Encryption from "./encryption.js";
-import { buildShellyBindData, encodeShellyBindBody, parseEnergyFlow, parseMeterDevices, SHELLY_DEV_TYPE_GRID, SHELLY_DEV_TYPE_METER_ONLY, } from "./shellyProtocol.js";
+import { normalizeMeterMac, parseCommCmdAnswer, ACTION_SHELLY_BIND, encodeShellyBindBody, parseEnergyFlow, parseMeterDevices, SHELLY_DEV_TYPE_GRID, SHELLY_DEV_TYPE_METER_ONLY, } from "./shellyProtocol.js";
 const SHELLY_CMD_TAG = [0xa3, 0x18];
+const BIND_ANSWER_WINDOW_MS = 30000;
 const CLOUD_ACTION_LIMIT_POWER = 8;
 const CLOUD_ACTION_LIMIT_POWER_RUNTIME = 211;
 import { channels, states, meterMeasurementStates, meterControlStates, localTcpStates, hybridChannels, hybridStates, buildStateCommon, } from "./stateDefinitions.js";
@@ -71,6 +72,7 @@ class DeviceContext {
     histPage;
     histSamples;
     histStart;
+    lastBindMs;
     configWaiters;
     configChain;
     configWriteActive;
@@ -126,6 +128,7 @@ class DeviceContext {
         this.flashWrites = new Map();
         this.energyGuard = new EnergyGuard();
         this.warnedCloudFlashRate = false;
+        this.lastBindMs = 0;
         this.configWaiters = [];
         this.configChain = Promise.resolve();
         this.configWriteActive = false;
@@ -831,6 +834,9 @@ class DeviceContext {
                 case 0xa210:
                     this.adapter.log.debug(`[${tag}] SetConfig response received`);
                     break;
+                case 0xa218:
+                    this.handleCommCmdAnswer(decryptedPayload);
+                    break;
                 case 0xa205:
                 case 0x2305:
                     this.handleCommandResponse(decryptedPayload);
@@ -981,9 +987,9 @@ class DeviceContext {
     }
     async handleShellyStateChange(stateId, state) {
         if (stateId === "meter.deviceId") {
-            const mac = String(state.val ?? "").trim();
+            let mac;
             try {
-                buildShellyBindData(mac, SHELLY_DEV_TYPE_METER_ONLY);
+                mac = normalizeMeterMac(String(state.val ?? ""));
             }
             catch (err) {
                 this.adapter.log.warn(`[${this.deviceId}] Meter MAC rejected: ${errorMessage(err)}`);
@@ -1029,7 +1035,23 @@ class DeviceContext {
         const frame = this.protobuf.buildMessage(SHELLY_CMD_TAG[0], SHELLY_CMD_TAG[1], body);
         this.adapter.log.info(`[${this.deviceId || this.host}] Binding Shelly meter ${anonymize(mac)} as ` +
             `${devType === SHELLY_DEV_TYPE_GRID ? "grid device (zero export)" : "meter only"}`);
+        this.lastBindMs = Date.now();
         return this.connection.send(this.wireFrame(frame));
+    }
+    handleCommCmdAnswer(payload) {
+        const answer = parseCommCmdAnswer(payload);
+        const tag = this.deviceId || this.host;
+        if (!answer) {
+            this.adapter.log.debug(`[${tag}] CommCmd answer without an action (${payload.length} bytes)`);
+            return;
+        }
+        const prompt = Date.now() - this.lastBindMs < BIND_ANSWER_WINDOW_MS;
+        if (answer.action === ACTION_SHELLY_BIND && answer.errCode === 6 && prompt) {
+            this.adapter.log.warn(`[${tag}] The inverter refused the meter binding — an update is running or the ` +
+                `Bluetooth session is not authorised. Choose the meter mode again later.`);
+            return;
+        }
+        this.adapter.log.debug(`[${tag}] CommCmd answer: action ${answer.action}, error ${answer.errCode}`);
     }
     async createShellyStates() {
         if (!this.deviceId) {

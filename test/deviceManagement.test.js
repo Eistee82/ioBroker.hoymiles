@@ -714,7 +714,6 @@ describe("deviceManagement – labels", function () {
 			"shellyModeOff",
 			"shellyModeMeter",
 			"shellyModeZeroExport",
-			"shellyNoneFound",
 		]) {
 			used.add(key);
 		}
@@ -1067,11 +1066,12 @@ describe("deviceManagement – energy meter", function () {
 });
 
 describe("deviceManagement – meter selection", function () {
-	// Nobody should have to look up a MAC address: the inverter reports the meters it knows in
-	// every info response (dtuInfo.shls), and those are offered for selection.
-	it("offers what the inverter found, as a readable dropdown", function () {
+	// dtuInfo.shls is the inverter's list of bound meters (2WB 0x4080f53a), not a network search:
+	// it is empty before the first binding, so the address must always be free to type.
+	it("offers the bound meters as readable suggestions", function () {
 		const schema = buildMeterSchema(["bc2411b807c0", "aabbccddeeff"]);
-		assert.strictEqual(schema.items.mac.type, "select", "must be a selection, not free text");
+		assert.strictEqual(schema.items.mac.type, "autocomplete");
+		assert.strictEqual(schema.items.mac.freeSolo, true, "a meter not bound yet must be enterable");
 		assert.deepStrictEqual(
 			schema.items.mac.options.map(o => o.label),
 			["BC:24:11:B8:07:C0", "AA:BB:CC:DD:EE:FF"],
@@ -1084,11 +1084,12 @@ describe("deviceManagement – meter selection", function () {
 		);
 	});
 
-	it("explains itself when the inverter found nothing", function () {
-		// An empty dropdown would be a dead end the user cannot act on.
+	it("lets the first meter be entered when nothing is bound yet", function () {
+		// A selection-only field here was a dead end: nothing to pick before the first binding.
 		const schema = buildMeterSchema([]);
-		assert.strictEqual(schema.items.mac.type, "staticText");
-		assert.ok(schema.items.mac.text.en.length > 0);
+		assert.strictEqual(schema.items.mac.type, "autocomplete");
+		assert.strictEqual(schema.items.mac.freeSolo, true);
+		assert.deepStrictEqual(schema.items.mac.options, []);
 	});
 
 	it("only offers the two modes that do something", function () {

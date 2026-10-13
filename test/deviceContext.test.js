@@ -6429,6 +6429,44 @@ describe("deviceContext – Shelly meter", function () {
 		assert.strictEqual(adapter.writes.size, 0, "no states before a meter ever reported");
 	});
 
+	const answer = (action, err) => Buffer.concat([vfld(2, 1700000000), vfld(3, action), vfld(6, err)]);
+
+	function withWarnings(adapter) {
+		const warns = [];
+		adapter.log = { ...adapter.log, warn: m => warns.push(m) };
+		return warns;
+	}
+
+	it("warns when the inverter refuses a meter binding it was just sent", function () {
+		const adapter = makeTrackingAdapter();
+		const warns = withWarnings(adapter);
+		const ctx = makeCtx(adapter, "ble");
+		ctx["lastBindMs"] = Date.now();
+		ctx["handleCommCmdAnswer"](answer(85, 6));
+		assert.strictEqual(warns.length, 1);
+		assert.ok(/refused the meter binding/.test(warns[0]));
+	});
+
+	it("does not take a 0 or a late or foreign error for an answer to the binding", function () {
+		const adapter = makeTrackingAdapter();
+		const warns = withWarnings(adapter);
+		const ctx = makeCtx(adapter, "ble");
+		ctx["lastBindMs"] = Date.now();
+		ctx["handleCommCmdAnswer"](answer(85, 0)); // passed the checks — confirms nothing more
+		ctx["handleCommCmdAnswer"](answer(64, 6)); // another action
+		ctx["lastBindMs"] = Date.now() - 60000;
+		ctx["handleCommCmdAnswer"](answer(85, 6)); // long after the bind — the cell is global
+		ctx["handleCommCmdAnswer"](Buffer.alloc(0));
+		assert.deepStrictEqual(warns, []);
+	});
+
+	it("keeps the meter MAC in the form the bind command sends", async function () {
+		const adapter = makeTrackingAdapter();
+		const ctx = makeCtx(adapter, "ble");
+		await ctx["handleShellyStateChange"]("meter.deviceId", { val: "BC:24:11:B8:07:C0", ack: false });
+		assert.strictEqual(adapter.writes.get("4161A031AB61.meter.deviceId"), "bc2411b807c0");
+	});
+
 	it("keeps reporting once the meter has been seen, so a dying poll is visible", async function () {
 		const adapter = makeTrackingAdapter();
 		const ctx = makeCtx(adapter, "ble");

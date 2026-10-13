@@ -33,7 +33,7 @@ export const meterControlStates = [
         states: { 0: "not bound", 1: "meter only", 2: "zero export" },
     }),
     s("meter.deviceId", "Meter MAC", "Zähler-MAC", "text", { source: "local", write: true }),
-    s("meter.detected", "Detected meters (JSON)", "Erkannte Zähler (JSON)", "json", { source: "local" }),
+    s("meter.detected", "Bound meters (JSON)", "Gebundene Zähler (JSON)", "json", { source: "local" }),
     b("meter.connected", "Meter delivering data", "Zähler liefert Daten", "indicator.connected", {
         source: "local",
     }),

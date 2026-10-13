@@ -154,12 +154,32 @@ export function encodeShellyBindBody(mac, devType, timestamp) {
         Buffer.concat([varint((6 << 3) | 2), varint(data.length), data]),
     ]);
 }
-export function buildShellyBindData(mac, devType) {
+export function normalizeMeterMac(mac) {
     const clean = (mac || "").replace(/[:\-\s]/g, "").toLowerCase();
     if (!/^[0-9a-f]{12}$/.test(clean)) {
         throw new Error(`"${mac}" is not a 12-digit hex MAC. The bind command identifies the meter by MAC, ` +
             `not by its mDNS hostname.`);
     }
+    return clean;
+}
+export function parseCommCmdAnswer(payload) {
+    let action = null;
+    let errCode = 0;
+    for (const f of wireFields(payload)) {
+        if (f.wire !== 0) {
+            continue;
+        }
+        if (f.no === 3) {
+            action = asInt32(f.varint);
+        }
+        else if (f.no === 6) {
+            errCode = asInt32(f.varint);
+        }
+    }
+    return action === null ? null : { action, errCode };
+}
+export function buildShellyBindData(mac, devType) {
+    const clean = normalizeMeterMac(mac);
     if (devType !== SHELLY_DEV_TYPE_METER_ONLY && devType !== SHELLY_DEV_TYPE_GRID) {
         throw new Error(`Unknown Shelly device type ${devType} (0 = meter only, 2 = grid device).`);
     }

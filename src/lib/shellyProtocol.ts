@@ -341,19 +341,12 @@ export function encodeShellyBindBody(mac: string, devType: number, timestamp: nu
 }
 
 /**
- * Build the payload for the bind command (`action 85`).
+ * A meter MAC as the bind command takes it: 12 lower-case hex digits, separators removed.
  *
- * The record parser (`0x4081484e`) runs the token through `strtoull(token, NULL, 16)` and looks the
- * result up in the device registry (`0x40831042`, format `"%012llx"`); only a name found there is
- * copied into the device list. A hostname therefore yields 0, the list stays empty, and the DTU
- * logs `[E] Shelly Hostname is NULL` without ever opening a WebSocket — which is why a MAC is
- * required here and a hostname is rejected outright.
- *
- * @param mac - meter MAC, with or without separators
- * @param devType - {@link SHELLY_DEV_TYPE_GRID} or {@link SHELLY_DEV_TYPE_METER_ONLY}
- * @throws {Error} if the MAC is not 12 hex digits or the device type is unknown
+ * @param mac - meter MAC, with or without `:`/`-`/spaces
+ * @throws {Error} if it is not 12 hex digits
  */
-export function buildShellyBindData(mac: string, devType: number): string {
+export function normalizeMeterMac(mac: string): string {
 	const clean = (mac || "").replace(/[:\-\s]/g, "").toLowerCase();
 	if (!/^[0-9a-f]{12}$/.test(clean)) {
 		throw new Error(
@@ -361,6 +354,62 @@ export function buildShellyBindData(mac: string, devType: number): string {
 				`not by its mDNS hostname.`,
 		);
 	}
+	return clean;
+}
+
+/** What the DTU answers to a command sent with tag `0xa318` (its `0xa218`). */
+export interface CommCmdAnswer {
+	/** The action the request carried — mirrored before any check (`0x40813a60`). */
+	action: number;
+	/** 0 = passed the checks; 6 = refused (an update is running, or the session is not authorised). */
+	errCode: number;
+}
+
+/**
+ * Decode the `0xa218` answer: `{1 sn, 2 time, 3 action, 4 cp, 5 tid, 6 err_code}` (descriptor
+ * 2WB VA `0x4090f324`, encoder `0x408122fe`).
+ *
+ * For the bind command (action 85) the firmware sets only 0 or 6: 6 when an update or download
+ * is running (`0x40813a84` → `0x40813b86`) or when a Bluetooth session has not passed its
+ * pairing check (`0x40813ba6`-`0x40813bd8`, "[BLE]illegal User-2!!!"). A 0 does not mean the meter
+ * was bound — an unresolvable MAC and a device in the slave role also answer 0 (`0x4083fefe`
+ * always returns 0; the role gate `0x4081544c` jumps past the bind without setting an error).
+ *
+ * @param payload - decrypted `0xa218` payload
+ * @returns the action and error code, or null when the payload carries no action
+ */
+export function parseCommCmdAnswer(payload: Buffer): CommCmdAnswer | null {
+	let action: number | null = null;
+	let errCode = 0;
+	for (const f of wireFields(payload)) {
+		if (f.wire !== 0) {
+			continue;
+		}
+		if (f.no === 3) {
+			action = asInt32(f.varint);
+		} else if (f.no === 6) {
+			errCode = asInt32(f.varint);
+		}
+	}
+	return action === null ? null : { action, errCode };
+}
+
+/**
+ * Build the payload for the bind command (`action 85`).
+ *
+ * The record parser (`0x4081484e`) runs the token through `strtoull(token, NULL, 16)` and looks the
+ * result up in the device registry (`0x40831042`, format `"%012llx"`); only a name found there is
+ * copied into the device list. A hostname therefore yields 0 and the entry's name stays empty; the
+ * DTU logs `[E] 3rd dev name '' does not contain 'shelly' or 'ecotracker', ignore` (`0x4083119a`)
+ * without ever opening a WebSocket — which is why a MAC is required here and a hostname is rejected
+ * outright.
+ *
+ * @param mac - meter MAC, with or without separators
+ * @param devType - {@link SHELLY_DEV_TYPE_GRID} or {@link SHELLY_DEV_TYPE_METER_ONLY}
+ * @throws {Error} if the MAC is not 12 hex digits or the device type is unknown
+ */
+export function buildShellyBindData(mac: string, devType: number): string {
+	const clean = normalizeMeterMac(mac);
 	if (devType !== SHELLY_DEV_TYPE_METER_ONLY && devType !== SHELLY_DEV_TYPE_GRID) {
 		throw new Error(`Unknown Shelly device type ${devType} (0 = meter only, 2 = grid device).`);
 	}

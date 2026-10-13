@@ -149,6 +149,8 @@ Cloud stations create aggregated device nodes (e.g. `hoymiles.0.station-12345.*`
 ## Changelog
 ### **WORK IN PROGRESS**
 
+- (@Eistee82) **The first meter can be bound from the meter dialog.** The dialog offered only a selection from `meter.detected`, which is the inverter's list of meters already bound — empty before the first binding — so it was a dead end. The MAC address is now free to type, with the bound meters as suggestions; `meter.detected` is renamed "Bound meters"
+- (@Eistee82) **A refused meter binding is reported.** When the inverter answers the bind command with error 6 (an update is running, or the Bluetooth session is not authorised), the log says so instead of the mode just looking set. `meter.deviceId` is stored as 12 hex digits whatever separators were typed
 - (@Eistee82) **`dtu.stepTime` is in minutes.** It is the cloud upload interval — the same value as `config.serverSendTime` — and was labelled in seconds
 - (@Eistee82) **The device details no longer show "DHCP: 0".** The DTU never fills that field; the documentation now says which network fields HMS inverters always report empty or constant
 - (@Eistee82) **Bluetooth-only setups poll the cloud again.** With no TCP device the cloud relay setting (on by default) made the cloud poll wait for relay events that never come, so it never polled on its own. It now keeps its own timer, and a connected Bluetooth inverter no longer counts as "all devices offline"

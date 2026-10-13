@@ -125,11 +125,12 @@ An inverter connected over Bluetooth (the WB series) can share an **energy meter
 not just what you produce but what is flowing to or from the grid — and on request the inverter
 throttles itself so that **nothing is fed into the grid** (zero export).
 
-**Requirement:** the meter must be on the same network and announce itself there. The inverter
-looks for it on its own; whatever it finds appears in the selection.
+**Requirement:** the meter must be on the same network and announce itself there via mDNS — the
+inverter resolves the MAC address you enter through it.
 
-**How to:** in the *Config Manager*, click the meter icon on your inverter. The inverter looks for
-meters on the network itself — you pick one from the list and choose a mode:
+**How to:** in the *Config Manager*, click the meter icon on your inverter, enter the meter's MAC
+address (12 hex digits, e.g. from the Shelly app or your router; meters already bound to the
+inverter are offered for selection) and choose a mode:
 
 | Mode | Effect |
 | --- | --- |
@@ -674,7 +675,7 @@ series has neither a meter input nor a regulation for it, so these states never 
 |-------|------|------|----------|-------------|
 | `meter.mode` | number | — | **yes** | Operating mode: `0` = unbound (starting value, not a command), `1` = meter only, `2` = grid meter for zero export |
 | `meter.deviceId` | string | — | **yes** | MAC of the meter to bind, bare hex or with separators. Once a meter is bound, the device overwrites it with the MAC it reports, as 12 hex digits including leading zeros |
-| `meter.detected` | string | — | no | Meters the inverter found on the network (JSON list) |
+| `meter.detected` | string | — | no | Meters bound to the inverter, as MAC addresses (JSON list). This is the inverter's binding list, not a network search: it is empty before the first binding and was observed empty after a device restart |
 | `meter.connected` | boolean | — | no | Whether the meter is currently delivering data |
 | `meter.lastData` | number | — | no | Timestamp of the last meter reading |
 | `meter.gridPower` | number | W | no | Grid exchange: positive = import, negative = export |

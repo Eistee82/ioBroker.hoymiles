@@ -22,7 +22,9 @@ import {
 } from "./commandHandler.js";
 import Encryption from "./encryption.js";
 import {
-	buildShellyBindData,
+	normalizeMeterMac,
+	parseCommCmdAnswer,
+	ACTION_SHELLY_BIND,
 	encodeShellyBindBody,
 	parseEnergyFlow,
 	parseMeterDevices,
@@ -32,6 +34,12 @@ import {
 
 /** `CommCmd` carrier tag — the same one the pairing handshake uses. */
 const SHELLY_CMD_TAG = [0xa3, 0x18] as const;
+/**
+ * How long after a bind command an `0xa218` refusal is taken as its answer. The error code sits
+ * in one global cell that other handlers write too, and the answer cannot be matched by tid over
+ * Bluetooth (it carries the cloud mirror, `0x40815728`) — only by action and by being prompt.
+ */
+const BIND_ANSWER_WINDOW_MS = 30000;
 /** Cloud action codes of the two power-limit commands (percent, persistent / watts, runtime). */
 const CLOUD_ACTION_LIMIT_POWER = 8;
 const CLOUD_ACTION_LIMIT_POWER_RUNTIME = 211;
@@ -234,6 +242,8 @@ class DeviceContext {
 	private histSamples: number[];
 	/** Unix timestamp of the first sample of the current curve. */
 	private histStart: number;
+	/** When the last meter bind command went out — to match its `0xa218` answer. */
+	private lastBindMs: number;
 	/**
 	 * Callers waiting for the next GetConfig answer (see {@link readConfig}). The answer is handed
 	 * over raw and complete, including credentials the device sends in the clear (`lock_password`,
@@ -358,6 +368,7 @@ class DeviceContext {
 		this.flashWrites = new Map();
 		this.energyGuard = new EnergyGuard();
 		this.warnedCloudFlashRate = false;
+		this.lastBindMs = 0;
 		this.configWaiters = [];
 		this.configChain = Promise.resolve();
 		this.configWriteActive = false;
@@ -1414,6 +1425,9 @@ class DeviceContext {
 				case 0xa210:
 					this.adapter.log.debug(`[${tag}] SetConfig response received`);
 					break;
+				case 0xa218:
+					this.handleCommCmdAnswer(decryptedPayload);
+					break;
 				case 0xa205:
 				case 0x2305:
 					this.handleCommandResponse(decryptedPayload);
@@ -1611,8 +1625,8 @@ class DeviceContext {
 
 	/**
 	 * Regex matching data-channel state IDs that should receive quality updates on disconnect.
-	 * `meter.mode`, `meter.deviceId` and `meter.detected` are settings and the result of a search,
-	 * not measurements, and stay as they are.
+	 * `meter.mode`, `meter.deviceId` and `meter.detected` are settings and the device's binding
+	 * list, not measurements, and stay as they are.
 	 */
 	private static readonly DATA_STATE_PATTERN =
 		/^(grid\.|pv\d+\.|inverter\.(temperature|active|warnCount|warnMessage|activePowerLimit|powerLimitWatt)|meter\.(?!(mode|deviceId|detected)$))/;
@@ -1699,11 +1713,12 @@ class DeviceContext {
 	 */
 	private async handleShellyStateChange(stateId: string, state: ioBroker.State): Promise<void> {
 		if (stateId === "meter.deviceId") {
-			const mac = String(state.val ?? "").trim();
+			let mac: string;
 			try {
-				// Validate through the same builder the command uses, so a bad address is refused
-				// here rather than silently ignored by the device later.
-				buildShellyBindData(mac, SHELLY_DEV_TYPE_METER_ONLY);
+				// Validate the way the command does, so a bad address is refused here rather than
+				// silently ignored by the device later. Kept in the form the command sends, which is
+				// also how the device reports it back.
+				mac = normalizeMeterMac(String(state.val ?? ""));
 			} catch (err) {
 				this.adapter.log.warn(`[${this.deviceId}] Meter MAC rejected: ${errorMessage(err)}`);
 				return;
@@ -1767,7 +1782,32 @@ class DeviceContext {
 			`[${this.deviceId || this.host}] Binding Shelly meter ${anonymize(mac)} as ` +
 				`${devType === SHELLY_DEV_TYPE_GRID ? "grid device (zero export)" : "meter only"}`,
 		);
+		this.lastBindMs = Date.now();
 		return this.connection.send(this.wireFrame(frame));
+	}
+
+	/**
+	 * The answer to a bind command. Only a refusal (error 6) is worth a warning: the DTU answers
+	 * 0 as well when it could not resolve the MAC or acts as a slave, so a 0 confirms nothing.
+	 *
+	 * @param payload - decrypted `0xa218` payload
+	 */
+	private handleCommCmdAnswer(payload: Buffer): void {
+		const answer = parseCommCmdAnswer(payload);
+		const tag = this.deviceId || this.host;
+		if (!answer) {
+			this.adapter.log.debug(`[${tag}] CommCmd answer without an action (${payload.length} bytes)`);
+			return;
+		}
+		const prompt = Date.now() - this.lastBindMs < BIND_ANSWER_WINDOW_MS;
+		if (answer.action === ACTION_SHELLY_BIND && answer.errCode === 6 && prompt) {
+			this.adapter.log.warn(
+				`[${tag}] The inverter refused the meter binding — an update is running or the ` +
+					`Bluetooth session is not authorised. Choose the meter mode again later.`,
+			);
+			return;
+		}
+		this.adapter.log.debug(`[${tag}] CommCmd answer: action ${answer.action}, error ${answer.errCode}`);
 	}
 
 	/** Create the `shelly` channel and its states. Called once, on the first frame with a meter. */

@@ -126,11 +126,12 @@ Damit siehst du nicht nur die Erzeugung, sondern auch, was gerade aus dem Netz k
 — und auf Wunsch regelt der Wechselrichter sich selbst so weit herunter, dass **nichts eingespeist**
 wird (Nulleinspeisung).
 
-**Voraussetzung:** Der Zähler muss im selben Netzwerk hängen und sich dort ankündigen. Der
-Wechselrichter sucht selbstständig danach; gefundene Zähler stehen dann im Auswahlfeld.
+**Voraussetzung:** Der Zähler muss im selben Netzwerk hängen und sich dort per mDNS ankündigen —
+darüber löst der Wechselrichter die eingegebene MAC-Adresse auf.
 
-**So geht's:** Im *Konfig-Manager* beim Wechselrichter das Zähler-Symbol anklicken. Der Wechselrichter
-sucht selbst nach Zählern im Netzwerk — du wählst einen aus der Liste und legst die Betriebsart fest:
+**So geht's:** Im *Konfig-Manager* beim Wechselrichter das Zähler-Symbol anklicken, die MAC-Adresse
+des Zählers eingeben (12 Hex-Ziffern, z. B. aus der Shelly-App oder dem Router; bereits an den
+Wechselrichter gebundene Zähler stehen zur Auswahl) und die Betriebsart festlegen:
 
 | Betriebsart | Wirkung |
 | --- | --- |
@@ -680,7 +681,7 @@ Datenpunkte nie.
 |------------|-----|---------|------------|--------------|
 | `meter.mode` | number | — | **ja** | Betriebsart: `0` = nicht gekoppelt (Startwert, kein Befehl), `1` = nur auslesen, `2` = Netzzähler für Nulleinspeisung |
 | `meter.deviceId` | string | — | **ja** | MAC des zu koppelnden Zählers, reines Hex oder mit Trennzeichen. Ist ein Zähler gekoppelt, überschreibt das Gerät den Wert mit der gemeldeten MAC, 12 Hex-Ziffern einschließlich führender Nullen |
-| `meter.detected` | string | — | nein | Vom Wechselrichter im Netz gefundene Zähler (JSON-Liste) |
+| `meter.detected` | string | — | nein | An den Wechselrichter gebundene Zähler als MAC-Adressen (JSON-Liste). Das ist die Bindungsliste des Wechselrichters, keine Netzwerksuche: Vor dem ersten Binden ist sie leer, und nach einem Geräteneustart wurde sie leer beobachtet |
 | `meter.connected` | boolean | — | nein | Ob der Zähler gerade Daten liefert |
 | `meter.lastData` | number | — | nein | Zeitstempel der letzten Zählermessung |
 | `meter.gridPower` | number | W | nein | Netzaustausch: positiv = Bezug, negativ = Einspeisung |

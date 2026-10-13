@@ -1046,7 +1046,7 @@ class ProtobufHandler {
 				wifiVersion: (di.wifiVersion as string) || "",
 				dtu485Mode: num(di.dtu485Mode),
 				sub1gFrequencyBand: num(di.sub1gFrequencyBand),
-				// `shls` carries the network meters the device knows, as numeric MACs.
+				// `shls` is the DTU's list of bound meters, as numeric MACs (see knownMeters).
 				knownMeters: (Array.isArray(di.shls) ? di.shls : [])
 					.map(v => (typeof v === "string" ? BigInt(v) : BigInt(Number(v) || 0)))
 					.filter(v => v > 0n)

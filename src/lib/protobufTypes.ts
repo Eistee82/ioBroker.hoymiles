@@ -167,11 +167,12 @@ export interface DtuInfo {
 	/** Access model (AP/STA). */
 	accessModel: number;
 	/**
-	 * Network meters the DTU knows about, as lower-case hex MACs.
+	 * Meters bound to the DTU, as lower-case hex MACs.
 	 *
-	 * Comes from `dtuInfo.shls`, which the device fills in every info response. Observed empty
-	 * before a meter was ever bound and carrying the meter's MAC afterwards — so the adapter can
-	 * offer these for selection instead of asking the user to type a MAC.
+	 * Comes from `dtuInfo.shls`, the DTU's binding list (2WB builder `0x4080f53a`-`0x4080f71a`,
+	 * filled only by the bind command and its sync): a meter appears once a bind resolved its MAC.
+	 * It is not a network search — empty before the first binding, and observed empty after a
+	 * device restart. An unresolved bind leaves a 0 entry, which is dropped here.
 	 */
 	knownMeters: string[];
 	/** Communication time in seconds. */

@@ -1,6 +1,8 @@
 import assert from "node:assert";
 import {
 	buildShellyBindData,
+	normalizeMeterMac,
+	parseCommCmdAnswer,
 	parseEnergyFlow,
 	parseMeterDevices,
 	SHELLY_DEV_TYPE_GRID,
@@ -79,10 +81,29 @@ function meterPayload(fieldNo, serial, phases, head = {}) {
 	return fld(fieldNo, 2, msg(Buffer.concat(parts)));
 }
 
+describe("shellyProtocol — answer to a318 (a218)", function () {
+	it("reads action and error code", function () {
+		// {2 time=1, 3 action=85, 6 err_code=6}
+		const payload = Buffer.from([0x10, 0x01, 0x18, 0x55, 0x30, 0x06]);
+		assert.deepStrictEqual(parseCommCmdAnswer(payload), { action: 85, errCode: 6 });
+	});
+
+	it("reads a missing error code as 0 and an answer without an action as nothing", function () {
+		assert.deepStrictEqual(parseCommCmdAnswer(Buffer.from([0x18, 0x55])), { action: 85, errCode: 0 });
+		assert.strictEqual(parseCommCmdAnswer(Buffer.from([0x10, 0x01])), null);
+	});
+
+	it("normalises a MAC to the form the bind command sends", function () {
+		assert.strictEqual(normalizeMeterMac("BC:24:11:B8:07:C0"), "bc2411b807c0");
+		assert.strictEqual(normalizeMeterMac("bc-24-11-b8-07-c0"), "bc2411b807c0");
+		assert.throws(() => normalizeMeterMac("shellypro3em-bc2411b807c0"), /12-digit hex MAC/);
+	});
+});
+
 describe("shellyProtocol — bind payload (action 85)", function () {
 	// Firmware-proven format: "<count>\r<mac-hex>,<type>\r". The record parser runs the token
 	// through strtoull(base 16) and looks it up in the device registry, so a hostname yields 0
-	// and the device list stays empty ("[E] Shelly Hostname is NULL").
+	// and the entry's name stays empty ("[E] 3rd dev name '' does not contain 'shelly' or 'ecotracker'").
 	it("builds the documented payload from a bare hex MAC", function () {
 		assert.strictEqual(buildShellyBindData("bc2411b807c0", SHELLY_DEV_TYPE_GRID), "1\rbc2411b807c0,2\r");
 	});
