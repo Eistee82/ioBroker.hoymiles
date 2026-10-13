@@ -12,7 +12,9 @@ import {
 import {
 	executeCommand,
 	executeCloudCommand,
+	bookFlashWrite,
 	flashWritingStateForAction,
+	groupLastWriteMs,
 	type FlashGuardOptions,
 	type FlashWriteState,
 	type PowerLimitKind,
@@ -1065,14 +1067,11 @@ class DeviceContext {
 		if (!stateId) {
 			return;
 		}
-		let entry = this.flashWrites.get(stateId);
-		if (!entry) {
-			entry = { lastValue: null, lastWriteMs: 0, skipsLogged: 0 };
-			this.flashWrites.set(stateId, entry);
-		}
+		const lookup = (id: string): FlashWriteState => this.flashWriteEntry(id);
+		const lastWriteMs = groupLastWriteMs(stateId, lookup);
 		const now = Date.now();
-		const sinceMs = now - entry.lastWriteMs;
-		if (entry.lastWriteMs > 0 && this.flashGuard.minIntervalMs > 0 && sinceMs < this.flashGuard.minIntervalMs) {
+		const sinceMs = now - lastWriteMs;
+		if (lastWriteMs > 0 && this.flashGuard.minIntervalMs > 0 && sinceMs < this.flashGuard.minIntervalMs) {
 			if (!this.warnedCloudFlashRate) {
 				this.warnedCloudFlashRate = true;
 				this.adapter.log.warn(
@@ -1083,9 +1082,25 @@ class DeviceContext {
 				);
 			}
 		}
-		entry.lastValue = null;
-		entry.lastWriteMs = now;
-		entry.skipsLogged = 0;
+		bookFlashWrite(stateId, null, now, lookup);
+		// The command overwrote cell A with a value the adapter cannot read from the forwarded
+		// payload. A configuration write copies field 5 from the snapshot into cell A, so the old
+		// snapshot would put the previous value back; drop it until the next GetConfig answer.
+		this.configSnapshot = null;
+	}
+
+	/**
+	 * The flash-write memory of one state, created on first use.
+	 *
+	 * @param stateId - State ID relative to the device prefix.
+	 */
+	private flashWriteEntry(stateId: string): FlashWriteState {
+		let entry = this.flashWrites.get(stateId);
+		if (!entry) {
+			entry = { lastValue: null, lastWriteMs: 0, skipsLogged: 0 };
+			this.flashWrites.set(stateId, entry);
+		}
+		return entry;
 	}
 
 	/**
@@ -2734,13 +2749,12 @@ class DeviceContext {
 				resetButton: id => this.scheduleButtonReset(id),
 				configSnapshot: this.configSnapshot,
 				flashGuard: this.flashGuard,
-				flashWriteState: id => {
-					let entry = this.flashWrites.get(id);
-					if (!entry) {
-						entry = { lastValue: null, lastWriteMs: 0, skipsLogged: 0 };
-						this.flashWrites.set(id, entry);
+				flashWriteState: id => this.flashWriteEntry(id),
+				// The next SetConfig carries field 5 from this snapshot into cell A — keep it current.
+				onCellAWritten: value => {
+					if (this.configSnapshot) {
+						this.configSnapshot.limitPowerMypower = value;
 					}
-					return entry;
 				},
 				// Only the TCP path echoes the commanded limit. On the WB series the RealData field
 				// carries the EMS set point instead, which would not confirm anything.

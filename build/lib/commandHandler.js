@@ -1,5 +1,38 @@
 import { POWER_LIMIT_MIN, POWER_LIMIT_MAX, POWER_LIMIT_WATT_MAX, POWER_LIMIT_WATT_MIN, DEVICE_COMMAND_REBOOT, DEVICE_COMMAND_POWER_ON, DEVICE_COMMAND_POWER_OFF, DTU_COMMAND_REBOOT, DTU_COMMAND_REBOOT_STORAGE, CLOUD_DEV_TYPE_DTU, CLOUD_DEV_TYPE_MICRO, CLOUD_DEV_TYPE_STORAGE_INVERTER, } from "./constants.js";
 import { unixSeconds } from "./utils.js";
+export const CELL_A_STATES = [
+    "inverter.powerLimit",
+    "inverter.powerFactorLimit",
+    "inverter.reactivePowerLimit",
+];
+function flashGroup(stateId) {
+    return CELL_A_STATES.includes(stateId) ? CELL_A_STATES : [stateId];
+}
+const bookings = new WeakMap();
+let bookingSeq = 0;
+export function bookFlashWrite(stateId, value, nowMs, lookup) {
+    const seq = ++bookingSeq;
+    const before = flashGroup(stateId).map(id => ({ entry: lookup(id), saved: { ...lookup(id) } }));
+    for (const { entry: member } of before) {
+        member.lastValue = null;
+        bookings.set(member, seq);
+    }
+    const entry = lookup(stateId);
+    entry.lastValue = value;
+    entry.lastWriteMs = nowMs;
+    entry.skipsLogged = 0;
+    return () => {
+        if (before.some(({ entry: member }) => bookings.get(member) !== seq)) {
+            return;
+        }
+        for (const { entry: member, saved } of before) {
+            Object.assign(member, saved);
+        }
+    };
+}
+export function groupLastWriteMs(stateId, lookup) {
+    return Math.max(...flashGroup(stateId).map(id => lookup(id).lastWriteMs));
+}
 export function shouldSkipFlashWrite(value, last, guard, nowMs, valueSpan = 100) {
     if (last.lastValue !== null && guard.deadband > 0) {
         const change = Math.abs(value - last.lastValue);
@@ -17,7 +50,16 @@ export function shouldSkipFlashWrite(value, last, guard, nowMs, valueSpan = 100)
     return null;
 }
 export function flashWritingStateForAction(action) {
-    return action === 8 ? "inverter.powerLimit" : null;
+    switch (action) {
+        case 8:
+            return "inverter.powerLimit";
+        case 47:
+            return "inverter.powerFactorLimit";
+        case 48:
+            return "inverter.reactivePowerLimit";
+        default:
+            return null;
+    }
 }
 const COMMANDS = {
     "inverter.powerLimit": {
@@ -29,6 +71,7 @@ const COMMANDS = {
         writesFlash: true,
         valueSpan: 100,
         readback: "percent",
+        cellA: v => Math.round(v * 10),
     },
     "inverter.active": {
         encode: (v, ts, pb) => (v ? pb.encodeInverterOn(ts) : pb.encodeInverterOff(ts)),
@@ -50,13 +93,15 @@ const COMMANDS = {
         log: v => `Setting power factor limit to ${v}`,
         writesFlash: true,
         valueSpan: 2,
+        cellA: v => Math.round(v * 1000),
     },
     "inverter.reactivePowerLimit": {
-        validate: v => (!(v >= -50 && v <= 50) ? "Reactive power limit must be -50…+50°" : null),
+        validate: v => (!(v >= -50 && v <= 50) ? "Reactive power setpoint must be -50…+50 %" : null),
         encode: (v, ts, pb) => pb.encodeReactivePowerLimit(Number(v), ts),
-        log: v => `Setting reactive power limit to ${v}°`,
+        log: v => `Setting reactive power setpoint to ${v} %`,
         writesFlash: true,
         valueSpan: 100,
+        cellA: v => Math.round(v * 10),
     },
     "inverter.cleanWarnings": {
         encode: (_v, ts, pb) => pb.encodeCleanWarnings(ts),
@@ -86,6 +131,7 @@ const COMMANDS = {
         readback: "watt",
     },
 };
+const notSentWarned = new Set();
 async function executeCommand(stateId, state, ctx) {
     const cmd = COMMANDS[stateId];
     if (!cmd) {
@@ -102,9 +148,12 @@ async function executeCommand(stateId, state, ctx) {
             return;
         }
     }
+    let undoBooking = null;
     if (cmd.writesFlash && ctx.flashGuard && ctx.flashWriteState) {
-        const last = ctx.flashWriteState(stateId);
-        const skip = shouldSkipFlashWrite(Number(state.val), last, ctx.flashGuard, Date.now(), cmd.valueSpan);
+        const lookup = ctx.flashWriteState;
+        const last = lookup(stateId);
+        const nowMs = Date.now();
+        const skip = shouldSkipFlashWrite(Number(state.val), { ...last, lastWriteMs: groupLastWriteMs(stateId, lookup) }, ctx.flashGuard, nowMs, cmd.valueSpan);
         if (skip) {
             const message = `[${deviceId}] Skipping "${stateId}" to protect the DTU flash — ${skip}`;
             if (last.skipsLogged === 0) {
@@ -114,12 +163,12 @@ async function executeCommand(stateId, state, ctx) {
                 log.debug(message);
             }
             last.skipsLogged++;
-            await ctx.setState(stateId, state.val, true);
+            if (last.lastValue !== null) {
+                await ctx.setState(stateId, last.lastValue, true);
+            }
             return;
         }
-        last.skipsLogged = 0;
-        last.lastValue = Number(state.val);
-        last.lastWriteMs = Date.now();
+        undoBooking = bookFlashWrite(stateId, Number(state.val), nowMs, lookup);
     }
     log.info(`[${deviceId}] ${cmd.log(state.val)}`);
     const timestamp = ctx.now ? ctx.now() : unixSeconds();
@@ -129,9 +178,31 @@ async function executeCommand(stateId, state, ctx) {
     }
     catch (err) {
         log.warn(`[${deviceId}] Cannot execute "${stateId}": ${err instanceof Error ? err.message : String(err)}`);
+        undoBooking?.();
+        if (cmd.button) {
+            ctx.resetButton(stateId);
+        }
         return;
     }
-    await connection.send(frame);
+    if ((await connection.send(frame)) === false) {
+        undoBooking?.();
+        const message = `[${deviceId}] "${stateId}" was not sent — the connection is down`;
+        if (notSentWarned.has(deviceId)) {
+            log.debug(message);
+        }
+        else {
+            notSentWarned.add(deviceId);
+            log.warn(message);
+        }
+        if (cmd.button) {
+            ctx.resetButton(stateId);
+        }
+        return;
+    }
+    notSentWarned.delete(deviceId);
+    if (cmd.cellA && ctx.onCellAWritten) {
+        ctx.onCellAWritten(cmd.cellA(Number(state.val)));
+    }
     if (!cmd.button) {
         if (cmd.readback && ctx.expectReadback) {
             ctx.expectReadback(cmd.readback);

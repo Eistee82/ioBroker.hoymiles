@@ -327,7 +327,7 @@ const states = [
         max: 1,
         source: "local",
     }),
-    n("inverter.reactivePowerLimit", "Reactive power limit", "Blindleistungs-Limit", "level", "°", {
+    n("inverter.reactivePowerLimit", "Reactive power setpoint", "Blindleistungs-Sollwert", "level", "%", {
         write: true,
         min: -50,
         max: 50,

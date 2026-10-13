@@ -65,7 +65,7 @@ Open the adapter configuration in the ioBroker admin interface.
 | **Data query interval** | 5s | Seconds between data requests (0-300). Set 0 for fastest possible (~1s per cycle). |
 | **Config/alarm poll factor** | 6 | Config and alarms are queried every Nth data cycle. |
 | **Power limit dead band** | 1 % | Smaller power-limit changes are not sent to the device. Every write erases two flash sectors. 0 = off. |
-| **Power limit minimum interval** | 60 s | Shortest gap between two power-limit writes. 0 = off. |
+| **Power limit minimum interval** | 60 s | Shortest gap between two writes of the power limit, power factor or reactive power — they share one memory cell, so the gap counts across all three. 0 = off. |
 | **Cloud Relay** | on | Forward real-time data to Hoymiles Cloud on behalf of the DTU. Without this, the local TCP connection blocks the DTU from uploading to the cloud. |
 
 > **DTU firmware V01.01.01 and later encrypts the local connection.** The adapter notices this in the DTU's first answer and switches to AES-128-GCM by itself — nothing to configure. Such a DTU also talks to the cloud over TLS (port 10083), and the cloud relay follows suit: it always connects to the server and port the DTU itself is configured for (`config.serverDomain` / `config.serverPort`), with TLS on port 10083 and plain TCP on port 10081. Older firmware (up to V01.00.07) keeps working exactly as before.
@@ -138,7 +138,8 @@ meters on the network itself — you pick one from the list and choose a mode:
 | **Zero export** | The inverter additionally treats the meter as its grid meter and throttles its own output as soon as surplus would go to the grid. |
 
 The regulation runs **inside the inverter** — the adapter only sets it up and watches. It does not
-need to be running for it to work.
+need to be running for it to work. `inverter.powerLimit` stays in force alongside it as the upper
+bound: the regulation never sets more than the limit.
 
 > **Important:** the meter has to announce itself on the network **via mDNS**. If the inverter
 > cannot find it there, it accepts the setting but never fetches any data. A genuine Shelly does
@@ -187,7 +188,8 @@ Every slider is preceded by its current value and unit, because the slider itsel
 **Settings** (gear icon, local devices only) — everything the DTU keeps:
 
 - Power limit, power factor limit, reactive power limit.
-- Every field carries the note that frequent changes wear out the device memory. The dialog writes **only the fields you actually changed** — an untouched field is not rewritten.
+- Every field carries the note that frequent changes wear out the device memory. The dialog writes **only the field you actually changed** — an untouched field is not rewritten.
+- The three share one memory cell in the device, each overwriting the others, so the dialog sends **one change at a time**. If you change more than one field, it sends nothing and tells you so.
 
 **Card buttons** (with confirmation): reboot inverter, reboot DTU and — **only when there is something to acknowledge** — acknowledge warnings and acknowledge grounding fault. The warning button appears while `alarms.hasActive` is set; the grounding button only while the alarm list holds an active entry with the grounding alarm code (182). Neither is shown until the alarm list has been read.
 
@@ -344,13 +346,13 @@ The adapter determines how many there are, in this order:
 | `inverter.hwVersion` | string | — | no | Hardware version |
 | `inverter.swVersion` | string | — | no | Software version |
 | `inverter.temperature` | number | °C | no | Inverter temperature |
-| `inverter.powerLimit` | number | % | **yes** | Power limit, 2–100 %, local. **Persistent:** the DTU stores it in its flash and the inverter in its EEPROM, so it is also the value the inverter starts with every morning. ⚠️ Every write programs flash in both (see the warning below) — the adapter therefore throttles it with a dead band and a minimum interval. For a fast zero-export loop on the HMS-800W-2T family use `inverter.powerLimitWatt` instead. Over local TCP the state is acknowledged by the DTU's echo (see below) |
+| `inverter.powerLimit` | number | % | **yes** | Power limit, 2–100 %, local. **Persistent:** the DTU stores it in its flash and the inverter in its EEPROM, so it is also the value the inverter starts with every morning (on the WB series not yet confirmed on the device). It shares one memory cell in the DTU with `inverter.powerFactorLimit` and `inverter.reactivePowerLimit`: writing either of those overwrites the stored limit. ⚠️ Every write programs flash in both (see the warning below) — the adapter therefore throttles it with a dead band and a minimum interval. For a fast zero-export loop on the HMS-800W-2T family use `inverter.powerLimitWatt` instead. Over local TCP the state is acknowledged by the DTU's echo (see below) |
 | `inverter.powerLimitWatt` | number | W | **yes** | Runtime power limit in watts, 0.1–3276.7 W in steps of 0.1 W. **HMS-800W-2T family over local TCP only** — the WB series has no such command, so the state is not created there. Takes effect immediately and writes **neither the DTU flash nor the inverter EEPROM** (action 211, firmware-verified and tested live), so it needs no throttling and suits a zero-export loop. **Lost when the inverter restarts** (every night) — then `inverter.powerLimit` applies again; the adapter does not re-send it. Below about 2 % of the inverter's rated power the inverter applies its own 2 % floor. Acknowledged by the DTU's echo; quality `0x42` after a disconnect |
 | `inverter.activePowerLimit` | number | % | no | Active power limit in percent (live, local). While a watt limit (`inverter.powerLimitWatt`) is in force it is not updated — the DTU then reports watts, which is confirmed in `inverter.powerLimitWatt` instead |
 | `inverter.active` | boolean | — | **yes** | Turn inverter on/off (local; via the cloud for cloud-only devices). On a hybrid inverter the value is read back from the cloud: on while the cloud reports it connected and in On-grid Mode or exchanging AC power, off while disconnected |
 | `inverter.reboot` | boolean | — | **yes** | Reboot inverter (button, local; via the cloud for cloud-only devices) |
-| `inverter.powerFactorLimit` | number | — | **yes** | Power factor limit (-1 to 1, local). ⚠️ Programs flash just like the power limit (action 47, same success path) — throttled |
-| `inverter.reactivePowerLimit` | number | ° | **yes** | Reactive power limit (-50 to 50, local). ⚠️ Programs flash just like the power limit (action 48, same success path) — throttled |
+| `inverter.powerFactorLimit` | number | — | **yes** | Power factor limit (-1.0 to -0.8 or 0.8 to 1.0, local). Takes effect only when the inverter's grid profile enables a fixed power factor — otherwise the inverter rejects it, while the DTU still reports success. ⚠️ Overwrites the power limit stored in the DTU (same memory cell) and programs flash just like it (action 47) — throttled together with the power limit |
+| `inverter.reactivePowerLimit` | number | % | **yes** | Reactive power setpoint (-50 to +50 %, local). The inverter takes it as a plain ratio (value / 100) — the unit used to be shown as degrees, which was wrong. Takes effect only when the inverter's grid profile enables a fixed reactive power — otherwise the inverter rejects it, while the DTU still reports success. ⚠️ Overwrites the power limit stored in the DTU (same memory cell) and programs flash just like it (action 48) — throttled together with the power limit |
 | `inverter.cleanWarnings` | boolean | — | **yes** | Acknowledge warnings (button, local). Works on both device series |
 | `inverter.cleanGroundingFault` | boolean | — | **yes** | Acknowledge grounding fault (button, local). ⚠️ **No effect on the WB series** — its firmware accepts the command, does not carry it out, and still reports success (firmware-verified). The T series executes it |
 | `inverter.lock` | boolean | — | **yes** | Lock/unlock inverter (local) |
@@ -505,18 +507,27 @@ Read on the config/alarm poll. Over TCP the adapter asks with the warning-list c
 > `nv_erase`+`nv_write` twice). Flash endurance is finite — tens of thousands of cycles — so a
 > per-second zero-export loop wears it out and can **permanently brick the device**.
 >
+> **The three are one command to the DTU.** They store their value in the **same memory cell** and
+> its flash copy, and use one command slot towards the inverter (HMS-800-2WB `0x4080aa90`,
+> HMS-800W-2T `0x40813492`). Writing the power factor or the reactive power therefore **overwrites
+> the stored power limit** — even when the inverter then rejects the value. Send the power limit
+> again afterwards if you need it.
+>
 > **The adapter guards against this:** the settings (*Local* tab) offer a **dead band**
 > (default 1 %) and a **minimum interval** (default 60 s). A change below the dead band, or one
-> that comes too soon after the last write, is not sent; the state is still acknowledged and the
-> log says why. Both values can be adjusted or switched off with 0 — anyone who deliberately wants
+> that comes too soon after the last write of any of the three, is not sent; the state is
+> acknowledged with the value last written — what the device still holds — and the log says why.
+> When that value is not known (another of the three was written in between), the state stays
+> unacknowledged. Both values can be adjusted or switched off with 0 — anyone who deliberately wants
 > to regulate faster can, and accepts the wear.
 >
 > **For zero-export on the HMS-800W-2T family use `inverter.powerLimitWatt`:** it takes effect
 > immediately, in watts, and writes neither the DTU flash nor the inverter EEPROM. It is lost when
 > the inverter restarts — every night, since the inverter switches off without sun — after which
 > the percentage in `inverter.powerLimit` applies again. The WB series has no such command: there
-> `inverter.powerLimit` is the only limit, with the wear described above, or the inverter regulates
-> zero export itself with a connected meter (`meter.mode`).
+> `inverter.powerLimit` is the only limit, with the wear described above. With a connected meter
+> (`meter.mode`) the inverter regulates zero export itself, and `inverter.powerLimit` stays its
+> upper bound.
 
 > ⚠️ **Writing configuration — the adapter always reads first.**
 >

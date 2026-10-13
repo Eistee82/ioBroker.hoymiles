@@ -398,23 +398,46 @@ describe("deviceManagement – buildDeviceActions", function () {
 		assert.deepStrictEqual(mock.setCalls, [{ id: "SN1.inverter.reboot", val: true, ack: false }]);
 	});
 
-	it("settings action persists the values the form returns", async function () {
+	it("settings action persists the value the form returns", async function () {
 		const mock = makeMock();
 		const actions = await buildDeviceActions(mock, "SN1", true);
 		const settings = actions.find(a => a.id === "settings");
+		const context = { showForm: async () => ({ inverter_powerLimit: 80 }) };
+		await settings.handler("SN1", context);
+		assert.deepStrictEqual(mock.setCalls, [{ id: "SN1.inverter.powerLimit", val: 80, ack: false }]);
+	});
+
+	// The three share the DTU's cell A and one command slot: sent in a row, each overwrites the one
+	// before and the later ones can find the slot busy.
+	it("settings action sends nothing when more than one field changed", async function () {
+		const mock = makeMock({
+			"SN1.inverter.powerLimit": { val: 80, ack: true },
+			"SN1.inverter.powerFactorLimit": { val: 0.9, ack: true },
+			"SN1.inverter.reactivePowerLimit": { val: 10, ack: true },
+		});
+		const actions = await buildDeviceActions(mock, "SN1", true);
+		const messages = [];
 		const context = {
 			showForm: async () => ({
-				inverter_powerLimit: 80,
-				inverter_powerFactorLimit: 0.9,
+				inverter_powerLimit: 70,
+				inverter_powerFactorLimit: 0.95,
 				inverter_reactivePowerLimit: 10,
 			}),
+			showMessage: async text => messages.push(text),
 		};
-		await settings.handler("SN1", context);
-		assert.deepStrictEqual(mock.setCalls, [
-			{ id: "SN1.inverter.powerLimit", val: 80, ack: false },
-			{ id: "SN1.inverter.powerFactorLimit", val: 0.9, ack: false },
-			{ id: "SN1.inverter.reactivePowerLimit", val: 10, ack: false },
-		]);
+		await actions.find(a => a.id === "settings").handler("SN1", context);
+		assert.deepStrictEqual(mock.setCalls, []);
+		assert.strictEqual(messages.length, 1, "the user must be told why nothing happened");
+	});
+
+	it("settings action never sends an empty field as 0", async function () {
+		const mock = makeMock({ "SN1.inverter.powerLimit": { val: 80, ack: true } });
+		const actions = await buildDeviceActions(mock, "SN1", true);
+		const context = {
+			showForm: async () => ({ inverter_powerLimit: 80, inverter_reactivePowerLimit: "" }),
+		};
+		await actions.find(a => a.id === "settings").handler("SN1", context);
+		assert.deepStrictEqual(mock.setCalls, []);
 	});
 
 	it("settings action rewrites only the fields the user changed", async function () {
@@ -661,6 +684,7 @@ describe("deviceManagement – labels", function () {
 			"confirmRebootDtu",
 			"settings",
 			"settingsTitle",
+			"settingsOneAtATime",
 			"discover",
 			"testCloud",
 			"detailsHeader",

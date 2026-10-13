@@ -303,17 +303,31 @@ export const DM_I18N = {
 		"zh-cn": "功率因数限制",
 	},
 	reactivePowerLimit: {
-		en: "Reactive power limit",
-		de: "Blindleistungs-Limit",
-		ru: "Ограничение реактивной мощности",
-		pt: "Limite de potência reativa",
-		nl: "Blindvermogenlimiet",
-		fr: "Limite de puissance réactive",
-		it: "Limite di potenza reattiva",
-		es: "Límite de potencia reactiva",
-		pl: "Limit mocy biernej",
-		uk: "Обмеження реактивної потужності",
-		"zh-cn": "无功功率限制",
+		en: "Reactive power setpoint",
+		de: "Blindleistungs-Sollwert",
+		ru: "Уставка реактивной мощности",
+		pt: "Valor de referência da potência reativa",
+		nl: "Instelwaarde blindvermogen",
+		fr: "Consigne de puissance réactive",
+		it: "Valore di riferimento della potenza reattiva",
+		es: "Consigna de potencia reactiva",
+		pl: "Wartość zadana mocy biernej",
+		uk: "Уставка реактивної потужності",
+		"zh-cn": "无功功率设定值",
+	},
+	settingsOneAtATime: {
+		en: "Power limit, power factor and reactive power share one memory cell in the device — each one overwrites the others. Change only one of them at a time. Nothing was sent.",
+		de: "Leistungslimit, Leistungsfaktor und Blindleistung teilen sich im Gerät eine Speicherzelle — jeder Wert überschreibt die anderen. Bitte nur einen davon auf einmal ändern. Es wurde nichts gesendet.",
+		ru: "Ограничение мощности, коэффициент мощности и реактивная мощность используют в устройстве одну ячейку памяти — каждое значение перезаписывает остальные. Изменяйте только одно из них за раз. Ничего не отправлено.",
+		pt: "O limite de potência, o fator de potência e a potência reativa partilham uma única célula de memória no aparelho — cada valor substitui os outros. Altere apenas um de cada vez. Nada foi enviado.",
+		nl: "Vermogenslimiet, vermogensfactor en blindvermogen delen in het apparaat één geheugencel — elke waarde overschrijft de andere. Wijzig er telkens maar één. Er is niets verzonden.",
+		fr: "La limite de puissance, le facteur de puissance et la puissance réactive partagent une seule cellule mémoire dans l'appareil — chaque valeur écrase les autres. Ne modifiez qu'une seule d'entre elles à la fois. Rien n'a été envoyé.",
+		it: "Limite di potenza, fattore di potenza e potenza reattiva condividono una sola cella di memoria nell'apparecchio — ogni valore sovrascrive gli altri. Modificane solo uno alla volta. Non è stato inviato nulla.",
+		es: "El límite de potencia, el factor de potencia y la potencia reactiva comparten una sola celda de memoria en el aparato — cada valor sobrescribe los demás. Cambie solo uno de ellos a la vez. No se ha enviado nada.",
+		pl: "Limit mocy, współczynnik mocy i moc bierna dzielą w urządzeniu jedną komórkę pamięci — każda wartość nadpisuje pozostałe. Zmieniaj tylko jedną z nich naraz. Nic nie zostało wysłane.",
+		uk: "Обмеження потужності, коефіцієнт потужності та реактивна потужність використовують у пристрої одну комірку пам'яті — кожне значення перезаписує інші. Змінюйте лише одне з них за раз. Нічого не надіслано.",
+		"zh-cn":
+			"功率限制、功率因数和无功功率在设备中共用一个存储单元 — 每个值都会覆盖其他值。请每次只更改其中一个。未发送任何内容。",
 	},
 	cleanWarnings: {
 		en: "Acknowledge warnings",
@@ -836,7 +850,7 @@ export const COMMAND_DEFS: CommandDef[] = [
 		help: "helpFlashWrite",
 		min: -50,
 		max: 50,
-		unit: "°",
+		unit: "%",
 		cloudCapable: false,
 	},
 	// --- Actions (card footer) ---
@@ -1275,17 +1289,27 @@ export async function buildDeviceActions(
 					title: DM_I18N.settingsTitle,
 				});
 				if (result) {
+					// Only write what the user actually moved. Each of these costs two flash
+					// sectors, so rewriting an untouched field would be pure wear. An empty field
+					// is no value — Number("") would go out as 0.
+					const changed: { id: string; value: number }[] = [];
 					for (const d of SETTING_DEFS) {
-						const value = result[formKey(d.id)];
-						if (value === undefined || value === null) {
+						const raw = result[formKey(d.id)];
+						if (raw === undefined || raw === null || String(raw).trim() === "") {
 							continue;
 						}
-						// Only write what the user actually moved. Each of these costs two flash
-						// sectors, so rewriting an untouched field would be pure wear.
-						if (Number(value) === data[formKey(d.id)]) {
-							continue;
+						const value = Number(raw);
+						if (Number.isFinite(value) && value !== data[formKey(d.id)]) {
+							changed.push({ id: d.id, value });
 						}
-						await adapter.setStateAsync(`${deviceId}.${d.id}`, Number(value), false);
+					}
+					// The three are one command to the DTU: they share cell A and one command slot,
+					// so sent in a row each overwrites the one before and the later ones can hit a
+					// busy slot (CELL_A_STATES in commandHandler.ts).
+					if (changed.length > 1) {
+						await context.showMessage(DM_I18N.settingsOneAtATime);
+					} else if (changed.length === 1) {
+						await adapter.setStateAsync(`${deviceId}.${changed[0].id}`, changed[0].value, false);
 					}
 				}
 				return { refresh: "none" };

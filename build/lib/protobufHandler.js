@@ -334,8 +334,8 @@ class ProtobufHandler {
     encodePowerFactorLimit(value, timestamp) {
         return this.encodeCommandAction(ACTION.POWER_FACTOR_LIMIT, timestamp, `A:${Math.round(value * 1000)},B:0,C:0\r`);
     }
-    encodeReactivePowerLimit(degrees, timestamp) {
-        return this.encodeCommandAction(ACTION.REACTIVE_POWER_LIMIT, timestamp, `A:${Math.round(degrees * 10)},B:0,C:0\r`);
+    encodeReactivePowerLimit(percent, timestamp) {
+        return this.encodeCommandAction(ACTION.REACTIVE_POWER_LIMIT, timestamp, `A:${Math.round(percent * 10)},B:0,C:0\r`);
     }
     encodeCleanWarnings(timestamp) {
         return this.encodeCommandAction(ACTION.CLEAN_WARN, timestamp);

@@ -713,16 +713,20 @@ class ProtobufHandler {
 	}
 
 	/**
-	 * Set reactive power angle (-50 to +50 degrees).
+	 * Set the reactive power setpoint (-50 to +50 %).
 	 *
-	 * @param degrees - Reactive power angle
+	 * Sent as `A` in per mille. The inverter takes it as a plain ratio — A / 1000, limited to ±0.6 —
+	 * with no angle function anywhere on the way, so the unit is percent, not degrees (2WB DTU arm
+	 * `0x4080ac1c`, builder `0x4081d20e`; inverter `0x87bb5`–`0x87be0`).
+	 *
+	 * @param percent - Reactive power setpoint in percent
 	 * @param timestamp - Unix timestamp in seconds
 	 */
-	encodeReactivePowerLimit(degrees: number, timestamp: number): Buffer {
+	encodeReactivePowerLimit(percent: number, timestamp: number): Buffer {
 		return this.encodeCommandAction(
 			ACTION.REACTIVE_POWER_LIMIT,
 			timestamp,
-			`A:${Math.round(degrees * 10)},B:0,C:0\r`,
+			`A:${Math.round(percent * 10)},B:0,C:0\r`,
 		);
 	}
 

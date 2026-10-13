@@ -2,7 +2,7 @@ import DtuConnection from "./dtuConnection.js";
 import BleConnection from "./bleConnection.js";
 import CloudRelay from "./cloudRelay.js";
 import { formatDtuVersion, formatSwVersion, formatInvVersion, } from "./protobufHandler.js";
-import { executeCommand, executeCloudCommand, flashWritingStateForAction, } from "./commandHandler.js";
+import { executeCommand, executeCloudCommand, bookFlashWrite, flashWritingStateForAction, groupLastWriteMs, } from "./commandHandler.js";
 import Encryption from "./encryption.js";
 import { buildShellyBindData, encodeShellyBindBody, parseEnergyFlow, parseMeterDevices, SHELLY_DEV_TYPE_GRID, SHELLY_DEV_TYPE_METER_ONLY, } from "./shellyProtocol.js";
 const SHELLY_CMD_TAG = [0xa3, 0x18];
@@ -610,14 +610,11 @@ class DeviceContext {
         if (!stateId) {
             return;
         }
-        let entry = this.flashWrites.get(stateId);
-        if (!entry) {
-            entry = { lastValue: null, lastWriteMs: 0, skipsLogged: 0 };
-            this.flashWrites.set(stateId, entry);
-        }
+        const lookup = (id) => this.flashWriteEntry(id);
+        const lastWriteMs = groupLastWriteMs(stateId, lookup);
         const now = Date.now();
-        const sinceMs = now - entry.lastWriteMs;
-        if (entry.lastWriteMs > 0 && this.flashGuard.minIntervalMs > 0 && sinceMs < this.flashGuard.minIntervalMs) {
+        const sinceMs = now - lastWriteMs;
+        if (lastWriteMs > 0 && this.flashGuard.minIntervalMs > 0 && sinceMs < this.flashGuard.minIntervalMs) {
             if (!this.warnedCloudFlashRate) {
                 this.warnedCloudFlashRate = true;
                 this.adapter.log.warn(`[${this.deviceId}] The cloud is sending power-limit commands faster than the configured ` +
@@ -626,9 +623,16 @@ class DeviceContext {
                     `but each one erases two flash sectors in the inverter.`);
             }
         }
-        entry.lastValue = null;
-        entry.lastWriteMs = now;
-        entry.skipsLogged = 0;
+        bookFlashWrite(stateId, null, now, lookup);
+        this.configSnapshot = null;
+    }
+    flashWriteEntry(stateId) {
+        let entry = this.flashWrites.get(stateId);
+        if (!entry) {
+            entry = { lastValue: null, lastWriteMs: 0, skipsLogged: 0 };
+            this.flashWrites.set(stateId, entry);
+        }
+        return entry;
     }
     handleCloudAck(cmd) {
         if (!this.protobuf) {
@@ -1661,13 +1665,11 @@ class DeviceContext {
                 resetButton: id => this.scheduleButtonReset(id),
                 configSnapshot: this.configSnapshot,
                 flashGuard: this.flashGuard,
-                flashWriteState: id => {
-                    let entry = this.flashWrites.get(id);
-                    if (!entry) {
-                        entry = { lastValue: null, lastWriteMs: 0, skipsLogged: 0 };
-                        this.flashWrites.set(id, entry);
+                flashWriteState: id => this.flashWriteEntry(id),
+                onCellAWritten: value => {
+                    if (this.configSnapshot) {
+                        this.configSnapshot.limitPowerMypower = value;
                     }
-                    return entry;
                 },
                 ...(this.transport === "tcp"
                     ? { expectReadback: (kind) => this.expectLimitEcho(kind) }

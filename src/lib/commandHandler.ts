@@ -62,6 +62,13 @@ interface CommandContext {
 	expectReadback?: (kind: PowerLimitKind) => void;
 	/** Time source for the request's time field — the DTU's clock when known (±60 s window). */
 	now?: () => number;
+	/**
+	 * Called with the new content of the DTU's cell A once a limit, power-factor or reactive-power
+	 * command went out, so the configuration snapshot carries it. SetConfig writes its field 5 into
+	 * cell A unconditionally (2WB `0x4080ee8e`, 2T `0x408164e8`); a stale snapshot would put the
+	 * old value back with the next configuration write.
+	 */
+	onCellAWritten?: (value: number) => void;
 }
 
 /** Unit a power-limit command is expressed in — and thus how the device's echo reads. */
@@ -108,6 +115,92 @@ interface CommandDefinition {
 	 * after action 211 (verified live). It confirms the command when the context supports it.
 	 */
 	readback?: PowerLimitKind;
+	/**
+	 * The value the DTU stores in its cell A for this command — the number after `A:`. Set for the
+	 * three commands that share that cell (see {@link CELL_A_STATES}).
+	 */
+	cellA?: (val: number) => number;
+}
+
+/**
+ * Power limit (action 8), power factor (47) and reactive power (48) are one command to the DTU.
+ * All three run into the same branch, store their `A:` value in the same cell A and its flash
+ * copy, set the same mode byte and use one command slot towards the inverter (2WB jump table
+ * `0x4080a52c` → `0x4080aa90`, cell A at `0x4080ab02`, copy `0x4080ab08`, one `sys_cfg_write` at
+ * `0x4080ac0a`; 2T arm `0x40813492` for {8, 0x2f, 0x30}). The cell is stored before the slot is
+ * checked, so even a command the DTU answers with error 7/8/9 (slot busy) has overwritten it.
+ *
+ * So the adapter treats them as one: the minimum interval counts from the last write of any of
+ * the three, and a write of one of them makes the others' last values unknown — the cell no
+ * longer holds them.
+ */
+export const CELL_A_STATES: readonly string[] = [
+	"inverter.powerLimit",
+	"inverter.powerFactorLimit",
+	"inverter.reactivePowerLimit",
+];
+
+/**
+ * The states that share their flash accounting with the given one.
+ *
+ * @param stateId - State ID relative to the device prefix.
+ */
+function flashGroup(stateId: string): readonly string[] {
+	return CELL_A_STATES.includes(stateId) ? CELL_A_STATES : [stateId];
+}
+
+/** Which booking last touched a flash memory entry — so an undo never reverts a later booking. */
+const bookings = new WeakMap<FlashWriteState, number>();
+let bookingSeq = 0;
+
+/**
+ * Book a flash write before it is sent, and return how to take it back.
+ *
+ * Booked before sending on purpose: booking afterwards would let a second write pass the guard
+ * while the first one is still on its way.
+ *
+ * @param stateId - The state written.
+ * @param value - The value written, or null when it is not known (a forwarded cloud command).
+ * @param nowMs - Current time in milliseconds.
+ * @param lookup - The per-state flash memory.
+ * @returns A function that restores the previous memory, unless a later write booked over it.
+ */
+export function bookFlashWrite(
+	stateId: string,
+	value: number | null,
+	nowMs: number,
+	lookup: (stateId: string) => FlashWriteState,
+): () => void {
+	const seq = ++bookingSeq;
+	const before = flashGroup(stateId).map(id => ({ entry: lookup(id), saved: { ...lookup(id) } }));
+	for (const { entry: member } of before) {
+		member.lastValue = null;
+		bookings.set(member, seq);
+	}
+	const entry = lookup(stateId);
+	entry.lastValue = value;
+	entry.lastWriteMs = nowMs;
+	entry.skipsLogged = 0;
+	return () => {
+		// Another write of the group booked in the meantime (a second command, a forwarded cloud
+		// command): that one stands, and restoring the old memory would hide it from the guard.
+		if (before.some(({ entry: member }) => bookings.get(member) !== seq)) {
+			return;
+		}
+		for (const { entry: member, saved } of before) {
+			Object.assign(member, saved);
+		}
+	};
+}
+
+/**
+ * When the state's flash group was last written — the latest write of any of its members.
+ *
+ * @param stateId - State ID relative to the device prefix.
+ * @param lookup - The per-state flash memory.
+ */
+export function groupLastWriteMs(stateId: string, lookup: (stateId: string) => FlashWriteState): number {
+	return Math.max(...flashGroup(stateId).map(id => lookup(id).lastWriteMs));
 }
 
 /**
@@ -170,9 +263,18 @@ export function shouldSkipFlashWrite(
  * @returns The state id to account the write under, or null when the action writes no flash.
  */
 export function flashWritingStateForAction(action: number): string | null {
-	// action 8 = LIMIT_POWER. Its success path runs the config serializer, same as the local
-	// command — see the writesFlash note above.
-	return action === 8 ? "inverter.powerLimit" : null;
+	// action 8 = LIMIT_POWER, 47 = power factor, 48 = reactive power — the three share one branch
+	// and its config serializer, same as the local commands (see CELL_A_STATES).
+	switch (action) {
+		case 8:
+			return "inverter.powerLimit";
+		case 47:
+			return "inverter.powerFactorLimit";
+		case 48:
+			return "inverter.reactivePowerLimit";
+		default:
+			return null;
+	}
 }
 
 const COMMANDS: Record<string, CommandDefinition> = {
@@ -188,6 +290,7 @@ const COMMANDS: Record<string, CommandDefinition> = {
 		writesFlash: true,
 		valueSpan: 100,
 		readback: "percent",
+		cellA: v => Math.round(v * 10),
 	},
 	"inverter.active": {
 		encode: (v, ts, pb) => (v ? pb.encodeInverterOn(ts) : pb.encodeInverterOff(ts)),
@@ -208,17 +311,19 @@ const COMMANDS: Record<string, CommandDefinition> = {
 			!((v >= -1 && v <= -0.8) || (v >= 0.8 && v <= 1)) ? "Power factor must be -1.0…-0.8 or 0.8…1.0" : null,
 		encode: (v, ts, pb) => pb.encodePowerFactorLimit(Number(v), ts),
 		log: v => `Setting power factor limit to ${v}`,
-		// action 47 (0x2f) shares the success path of action 8 and therefore its two flash sectors.
+		// action 47 (0x2f) shares the branch of action 8: its two flash sectors and cell A.
 		writesFlash: true,
 		valueSpan: 2,
+		cellA: v => Math.round(v * 1000),
 	},
 	"inverter.reactivePowerLimit": {
-		validate: v => (!(v >= -50 && v <= 50) ? "Reactive power limit must be -50…+50°" : null),
+		validate: v => (!(v >= -50 && v <= 50) ? "Reactive power setpoint must be -50…+50 %" : null),
 		encode: (v, ts, pb) => pb.encodeReactivePowerLimit(Number(v), ts),
-		log: v => `Setting reactive power limit to ${v}°`,
-		// action 48 (0x30), same success path and the same two flash sectors.
+		log: v => `Setting reactive power setpoint to ${v} %`,
+		// action 48 (0x30), same branch: the same two flash sectors and cell A.
 		writesFlash: true,
 		valueSpan: 100,
+		cellA: v => Math.round(v * 10),
 	},
 	"inverter.cleanWarnings": {
 		encode: (_v, ts, pb) => pb.encodeCleanWarnings(ts),
@@ -258,6 +363,9 @@ const COMMANDS: Record<string, CommandDefinition> = {
 	},
 };
 
+/** Devices whose current outage has already been reported by a command that could not be sent. */
+const notSentWarned = new Set<string>();
+
 /**
  * Execute a writable state command by sending the corresponding protobuf message to the DTU.
  *
@@ -287,13 +395,22 @@ async function executeCommand(stateId: string, state: ioBroker.State, ctx: Comma
 		}
 	}
 
-	// Flash protection: the DTU persists these two commands, and every accepted write costs two
-	// 4 KB sectors. The state is still acknowledged when a write is skipped — the adapter refused
-	// the wish deliberately, it did not lose it, and leaving the value unacknowledged would only
-	// look like a broken command.
+	// Flash protection: the DTU persists these commands, and every accepted write costs two 4 KB
+	// sectors. A skipped write acknowledges what the device still holds — the last value written —
+	// not the wish that was refused. When that is unknown (one of the other cell-A commands came
+	// in between), the state stays unacknowledged.
+	let undoBooking: (() => void) | null = null;
 	if (cmd.writesFlash && ctx.flashGuard && ctx.flashWriteState) {
-		const last = ctx.flashWriteState(stateId);
-		const skip = shouldSkipFlashWrite(Number(state.val), last, ctx.flashGuard, Date.now(), cmd.valueSpan);
+		const lookup = ctx.flashWriteState;
+		const last = lookup(stateId);
+		const nowMs = Date.now();
+		const skip = shouldSkipFlashWrite(
+			Number(state.val),
+			{ ...last, lastWriteMs: groupLastWriteMs(stateId, lookup) },
+			ctx.flashGuard,
+			nowMs,
+			cmd.valueSpan,
+		);
 		if (skip) {
 			// A control loop writes on every cycle, so only the first skip of a run is worth an
 			// info line — the rest would be steady noise at a level the user cannot turn off.
@@ -304,12 +421,12 @@ async function executeCommand(stateId: string, state: ioBroker.State, ctx: Comma
 				log.debug(message);
 			}
 			last.skipsLogged++;
-			await ctx.setState(stateId, state.val, true);
+			if (last.lastValue !== null) {
+				await ctx.setState(stateId, last.lastValue, true);
+			}
 			return;
 		}
-		last.skipsLogged = 0;
-		last.lastValue = Number(state.val);
-		last.lastWriteMs = Date.now();
+		undoBooking = bookFlashWrite(stateId, Number(state.val), nowMs, lookup);
 	}
 
 	log.info(`[${deviceId}] ${cmd.log(state.val)}`);
@@ -321,9 +438,32 @@ async function executeCommand(stateId: string, state: ioBroker.State, ctx: Comma
 		// The config-writing commands refuse to build a partial message. Say so plainly instead of
 		// letting the failure surface as an unexplained encode error.
 		log.warn(`[${deviceId}] Cannot execute "${stateId}": ${err instanceof Error ? err.message : String(err)}`);
+		undoBooking?.();
+		if (cmd.button) {
+			ctx.resetButton(stateId);
+		}
 		return;
 	}
-	await connection.send(frame);
+	if ((await connection.send(frame)) === false) {
+		// Nothing reached the device: no flash was written, and the state must not claim otherwise.
+		// A control loop keeps writing while the link is down, so warn once per outage.
+		undoBooking?.();
+		const message = `[${deviceId}] "${stateId}" was not sent — the connection is down`;
+		if (notSentWarned.has(deviceId)) {
+			log.debug(message);
+		} else {
+			notSentWarned.add(deviceId);
+			log.warn(message);
+		}
+		if (cmd.button) {
+			ctx.resetButton(stateId);
+		}
+		return;
+	}
+	notSentWarned.delete(deviceId);
+	if (cmd.cellA && ctx.onCellAWritten) {
+		ctx.onCellAWritten(cmd.cellA(Number(state.val)));
+	}
 
 	// Acknowledge non-button commands after successful send — except a power limit the device will
 	// echo back: that one is acknowledged by the echo, so the state shows what the DTU accepted.

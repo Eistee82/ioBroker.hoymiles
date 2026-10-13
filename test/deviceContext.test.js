@@ -5240,6 +5240,75 @@ describe("deviceContext – handleStateChange with connection", function () {
 		// If it reaches here without error, the path is covered
 		assert.ok(true, "handleStateChange should not crash with active connection");
 	});
+
+	// SetConfig writes its field 5 into cell A unconditionally (2WB 0x4080ee8e, 2T 0x408164e8). A
+	// snapshot still holding the old limit would put it back with the next configuration write.
+	it("keeps the config snapshot's cell A current after a limit command", async function () {
+		const adapter = {
+			log: { info: () => {}, warn: () => {}, debug: () => {}, error: () => {} },
+			setStateAsync: async () => {},
+			extendObjectAsync: async () => {},
+			setObjectNotExistsAsync: async () => {},
+			getStateAsync: async () => null,
+			setInterval: () => undefined,
+			clearInterval: () => {},
+			setTimeout: () => "timer-handle",
+			clearTimeout: () => {},
+			subscribeStates: () => {},
+			unsubscribeStates: () => {},
+			devices: new Map(),
+			updateConnectionState: async () => {},
+		};
+		const ctx = new DeviceContext({
+			adapter,
+			protobuf: { encodePowerFactorLimit: () => Buffer.alloc(10) },
+			host: "192.168.1.1",
+			enableLocal: false,
+			enableCloud: false,
+			enableCloudRelay: false,
+			dataInterval: 15,
+			slowPollFactor: 6,
+		});
+		await ctx.initFromSerial("TEST1234");
+		ctx.connection = { connected: true, send: async () => true };
+		ctx["configSnapshot"] = { limitPowerMypower: 500, serverSendTime: 5 };
+		await ctx.handleStateChange("inverter.powerFactorLimit", { val: 0.9, ack: false });
+		assert.strictEqual(ctx["configSnapshot"].limitPowerMypower, 900);
+	});
+
+	it("drops the config snapshot when a forwarded cloud command overwrote cell A", async function () {
+		const ctx = new DeviceContext({
+			adapter: {
+				log: { info: () => {}, warn: () => {}, debug: () => {}, error: () => {} },
+				setStateAsync: async () => {},
+				extendObjectAsync: async () => {},
+				setObjectNotExistsAsync: async () => {},
+				getStateAsync: async () => null,
+				setInterval: () => undefined,
+				clearInterval: () => {},
+				setTimeout: () => "timer-handle",
+				clearTimeout: () => {},
+				subscribeStates: () => {},
+				unsubscribeStates: () => {},
+				devices: new Map(),
+				updateConnectionState: async () => {},
+			},
+			protobuf: {},
+			host: "192.168.1.1",
+			enableLocal: false,
+			enableCloud: false,
+			enableCloudRelay: false,
+			dataInterval: 15,
+			slowPollFactor: 6,
+		});
+		await ctx.initFromSerial("TEST1234");
+		ctx["configSnapshot"] = { limitPowerMypower: 500 };
+		ctx["flashWriteEntry"]("inverter.powerLimit").lastValue = 50;
+		ctx["bookCloudFlashWrite"](47);
+		assert.strictEqual(ctx["configSnapshot"], null, "the cell's content is unknown now");
+		assert.strictEqual(ctx["flashWriteEntry"]("inverter.powerLimit").lastValue, null);
+		assert.ok(ctx["flashWriteEntry"]("inverter.powerFactorLimit").lastWriteMs > 0, "action 47 is booked");
+	});
 });
 
 // ============================================================

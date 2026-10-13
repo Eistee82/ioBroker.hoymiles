@@ -65,7 +65,7 @@ Ein Hoymiles-**Hybrid-Wechselrichter** im S-Miles-Konto — Referenzanlage: **HA
 | **Datenabfrage-Intervall** | 5s | Sekunden zwischen Datenanfragen (0-300). 0 = schnellstmöglich (~1s pro Zyklus). |
 | **Config/Alarm Abfragefaktor** | 6 | Config und Alarme werden nur bei jedem X-ten Datenzyklus abgefragt. |
 | **Totzone Leistungslimit** | 1 % | Kleinere Änderungen des Leistungslimits werden nicht an das Gerät gesendet. Jedes Setzen beschreibt zwei Flash-Sektoren. 0 = aus. |
-| **Mindestabstand Leistungslimit** | 60 s | Kürzester Abstand zwischen zwei Schreibvorgängen des Leistungslimits. 0 = aus. |
+| **Mindestabstand Leistungslimit** | 60 s | Kürzester Abstand zwischen zwei Schreibvorgängen von Leistungslimit, Leistungsfaktor oder Blindleistung — sie teilen sich eine Speicherzelle, der Abstand gilt deshalb für alle drei zusammen. 0 = aus. |
 | **Cloud-Relay** | an | Echtzeitdaten im Namen der DTU an die Hoymiles Cloud weiterleiten. Ohne diese Option blockiert die lokale TCP-Verbindung den Cloud-Upload der DTU. |
 
 > **DTU-Firmware ab V01.01.01 verschlüsselt die lokale Verbindung.** Der Adapter erkennt das an der ersten Antwort der DTU und schaltet von selbst auf AES-128-GCM um — nichts einzustellen. Eine solche DTU spricht auch mit der Cloud per TLS (Port 10083), und das Cloud-Relay zieht mit: Es verbindet sich immer mit dem Server und Port, die in der DTU selbst konfiguriert sind (`config.serverDomain` / `config.serverPort`), auf Port 10083 per TLS, auf Port 10081 per Klartext-TCP. Ältere Firmware (bis V01.00.07) funktioniert unverändert weiter.
@@ -139,7 +139,8 @@ sucht selbst nach Zählern im Netzwerk — du wählst einen aus der Liste und le
 | **Nulleinspeisung** | Zusätzlich behandelt der Wechselrichter den Zähler als Netzzähler und regelt seine Leistung selbst herunter, sobald Überschuss ins Netz ginge. |
 
 Die Regelung läuft **im Wechselrichter selbst** — der Adapter stellt sie nur ein und schaut zu. Er
-muss dafür nicht laufen.
+muss dafür nicht laufen. `inverter.powerLimit` gilt dabei weiter als Obergrenze: Die Regelung stellt
+nie mehr ein als das Limit.
 
 > **Wichtig:** Der Zähler muss sich im Netzwerk **per mDNS ankündigen**. Findet der Wechselrichter
 > ihn dort nicht, nimmt er die Einstellung zwar an, holt aber nie Daten ab. Bei einem echten Shelly
@@ -190,7 +191,8 @@ Die Kachel spiegelt die schreibbaren Datenpunkte, ein Klick läuft also über de
 **Einstellungen** (Zahnrad-Symbol, nur lokale Geräte) — alles, was die DTU dauerhaft behält:
 
 - Leistungslimit, Leistungsfaktor-Limit, Blindleistungs-Limit.
-- Jedes Feld trägt den Hinweis, dass häufiges Ändern den Speicher des Geräts verschleißt. Der Dialog schreibt **nur die Felder, die du tatsächlich geändert hast** — ein unverändertes Feld wird nicht neu geschrieben.
+- Jedes Feld trägt den Hinweis, dass häufiges Ändern den Speicher des Geräts verschleißt. Der Dialog schreibt **nur das Feld, das du tatsächlich geändert hast** — ein unverändertes Feld wird nicht neu geschrieben.
+- Die drei teilen sich im Gerät eine Speicherzelle und überschreiben sich gegenseitig, deshalb sendet der Dialog **eine Änderung auf einmal**. Änderst du mehr als ein Feld, sendet er nichts und sagt dir das.
 
 **Knöpfe auf der Kachel** (mit Bestätigung): Wechselrichter neustarten, DTU neustarten sowie — **nur wenn es etwas zu quittieren gibt** — Warnungen quittieren und Erdungsfehler quittieren. Der Warnungs-Knopf erscheint, solange `alarms.hasActive` gesetzt ist; der Erdungs-Knopf nur, solange die Alarmliste einen aktiven Eintrag mit dem Erdungs-Alarmcode (182) enthält. Solange die Alarmliste noch nicht gelesen wurde, bleiben beide aus.
 
@@ -347,13 +349,13 @@ Die Anzahl ermittelt der Adapter in dieser Reihenfolge:
 | `inverter.hwVersion` | string | — | nein | Hardware-Version |
 | `inverter.swVersion` | string | — | nein | Software-Version |
 | `inverter.temperature` | number | °C | nein | Temperatur |
-| `inverter.powerLimit` | number | % | **ja** | Leistungslimit, 2–100 %, lokal. **Persistent:** die DTU speichert es in ihrem Flash und der Wechselrichter in seinem EEPROM, es ist also auch der Wert, mit dem der Wechselrichter jeden Morgen startet. ⚠️ Jedes Setzen beschreibt Flash in beiden (siehe Warnung unten) — der Adapter drosselt es deshalb mit Totzone und Mindestabstand. Für eine schnelle Nulleinspeisungs-Regelung bei der HMS-800W-2T-Familie stattdessen `inverter.powerLimitWatt` verwenden. Über lokales TCP wird der Datenpunkt durch das Echo der DTU bestätigt (siehe unten) |
+| `inverter.powerLimit` | number | % | **ja** | Leistungslimit, 2–100 %, lokal. **Persistent:** die DTU speichert es in ihrem Flash und der Wechselrichter in seinem EEPROM, es ist also auch der Wert, mit dem der Wechselrichter jeden Morgen startet (bei der WB-Serie am Gerät noch nicht bestätigt). Es teilt sich in der DTU eine Speicherzelle mit `inverter.powerFactorLimit` und `inverter.reactivePowerLimit`: Wer einen dieser beiden schreibt, überschreibt das gespeicherte Limit. ⚠️ Jedes Setzen beschreibt Flash in beiden (siehe Warnung unten) — der Adapter drosselt es deshalb mit Totzone und Mindestabstand. Für eine schnelle Nulleinspeisungs-Regelung bei der HMS-800W-2T-Familie stattdessen `inverter.powerLimitWatt` verwenden. Über lokales TCP wird der Datenpunkt durch das Echo der DTU bestätigt (siehe unten) |
 | `inverter.powerLimitWatt` | number | W | **ja** | Laufzeit-Leistungslimit in Watt, 0,1–3276,7 W in Schritten von 0,1 W. **Nur HMS-800W-2T-Familie über lokales TCP** — die WB-Serie kennt dieses Kommando nicht, dort wird der Datenpunkt nicht angelegt. Wirkt sofort und schreibt **weder den Flash der DTU noch das EEPROM des Wechselrichters** (action 211, firmware-belegt und live getestet), braucht also keine Drosselung und eignet sich für eine Nulleinspeisungs-Regelung. **Geht beim Neustart des Wechselrichters verloren** (jede Nacht) — danach gilt wieder `inverter.powerLimit`; der Adapter sendet es nicht erneut. Unterhalb von etwa 2 % der Nennleistung greift die eigene 2-%-Untergrenze des Wechselrichters. Bestätigung durch das Echo der DTU; Qualität `0x42` nach einem Verbindungsabbruch |
 | `inverter.activePowerLimit` | number | % | nein | Aktives Leistungslimit in Prozent (live, lokal). Solange ein Watt-Limit (`inverter.powerLimitWatt`) gilt, wird es nicht aktualisiert — die DTU meldet dann Watt, das stattdessen in `inverter.powerLimitWatt` bestätigt wird |
 | `inverter.active` | boolean | — | **ja** | Wechselrichter ein/aus (lokal; bei reinen Cloud-Geräten über die Cloud). Bei einem Hybrid-Wechselrichter wird der Wert aus der Cloud zurückgelesen: ein, solange die Cloud ihn als verbunden und im Netzbetrieb („On-grid Mode“) oder mit AC-Leistungsfluss meldet, aus bei getrennter Verbindung |
 | `inverter.reboot` | boolean | — | **ja** | Wechselrichter neustarten (lokal; bei reinen Cloud-Geräten über die Cloud) |
-| `inverter.powerFactorLimit` | number | — | **ja** | Leistungsfaktor-Limit (-1 bis 1, lokal). ⚠️ Beschreibt Flash wie das Leistungslimit (action 47, gleicher Erfolgspfad) — gedrosselt |
-| `inverter.reactivePowerLimit` | number | ° | **ja** | Blindleistungs-Limit (-50 bis 50, lokal). ⚠️ Beschreibt Flash wie das Leistungslimit (action 48, gleicher Erfolgspfad) — gedrosselt |
+| `inverter.powerFactorLimit` | number | — | **ja** | Leistungsfaktor-Limit (-1,0 bis -0,8 oder 0,8 bis 1,0, lokal). Wirkt nur, wenn das Netzprofil des Wechselrichters einen festen Leistungsfaktor freigibt — sonst lehnt der Wechselrichter ab, während die DTU trotzdem Erfolg meldet. ⚠️ Überschreibt das in der DTU gespeicherte Leistungslimit (dieselbe Speicherzelle) und beschreibt Flash wie dieses (action 47) — zusammen mit dem Leistungslimit gedrosselt |
+| `inverter.reactivePowerLimit` | number | % | **ja** | Blindleistungs-Sollwert (-50 bis +50 %, lokal). Der Wechselrichter verwendet ihn als einfaches Verhältnis (Wert / 100) — die früher angezeigte Einheit Grad war falsch. Wirkt nur, wenn das Netzprofil des Wechselrichters eine feste Blindleistung freigibt — sonst lehnt der Wechselrichter ab, während die DTU trotzdem Erfolg meldet. ⚠️ Überschreibt das in der DTU gespeicherte Leistungslimit (dieselbe Speicherzelle) und beschreibt Flash wie dieses (action 48) — zusammen mit dem Leistungslimit gedrosselt |
 | `inverter.cleanWarnings` | boolean | — | **ja** | Warnungen quittieren (lokal). Funktioniert auf beiden Geräteserien |
 | `inverter.cleanGroundingFault` | boolean | — | **ja** | Erdungsfehler quittieren (lokal). ⚠️ **Auf der WB-Serie wirkungslos** — die Firmware nimmt den Befehl an, führt ihn aber nicht aus und meldet trotzdem Erfolg (firmware-belegt). Auf der T-Serie wird er ausgeführt |
 | `inverter.lock` | boolean | — | **ja** | Wechselrichter sperren/entsperren (lokal) |
@@ -510,18 +512,28 @@ Gelesen beim Konfigurations-/Alarm-Poll. Über TCP fragt der Adapter mit dem War
 > Zyklen — eine sekündliche Nulleinspeisungs-Schleife nutzt ihn ab und kann das **Gerät dauerhaft
 > zerstören**.
 >
+> **Die drei sind für die DTU ein einziger Befehl.** Sie legen ihren Wert in **derselben
+> Speicherzelle** samt Flash-Kopie ab und nutzen einen gemeinsamen Befehlsplatz zum Wechselrichter
+> (HMS-800-2WB `0x4080aa90`, HMS-800W-2T `0x40813492`). Wer den Leistungsfaktor oder die
+> Blindleistung schreibt, **überschreibt deshalb das gespeicherte Leistungslimit** — auch dann, wenn
+> der Wechselrichter den Wert anschließend ablehnt. Wird das Limit danach gebraucht, muss es neu
+> gesendet werden.
+>
 > **Der Adapter schützt davor:** in den Einstellungen (Reiter *Lokal*) gibt es eine **Totzone**
 > (Standard 1 %) und einen **Mindestabstand** (Standard 60 s). Änderungen unterhalb der Totzone
-> oder zu kurz nach dem letzten Schreibvorgang werden nicht gesendet; der Datenpunkt wird trotzdem
-> bestätigt, und im Log steht der Grund. Beide Werte lassen sich anpassen oder mit 0 abschalten —
+> oder zu kurz nach dem letzten Schreibvorgang eines der drei Werte werden nicht gesendet; der
+> Datenpunkt wird mit dem zuletzt geschriebenen Wert bestätigt — dem, der noch im Gerät steht —, und
+> im Log steht der Grund. Ist dieser Wert unbekannt (dazwischen wurde einer der anderen beiden
+> geschrieben), bleibt der Datenpunkt unbestätigt. Beide Werte lassen sich anpassen oder mit 0 abschalten —
 > wer bewusst schneller regeln will, kann das tun und trägt den Verschleiß.
 >
 > **Für eine Nulleinspeisung bei der HMS-800W-2T-Familie `inverter.powerLimitWatt` verwenden:** es
 > wirkt sofort, in Watt, und schreibt weder den Flash der DTU noch das EEPROM des Wechselrichters.
 > Es geht beim Neustart des Wechselrichters verloren — jede Nacht, weil er ohne Sonne abschaltet —
 > danach gilt wieder der Prozentwert aus `inverter.powerLimit`. Die WB-Serie kennt dieses Kommando
-> nicht: dort ist `inverter.powerLimit` das einzige Limit, mit dem oben beschriebenen Verschleiß, oder
-> der Wechselrichter regelt die Nulleinspeisung mit einem angebundenen Zähler selbst (`meter.mode`).
+> nicht: dort ist `inverter.powerLimit` das einzige Limit, mit dem oben beschriebenen Verschleiß. Mit
+> einem angebundenen Zähler (`meter.mode`) regelt der Wechselrichter die Nulleinspeisung selbst, und
+> `inverter.powerLimit` bleibt dabei die Obergrenze.
 
 > ⚠️ **Konfiguration schreiben — der Adapter liest immer zuerst.**
 >

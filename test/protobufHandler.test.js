@@ -237,6 +237,18 @@ describe("protobufHandler", function () {
 			assert.strictEqual(obj.data, "A:250,B:0,C:0\r");
 		});
 
+		// A is per mille of a plain ratio (inverter: A / 1000, no angle function); the DTU stores it
+		// in cell A as a signed number.
+		it("encodeReactivePowerLimit sends negative setpoints and rounds to whole per mille", function () {
+			const ResDTO = handler.protos.CommandPB.lookupType("CommandResDTO");
+			const data = v =>
+				ResDTO.toObject(
+					ResDTO.decode(handler.parseResponse(handler.encodeReactivePowerLimit(v, 1700000000)).payload),
+				).data;
+			assert.strictEqual(data(-50), "A:-500,B:0,C:0\r");
+			assert.strictEqual(data(0.04), "A:0,B:0,C:0\r");
+		});
+
 		it("encodeCleanWarnings creates valid message with action 42", function () {
 			const msg = handler.encodeCleanWarnings(1700000000);
 			const parsed = handler.parseResponse(msg);
