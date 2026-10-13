@@ -709,6 +709,7 @@ describe("deviceManagement – labels", function () {
 			"shellyMeterTitle",
 			"shellyMac",
 			"shellyMacHelp",
+			"shellyMacInvalid",
 			"shellyMode",
 			"shellyModeHelp",
 			"shellyModeOff",
@@ -1051,6 +1052,30 @@ describe("deviceManagement – energy meter", function () {
 		const meter = actions.find(a => a.id === "shellyMeter");
 		await meter.handler("BLE123", { showForm: async () => ({ mac: "bc2411b807c0", mode: 2 }) });
 		assert.deepStrictEqual(mock.setCalls, []);
+	});
+
+	it("does not take the bound meter typed with colons for a change", async function () {
+		const mock = makeMock(
+			{ "BLE123.meter.deviceId": { val: "bc2411b807c0" }, "BLE123.meter.mode": { val: 2 } },
+			{ "hoymiles.0.BLE123.meter.mode": { common: {} } },
+		);
+		const actions = await buildDeviceActions(mock, "BLE123", true);
+		const meter = actions.find(a => a.id === "shellyMeter");
+		await meter.handler("BLE123", { showForm: async () => ({ mac: "BC:24:11:B8:07:C0", mode: 2 }) });
+		assert.deepStrictEqual(mock.setCalls, []);
+	});
+
+	it("refuses an invalid MAC in the dialog and sends nothing", async function () {
+		const mock = makeMock({}, { "hoymiles.0.BLE123.meter.mode": { common: {} } });
+		const actions = await buildDeviceActions(mock, "BLE123", true);
+		const meter = actions.find(a => a.id === "shellyMeter");
+		const messages = [];
+		await meter.handler("BLE123", {
+			showForm: async () => ({ mac: "shellypro3em", mode: 2 }),
+			showMessage: async text => messages.push(text),
+		});
+		assert.deepStrictEqual(mock.setCalls, []);
+		assert.strictEqual(messages.length, 1);
 	});
 
 	it("binds again when only the meter changed", async function () {

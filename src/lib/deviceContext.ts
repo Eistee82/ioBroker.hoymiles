@@ -245,6 +245,8 @@ class DeviceContext {
 	private histStart: number;
 	/** When the last meter bind command went out — to match its `0xa218` answer. */
 	private lastBindMs: number;
+	/** `meter.mode` before the last bind, restored when the device refuses it. */
+	private modeBeforeBind: number;
 	/**
 	 * Callers waiting for the next GetConfig answer (see {@link readConfig}). The answer is handed
 	 * over raw and complete, including credentials the device sends in the clear (`lock_password`,
@@ -370,6 +372,7 @@ class DeviceContext {
 		this.energyGuard = new EnergyGuard();
 		this.warnedCloudFlashRate = false;
 		this.lastBindMs = 0;
+		this.modeBeforeBind = 0;
 		this.configWaiters = [];
 		this.configChain = Promise.resolve();
 		this.configWriteActive = false;
@@ -1427,7 +1430,9 @@ class DeviceContext {
 					this.adapter.log.debug(`[${tag}] SetConfig response received`);
 					break;
 				case 0xa218:
-					this.handleCommCmdAnswer(decryptedPayload);
+					this.handleCommCmdAnswer(decryptedPayload).catch(err =>
+						this.adapter.log.warn(`[${tag}] handleCommCmdAnswer error: ${errorMessage(err)}`),
+					);
 					break;
 				case 0xa205:
 				case 0x2305:
@@ -1744,9 +1749,12 @@ class DeviceContext {
 			return;
 		}
 		const devType = mode === 2 ? SHELLY_DEV_TYPE_GRID : SHELLY_DEV_TYPE_METER_ONLY;
+		const before = this.deviceId ? await this.adapter.getStateAsync(`${this.deviceId}.meter.mode`) : null;
 		try {
 			const sent = await this.bindShellyMeter(mac, devType);
 			if (sent) {
+				// A refusal (a218 error 6) puts this back: the DTU checks before touching its list.
+				this.modeBeforeBind = before?.ack && typeof before.val === "number" ? before.val : 0;
 				await this.setState("meter.mode", mode, true);
 			} else {
 				this.adapter.log.warn(`[${this.deviceId}] Meter binding could not be sent.`);
@@ -1784,8 +1792,11 @@ class DeviceContext {
 			`[${this.deviceId || this.host}] Binding Shelly meter ${anonymize(mac)} as ` +
 				`${devType === SHELLY_DEV_TYPE_GRID ? "grid device (zero export)" : "meter only"}`,
 		);
-		this.lastBindMs = Date.now();
-		return this.connection.send(this.wireFrame(frame));
+		const sent = await this.connection.send(this.wireFrame(frame));
+		if (sent) {
+			this.lastBindMs = Date.now();
+		}
+		return sent;
 	}
 
 	/**
@@ -1794,7 +1805,7 @@ class DeviceContext {
 	 *
 	 * @param payload - decrypted `0xa218` payload
 	 */
-	private handleCommCmdAnswer(payload: Buffer): void {
+	private async handleCommCmdAnswer(payload: Buffer): Promise<void> {
 		const answer = parseCommCmdAnswer(payload);
 		const tag = this.deviceId || this.host;
 		if (!answer) {
@@ -1803,6 +1814,10 @@ class DeviceContext {
 		}
 		const prompt = Date.now() - this.lastBindMs < BIND_ANSWER_WINDOW_MS;
 		if (answer.action === ACTION_SHELLY_BIND && answer.errCode === 6 && prompt) {
+			// Both refusals (0x40813b86, 0x40813ba6) come before the bind arm, so the device keeps
+			// what it had — and so does the state, which also lets the dialog send it again.
+			this.lastBindMs = 0;
+			await this.setState("meter.mode", this.modeBeforeBind, true);
 			this.adapter.log.warn(
 				`[${tag}] The inverter refused the meter binding — an update is running or the ` +
 					`Bluetooth session is not authorised. Choose the meter mode again later.`,

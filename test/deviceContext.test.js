@@ -6437,26 +6437,36 @@ describe("deviceContext – Shelly meter", function () {
 		return warns;
 	}
 
-	it("warns when the inverter refuses a meter binding it was just sent", function () {
+	it("warns and restores the mode when the inverter refuses a binding it was just sent", async function () {
 		const adapter = makeTrackingAdapter();
 		const warns = withWarnings(adapter);
 		const ctx = makeCtx(adapter, "ble");
 		ctx["lastBindMs"] = Date.now();
-		ctx["handleCommCmdAnswer"](answer(85, 6));
+		ctx["modeBeforeBind"] = 1;
+		await ctx["handleCommCmdAnswer"](answer(85, 6));
 		assert.strictEqual(warns.length, 1);
 		assert.ok(/refused the meter binding/.test(warns[0]));
+		assert.strictEqual(adapter.writes.get("4161A031AB61.meter.mode"), 1, "the device kept its old binding");
 	});
 
-	it("does not take a 0 or a late or foreign error for an answer to the binding", function () {
+	it("does not count a bind that could not be sent", async function () {
+		const adapter = makeTrackingAdapter();
+		const ctx = makeCtx(adapter, "ble");
+		ctx.connection = { connected: true, send: async () => false };
+		assert.strictEqual(await ctx.bindShellyMeter("bc2411b807c0", 2), false);
+		assert.strictEqual(ctx["lastBindMs"], 0, "a foreign error must not be taken for its answer");
+	});
+
+	it("does not take a 0 or a late or foreign error for an answer to the binding", async function () {
 		const adapter = makeTrackingAdapter();
 		const warns = withWarnings(adapter);
 		const ctx = makeCtx(adapter, "ble");
 		ctx["lastBindMs"] = Date.now();
-		ctx["handleCommCmdAnswer"](answer(85, 0)); // passed the checks — confirms nothing more
-		ctx["handleCommCmdAnswer"](answer(64, 6)); // another action
+		await ctx["handleCommCmdAnswer"](answer(85, 0)); // passed the checks — confirms nothing more
+		await ctx["handleCommCmdAnswer"](answer(64, 6)); // another action
 		ctx["lastBindMs"] = Date.now() - 60000;
-		ctx["handleCommCmdAnswer"](answer(85, 6)); // long after the bind — the cell is global
-		ctx["handleCommCmdAnswer"](Buffer.alloc(0));
+		await ctx["handleCommCmdAnswer"](answer(85, 6)); // long after the bind — the cell is global
+		await ctx["handleCommCmdAnswer"](Buffer.alloc(0));
 		assert.deepStrictEqual(warns, []);
 	});
 
@@ -6531,7 +6541,7 @@ describe("deviceContext – Shelly meter", function () {
 		const ctx = makeCtx(adapter, "ble");
 		await ctx.applyShellyData(Buffer.concat([flow, meter]));
 		adapter.writes.clear();
-		// The DTU's WebSocket poll dies after a few minutes; the device then drops out of the frame.
+		// The inverter drops a meter 20 s after its last update (0x408304f8); it leaves the frame.
 		await ctx.applyShellyData(flow);
 		assert.strictEqual(adapter.writes.get("4161A031AB61.meter.connected"), false, "must flag the loss");
 	});

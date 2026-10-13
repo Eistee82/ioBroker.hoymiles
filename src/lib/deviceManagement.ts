@@ -13,6 +13,7 @@ import type {
 	ErrorResponse,
 } from "@iobroker/dm-utils";
 import { POWER_LIMIT_WATT_MAX, POWER_LIMIT_WATT_MIN } from "./constants.js";
+import { normalizeMeterMac } from "./shellyProtocol.js";
 import { MAX_PV_PORTS } from "./deviceContext.js";
 import { ACK_ICON, ACK_GROUND_ICON, inverterIcon, METER_ICON, STATION_ICON } from "./deviceIcons.js";
 import { states as DTU_STATES, stationStates as STATION_STATES } from "./stateDefinitions.js";
@@ -158,6 +159,19 @@ export const DM_I18N = {
 		pl: "12 cyfr szesnastkowych, np. z aplikacji Shelly lub routera (dwukropki są dozwolone). Liczniki już powiązane z falownikiem są proponowane do wyboru.",
 		uk: "12 шістнадцяткових цифр, наприклад із застосунку Shelly або роутера (двокрапки допустимі). Лічильники, вже прив'язані до інвертора, пропонуються для вибору.",
 		"zh-cn": "12 位十六进制数字，例如来自 Shelly 应用或路由器（可带冒号）。已绑定到逆变器的电能表可直接选择。",
+	},
+	shellyMacInvalid: {
+		en: "That is not a MAC address. Enter 12 hex digits, with or without colons — nothing was sent.",
+		de: "Das ist keine MAC-Adresse. Bitte 12 Hex-Ziffern eingeben, mit oder ohne Doppelpunkte — es wurde nichts gesendet.",
+		ru: "Это не MAC-адрес. Введите 12 шестнадцатеричных цифр, с двоеточиями или без, — ничего не отправлено.",
+		pt: "Isto não é um endereço MAC. Introduza 12 dígitos hexadecimais, com ou sem dois-pontos — nada foi enviado.",
+		nl: "Dat is geen MAC-adres. Voer 12 hexadecimale cijfers in, met of zonder dubbele punten — er is niets verzonden.",
+		fr: "Ce n'est pas une adresse MAC. Saisissez 12 chiffres hexadécimaux, avec ou sans deux-points — rien n'a été envoyé.",
+		it: "Questo non è un indirizzo MAC. Inserisci 12 cifre esadecimali, con o senza due punti — non è stato inviato nulla.",
+		es: "Eso no es una dirección MAC. Introduce 12 dígitos hexadecimales, con o sin dos puntos; no se ha enviado nada.",
+		pl: "To nie jest adres MAC. Wpisz 12 cyfr szesnastkowych, z dwukropkami lub bez — nic nie zostało wysłane.",
+		uk: "Це не MAC-адреса. Введіть 12 шістнадцяткових цифр, із двокрапками чи без, — нічого не надіслано.",
+		"zh-cn": "这不是 MAC 地址。请输入 12 位十六进制数字（可带或不带冒号）——未发送任何内容。",
 	},
 	shellyMode: {
 		en: "Mode",
@@ -1338,7 +1352,17 @@ export async function buildDeviceActions(
 				}
 				// MAC first: the mode is what triggers the binding, so it has to find the address
 				// already in place.
-				const mac = String(result.mac ?? "").trim();
+				// Compared in the form the device stores, so "BC:24:…" for the bound meter is no change.
+				const typed = String(result.mac ?? "").trim();
+				let mac = "";
+				if (typed) {
+					try {
+						mac = normalizeMeterMac(typed);
+					} catch {
+						await context.showMessage(DM_I18N.shellyMacInvalid);
+						return { refresh: "none" };
+					}
+				}
 				const macChanged = mac !== "" && mac !== String(macState?.val ?? "");
 				if (macChanged) {
 					await adapter.setStateAsync(`${deviceId}.meter.deviceId`, mac, false);
