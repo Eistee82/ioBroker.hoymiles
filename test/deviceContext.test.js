@@ -1402,6 +1402,7 @@ describe("deviceContext – handleAlarmData", function () {
 	it("processes alarm data and writes alarm states", async function () {
 		const { calls, adapter } = createTrackingAdapter();
 		const mockProtobuf = {
+			isWarnListLayout: () => false,
 			decodeAlarmData: () => ({
 				alarms: [
 					{ sn: "INV1", code: 1001, num: 1, startTime: 1700000000, endTime: 0, data1: 10, data2: 20 },
@@ -1448,6 +1449,7 @@ describe("deviceContext – handleAlarmData", function () {
 	it("handles empty alarm list", async function () {
 		const { calls, adapter } = createTrackingAdapter();
 		const mockProtobuf = {
+			isWarnListLayout: () => false,
 			decodeAlarmData: () => ({ alarms: [] }),
 		};
 
@@ -1474,9 +1476,10 @@ describe("deviceContext – handleAlarmData", function () {
 		assert.strictEqual(hasActiveCall[1], false);
 	});
 
-	it("falls back to decodeWarnData if decodeAlarmData fails", async function () {
+	it("decodes the warn-list layout as WarnData, never as AlarmData", async function () {
 		const { calls, adapter } = createTrackingAdapter();
 		const mockProtobuf = {
+			isWarnListLayout: () => true,
 			decodeAlarmData: () => {
 				throw new Error("not alarm format");
 			},
@@ -1528,6 +1531,7 @@ describe("deviceContext – handleAlarmData", function () {
 		let decodeCall = 0;
 		const sentRequests = [];
 		const mockProtobuf = {
+			isWarnListLayout: () => true,
 			decodeAlarmData: () => {
 				throw new Error("not alarm format");
 			},
@@ -2675,6 +2679,7 @@ describe("deviceContext – handleResponse", function () {
 		let alarmCalled = false;
 		const mockProtobuf = {
 			parseResponse: () => ({ cmdHigh: 0xa2, cmdLow: 0x04, payload: Buffer.alloc(0) }),
+			isWarnListLayout: () => false,
 			decodeAlarmData: () => {
 				alarmCalled = true;
 				return { alarms: [] };
@@ -5114,8 +5119,8 @@ describe("deviceContext – handleInfoData with dtuInfo/pvInfo", function () {
 // ============================================================
 // deviceContext – handleAlarmData both decoders fail
 // ============================================================
-describe("deviceContext – handleAlarmData double decode failure", function () {
-	it("logs warning when both decodeAlarmData and decodeWarnData fail", async function () {
+describe("deviceContext – handleAlarmData decode failure", function () {
+	it("logs a warning when a warn list fails to decode", async function () {
 		let warnMsg = "";
 		const adapter = {
 			log: {
@@ -5146,6 +5151,7 @@ describe("deviceContext – handleAlarmData double decode failure", function () 
 		};
 
 		const mockProtobuf = {
+			isWarnListLayout: () => true,
 			decodeAlarmData: () => {
 				throw new Error("alarm fail");
 			},
@@ -5168,6 +5174,7 @@ describe("deviceContext – handleAlarmData double decode failure", function () 
 
 		await ctx["handleAlarmData"](Buffer.alloc(0));
 		assert.ok(warnMsg.includes("warn fail too"), "Should log the WarnData decode error");
+		assert.ok(!warnMsg.includes("alarm fail"), "a warn list must not be tried as AlarmData");
 	});
 });
 
@@ -5689,6 +5696,9 @@ describe("deviceContext – slow-poll queue", function () {
 
 	it("asks for the daily power curve on the BLE path too", function () {
 		assert.ok(queueTags("ble").includes("0xa315"), "the 2WB answers a315 as well");
+		// The 2WB runs action 46 into an empty branch; its warning list is the answer to a304.
+		assert.ok(queueTags("ble").includes("0xa304"), "BLE must request the warn list with a304");
+		assert.ok(queueTags("tcp").includes("0xa305"), "TCP keeps the action-46 command");
 	});
 
 	// The alarm trigger and the MI-warn read are both action commands on tag 0xa305, so they can
@@ -5700,10 +5710,11 @@ describe("deviceContext – slow-poll queue", function () {
 			.map(f => Number(ResDTO.toObject(ResDTO.decode(f.subarray(10)), { defaults: true }).action));
 	}
 
-	it("still skips the alarm trigger on BLE, which the 2WB rejects", function () {
+	it("still skips the alarm trigger and action 46 on BLE, which the 2WB does not answer", function () {
 		assert.ok(queueActions("tcp").includes(50), "TCP keeps the alarm-list trigger");
 		assert.ok(!queueActions("ble").includes(50), "BLE must not send it (2WB answers error 1)");
-		assert.ok(queueActions("ble").includes(46), "BLE reads warnings via the MI-warn request instead");
+		assert.ok(!queueActions("ble").includes(46), "BLE reads warnings with a304, not action 46");
+		assert.ok(queueActions("tcp").includes(46), "TCP keeps the MI-warn request");
 	});
 });
 
@@ -6479,9 +6490,7 @@ describe("deviceContext – encrypted sends", function () {
 	it("encrypts the next alarm page", async function () {
 		const { ctx, sent } = await encryptingCtx({
 			encodeWarnDataRequest: () => PLAIN,
-			decodeAlarmData: () => {
-				throw new Error("not the AlarmData format");
-			},
+			isWarnListLayout: () => true,
 			decodeWarnData: () => ({ packageNub: 2, packageNow: 0, warnings: [] }),
 		});
 		await ctx["handleAlarmData"](Buffer.alloc(1));

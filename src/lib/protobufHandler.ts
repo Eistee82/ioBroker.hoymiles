@@ -1092,6 +1092,31 @@ class ProtobufHandler {
 	}
 
 	/**
+	 * Tell the two layouts that share the answer tag 0xa204 apart by their wire structure — protobuf
+	 * decodes either one as the other without an error, so trying one first is no test.
+	 * WarnReqDTO (answer to a304) has package_nub (3) as a number and package_now / warn_device /
+	 * warns (4-6); WInfoReqDTO (AlarmData) has only dtu_sn (1), time (2) and mWInfo (3) as embedded
+	 * messages. A payload with neither (1 and 2 only) is an empty list in both layouts.
+	 * Measured 2026-10-06/13: the 2WB and the 2T both answer a304 with `3=1 5=15` / `5=1`.
+	 *
+	 * @param payload - decrypted 0xa204 payload
+	 * @returns true for the WarnReqDTO layout
+	 */
+	isWarnListLayout(payload: Buffer): boolean {
+		const reader = protobuf.Reader.create(payload);
+		while (reader.pos < reader.len) {
+			const key = reader.uint32();
+			const field = key >>> 3;
+			const wireType = key & 7;
+			if ((field === 3 && wireType === 0) || field === 4 || field === 5 || field === 6) {
+				return true;
+			}
+			reader.skipType(wireType);
+		}
+		return false;
+	}
+
+	/**
 	 * Decode an AlarmData response payload.
 	 *
 	 * @param payload - The protobuf payload buffer

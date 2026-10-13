@@ -495,7 +495,9 @@ class DeviceContext {
         this.slowPollQueue = [
             ts => this.protobuf.encodeGetConfigRequest(ts),
             ...(this.transport !== "ble" ? [(ts) => this.protobuf.encodeAlarmTrigger(ts)] : []),
-            ts => this.protobuf.encodeMiWarnRequest(ts),
+            this.transport === "ble"
+                ? (ts) => this.protobuf.encodeWarnDataRequest(ts, 0)
+                : (ts) => this.protobuf.encodeMiWarnRequest(ts),
             ts => {
                 this.histPage = 0;
                 return this.protobuf.encodeHistPowerRequest(ts, 0);
@@ -1381,12 +1383,15 @@ class DeviceContext {
         };
     }
     async handleAlarmData(payload) {
-        try {
-            const data = this.protobuf.decodeAlarmData(payload);
-            await this.finalizeAlarms(data.alarms.map(DeviceContext.normalizeAlarm));
+        if (!this.protobuf.isWarnListLayout(payload)) {
+            try {
+                const data = this.protobuf.decodeAlarmData(payload);
+                await this.finalizeAlarms(data.alarms.map(DeviceContext.normalizeAlarm));
+            }
+            catch (err) {
+                this.adapter.log.warn(`[${this.deviceId || this.host}] Error decoding AlarmData: ${errorMessage(err)}`);
+            }
             return;
-        }
-        catch {
         }
         let data;
         try {

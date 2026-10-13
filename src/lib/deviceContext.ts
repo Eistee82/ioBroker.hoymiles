@@ -853,7 +853,13 @@ class DeviceContext {
 			// AlarmTrigger (ALARM_LIST / action 50) is rejected by the BLE-only 2WB (error 1); the
 			// MiWarnRequest below covers warning reads there, so only send it on the TCP path.
 			...(this.transport !== "ble" ? [(ts: number) => this.protobuf.encodeAlarmTrigger(ts)] : []),
-			ts => this.protobuf.encodeMiWarnRequest(ts),
+			// The warning list: over TCP with action 46. Over Bluetooth the WB series runs action 46 into
+			// an empty branch (no list comes back); its list is the answer to a304, as in the S-Miles app
+			// (proofs absence_audit/proofs/023.md and adapter_check/data-alarm-a304-never-requested.md;
+			// a304 answered live 2026-10-13).
+			this.transport === "ble"
+				? (ts: number) => this.protobuf.encodeWarnDataRequest(ts, 0)
+				: (ts: number) => this.protobuf.encodeMiWarnRequest(ts),
 			// The device keeps its own power curve for the day, at one sample per minute on the 2T.
 			// This asks for the first page; handleHistPower walks the rest and publishes once the
 			// whole day is together.
@@ -2310,13 +2316,17 @@ class DeviceContext {
 	}
 
 	private async handleAlarmData(payload: Buffer): Promise<void> {
-		// AlarmData (WInfoReqDTO) is always a single packet — finalize immediately.
-		try {
-			const data = this.protobuf.decodeAlarmData(payload);
-			await this.finalizeAlarms(data.alarms.map(DeviceContext.normalizeAlarm));
+		// Both layouts arrive on 0xa204, and protobuf reads either one as the other without an error —
+		// a warn list decoded as AlarmData came out as an empty list. Decide by the wire structure.
+		if (!this.protobuf.isWarnListLayout(payload)) {
+			// AlarmData (WInfoReqDTO) is always a single packet — finalize immediately.
+			try {
+				const data = this.protobuf.decodeAlarmData(payload);
+				await this.finalizeAlarms(data.alarms.map(DeviceContext.normalizeAlarm));
+			} catch (err) {
+				this.adapter.log.warn(`[${this.deviceId || this.host}] Error decoding AlarmData: ${errorMessage(err)}`);
+			}
 			return;
-		} catch {
-			// Not the AlarmData format → try the (paginated) WarnData format below.
 		}
 
 		let data;

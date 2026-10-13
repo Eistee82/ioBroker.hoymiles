@@ -480,6 +480,8 @@ Zeitstempel eines Punktes: `history.startTime + index * history.stepTime * 1000`
 
 ### `<dtuSerial>.alarms.*` — Alarmdaten (pro DTU, lokal)
 
+Gelesen beim Konfigurations-/Alarm-Poll. Über TCP fragt der Adapter mit dem Warnlisten-Befehl; diesen beantwortet die WB-Serie über Bluetooth nicht, dort fordert der Adapter die Warnliste deshalb direkt an, wie die S-Miles-App.
+
 | Datenpunkt | Typ | Beschreibung |
 |------------|-----|--------------|
 | `alarms.count` | number | Gesamtzahl Alarme |

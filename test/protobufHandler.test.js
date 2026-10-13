@@ -458,6 +458,24 @@ describe("protobufHandler – additional encoders", function () {
 		}
 	});
 
+	// Both 0xa204 layouts decode as each other without an error — the layout has to be read from the
+	// wire. Payloads: the 2T's answer to a304 recorded 2026-10-13, the 2WB's (3=1, 5=15) rebuilt from
+	// the recording, and an AlarmData with one entry.
+	it("tells the warn-list layout from AlarmData by its wire structure", function () {
+		const t2Answer = Buffer.from("0a0c34313433413031434544453410a1a8b9d6062801", "hex");
+		const wbAnswer = Buffer.from("0a0c34313631413033314142363110c1d6e7d40618012" + "80f", "hex");
+		assert.strictEqual(handler.isWarnListLayout(t2Answer), true, "2T a204 (warn_device=1)");
+		assert.strictEqual(handler.isWarnListLayout(wbAnswer), true, "2WB a204 (package_nub=1, warn_device=15)");
+		const AlarmDto = handler.protos.AlarmData.lookupType("WInfoReqDTO");
+		const alarm = Buffer.from(
+			AlarmDto.encode(
+				AlarmDto.create({ dtuSn: "4143A01CEDE4", time: 1700000000, mWInfo: [{ pvSn: 1, wcode: 121 }] }),
+			).finish(),
+		);
+		assert.strictEqual(handler.isWarnListLayout(alarm), false, "AlarmData with an entry");
+		assert.strictEqual(handler.isWarnListLayout(Buffer.alloc(0)), false, "empty payload");
+	});
+
 	it("encodeSetConfig creates valid message with SET_CONFIG command", function () {
 		const msg = handler.encodeSetConfig(1700000000, { serverSendTime: 5 }, {}, {});
 		assert.strictEqual(msg[2], 0xa3);

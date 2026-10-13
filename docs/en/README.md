@@ -476,6 +476,8 @@ Timestamp of a sample: `history.startTime + index * history.stepTime * 1000`.
 
 ### `<dtuSerial>.alarms.*` — Alarm Data (per DTU, local)
 
+Read on the config/alarm poll. Over TCP the adapter asks with the warning-list command; the WB series does not answer that command over Bluetooth, so there the adapter requests the warning list directly, as the S-Miles app does.
+
 | State | Type | Description |
 |-------|------|-------------|
 | `alarms.count` | number | Total alarm count |

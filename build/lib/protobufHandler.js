@@ -554,6 +554,19 @@ class ProtobufHandler {
             lockTime: num(obj.lockTime),
         };
     }
+    isWarnListLayout(payload) {
+        const reader = protobuf.Reader.create(payload);
+        while (reader.pos < reader.len) {
+            const key = reader.uint32();
+            const field = key >>> 3;
+            const wireType = key & 7;
+            if ((field === 3 && wireType === 0) || field === 4 || field === 5 || field === 6) {
+                return true;
+            }
+            reader.skipType(wireType);
+        }
+        return false;
+    }
     decodeAlarmData(payload) {
         const obj = this.decodePayload("AlarmData", "WInfoReqDTO", payload);
         const alarms = [];
