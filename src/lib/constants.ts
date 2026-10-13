@@ -123,6 +123,20 @@ export const POWER_LIMIT_WATT_MAX = 3276.7;
  * round to `P:0` on the wire.
  */
 export const POWER_LIMIT_WATT_MIN = 0.1;
+/**
+ * Range of the cloud send interval (SetConfig field 10), in whole minutes. The DTU stores only the
+ * low byte and takes it unclamped on the local path (2WB `0x4080eea4`, 2T `0x40815aa8`); its own
+ * cloud path clamps the same value to 5..15 (2WB `0x40811b6a`-`0x40811c36`, 2T
+ * `0x4081541a`-`0x408154b4`). The adapter keeps to the manufacturer's range: 256 would be ignored,
+ * 300 would become 44, and 60 or more leaves one upload per hour.
+ */
+export const SERVER_SEND_TIME_MIN = 5;
+export const SERVER_SEND_TIME_MAX = 15;
+/**
+ * How long a configuration read (GetConfig) may take before a write that depends on it gives up.
+ * Over Bluetooth the answer arrives in several notifications.
+ */
+export const CONFIG_READ_TIMEOUT_MS = 10000;
 
 /**
  * The DTU drops a request whose time field is more than this many seconds off its own clock —

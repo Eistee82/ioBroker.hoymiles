@@ -192,6 +192,17 @@ const writeU16BE = (buf: Buffer, off: number, val: number): void => {
 	buf[off + 1] = val & 0xff;
 };
 
+/**
+ * Reverse the byte order of a 32-bit number and return it as the signed value protobuf's `int32`
+ * carries.
+ *
+ * @param value - The number as read (any 32-bit pattern).
+ */
+function swapBytes32(value: number): number {
+	const v = value >>> 0;
+	return ((v & 0xff) << 24) | ((v & 0xff00) << 8) | ((v >>> 8) & 0xff00) | (v >>> 24) | 0;
+}
+
 /** Handler for encoding and decoding Hoymiles protobuf messages. */
 class ProtobufHandler {
 	public protos: Record<string, protobuf.Root>;
@@ -579,9 +590,22 @@ class ProtobufHandler {
 	 * (`_fwanalysis/ADAPTER_FINDINGS.md` §15); on the 2WB a partial write is what wiped the server
 	 * domain, the port and the power limit in a live test.
 	 *
-	 * So `base` is required: it is the device's own last GetConfig response, and every field the
-	 * two messages share by name is carried over from it. 49 of the 54 SetConfig fields exist in
-	 * GetConfig under the same name, so nothing has to be guessed.
+	 * So `base` is required: it is the device's own GetConfig response, and every field the two
+	 * messages share by name is carried over from it. 47 of the 53 SetConfig fields exist in
+	 * GetConfig under the same name (not shared: `offset`, `time`, `tid`, `app_page`,
+	 * `wifi_channel`, `dtu_ap_old_pass`). Fields 42-45 are the DTU's default DNS server, not a
+	 * region code.
+	 *
+	 * Two fields do not come back the way they were read, so they are converted before they are
+	 * carried over (same on 2WB and 2T):
+	 * - `lock_password` (field 3): GetConfig reads the four bytes big-endian (2WB `0x40807d56`, 2T
+	 *   `0x408156d0`), SetConfig stores the word little-endian (2WB `0x4080ee84`, 2T `0x40815a86`).
+	 *   Sent unchanged, every write would turn it byte by byte — so it is sent byte-swapped.
+	 * - `lock_time` (field 4): GetConfig reads four bytes big-endian (2WB from `0x72048`, 2T
+	 *   `0x408156da`), SetConfig stores only the low 16 bits little-endian into the first two
+	 *   (2WB `0x4080ee88`, 2T `0x40815a8c`). Sending the first two bytes as that 16-bit word puts
+	 *   them back as they were; the other two — on the 2WB the last one (`0x7204b`) is written by
+	 *   the power-limit command — are not touched by the write.
 	 *
 	 * `app_page` is deliberately left at 0. It gates the WiFi branch of the decoder — only with
 	 * `app_page == 1` does the device take `wifi_ssid` and `wifi_password` from the message. Left
@@ -614,6 +638,13 @@ class ProtobufHandler {
 			if (value !== undefined && value !== null) {
 				carried[name] = value;
 			}
+		}
+		if (typeof base.lockPassword === "number") {
+			carried.lockPassword = swapBytes32(base.lockPassword);
+		}
+		if (typeof base.lockTime === "number") {
+			const raw = base.lockTime >>> 0;
+			carried.lockTime = ((raw >>> 24) & 0xff) | (((raw >>> 16) & 0xff) << 8);
 		}
 		const msg = ResDTO.create({
 			...carried,

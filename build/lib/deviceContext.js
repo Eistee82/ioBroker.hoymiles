@@ -2,7 +2,7 @@ import DtuConnection from "./dtuConnection.js";
 import BleConnection from "./bleConnection.js";
 import CloudRelay from "./cloudRelay.js";
 import { formatDtuVersion, formatSwVersion, formatInvVersion, } from "./protobufHandler.js";
-import { executeCommand, executeCloudCommand, bookFlashWrite, flashWritingStateForAction, groupLastWriteMs, } from "./commandHandler.js";
+import { executeCommand, executeCloudCommand, bookFlashWrite, flashWritingStateForAction, groupLastWriteMs, writesConfig, } from "./commandHandler.js";
 import Encryption from "./encryption.js";
 import { buildShellyBindData, encodeShellyBindBody, parseEnergyFlow, parseMeterDevices, SHELLY_DEV_TYPE_GRID, SHELLY_DEV_TYPE_METER_ONLY, } from "./shellyProtocol.js";
 const SHELLY_CMD_TAG = [0xa3, 0x18];
@@ -13,7 +13,7 @@ import { getAlarmDescription } from "./alarmCodes.js";
 import { decodeGridProfile, byteSwap16 } from "./gridProfile.js";
 import EnergyGuard from "./energyGuard.js";
 import { cloudTagLabel, describeCloudTag, refusalReason } from "./cloudTranslator.js";
-import { INFO_FALLBACK_TIMEOUT_MS, SCALE_POWER_LIMIT_BLE, SCALE_POWER_LIMIT_TCP, CLOUD_DEV_TYPE_DTU, POWER_LIMIT_DEADBAND_DEFAULT, POWER_LIMIT_MIN_INTERVAL_SEC_DEFAULT, HIST_MAX_PAGES, HM_HEADER_SIZE, LOCAL_GCM_TAG_LEN, CLOUD_RELAY_TLS_PORT, DTU_TIME_WINDOW_S, DTU_CLOCK_VALID_FROM, } from "./constants.js";
+import { INFO_FALLBACK_TIMEOUT_MS, SCALE_POWER_LIMIT_BLE, SCALE_POWER_LIMIT_TCP, CLOUD_DEV_TYPE_DTU, POWER_LIMIT_DEADBAND_DEFAULT, POWER_LIMIT_MIN_INTERVAL_SEC_DEFAULT, HIST_MAX_PAGES, HM_HEADER_SIZE, LOCAL_GCM_TAG_LEN, CLOUD_RELAY_TLS_PORT, DTU_TIME_WINDOW_S, DTU_CLOCK_VALID_FROM, CONFIG_READ_TIMEOUT_MS, } from "./constants.js";
 import { whToKwh } from "./convert.js";
 import { anonymize, errorMessage, safeJsonStringify, unixSeconds } from "./utils.js";
 import { inverterIcon } from "./deviceIcons.js";
@@ -71,7 +71,10 @@ class DeviceContext {
     histPage;
     histSamples;
     histStart;
-    configSnapshot;
+    configWaiters;
+    configChain;
+    configWriteActive;
+    pollRun;
     cloudStationId;
     pollTimer;
     pvStatesCreated;
@@ -123,7 +126,10 @@ class DeviceContext {
         this.flashWrites = new Map();
         this.energyGuard = new EnergyGuard();
         this.warnedCloudFlashRate = false;
-        this.configSnapshot = null;
+        this.configWaiters = [];
+        this.configChain = Promise.resolve();
+        this.configWriteActive = false;
+        this.pollRun = null;
         this.histPage = 0;
         this.histSamples = [];
         this.histStart = 0;
@@ -214,22 +220,7 @@ class DeviceContext {
             errorRepeatCount = 0;
             this.onConnected().catch(err => this.adapter.log.warn(`[${this.host}] onConnected error: ${errorMessage(err)}`));
         });
-        this.connection.on("disconnected", () => {
-            this.adapter.log.warn(`[${this.host}] Disconnected from DTU`);
-            this.stopPollCycle();
-            if (this.cloudRelay && !this.cloudRelay.paused) {
-                this.adapter.log.info(`[${this.deviceId || this.host}] Pausing cloud relay (local connection lost)`);
-                this.cloudRelay.sendFinalAndPause();
-            }
-            if (this.deviceId) {
-                this.adapter
-                    .setStateAsync(`${this.deviceId}.info.connected`, false, true)
-                    .catch(err => this.adapter.log.warn(`[${this.host}] Failed to set connected state: ${errorMessage(err)}`));
-            }
-            this.markStatesDisconnected().catch(err => this.adapter.log.warn(`[${this.host}] markStatesDisconnected error: ${errorMessage(err)}`));
-            this.updateAdapterConnectionState().catch(err => this.adapter.log.warn(`[${this.host}] updateAdapterConnectionState error: ${errorMessage(err)}`));
-            this.adapter.onLocalDisconnected(this);
-        });
+        this.connection.on("disconnected", () => this.handleLinkDown());
         this.connection.on("message", (message) => {
             this.handleResponse(message);
         });
@@ -624,7 +615,6 @@ class DeviceContext {
             }
         }
         bookFlashWrite(stateId, null, now, lookup);
-        this.configSnapshot = null;
     }
     flashWriteEntry(stateId) {
         let entry = this.flashWrites.get(stateId);
@@ -711,7 +701,9 @@ class DeviceContext {
         }
         if (this.pendingResponse) {
             this.adapter.clearTimeout(this.pendingResponse.timer);
+            const { abort } = this.pendingResponse;
             this.pendingResponse = null;
+            abort?.();
         }
         this.pollBusy = false;
     }
@@ -734,7 +726,7 @@ class DeviceContext {
                 }
                 settle(false);
             }, timeoutMs);
-            this.pendingResponse = { cmdKey, resolve: () => settle(true), timer };
+            this.pendingResponse = { cmdKey, resolve: () => settle(true), abort: () => settle(false), timer };
             conn.send(this.wireFrame(message)).catch(err => {
                 this.adapter.log.debug(`[${this.host}] sendAndWait send failed: ${errorMessage(err)}`);
                 if (this.pendingResponse?.cmdKey === cmdKey) {
@@ -747,34 +739,40 @@ class DeviceContext {
     }
     async pollTick() {
         const conn = this.connection;
-        if (!conn?.connected || !this.protobuf || this.pollBusy) {
+        if (!conn?.connected || !this.protobuf || this.pollBusy || this.configWriteActive) {
             return;
         }
         this.pollBusy = true;
+        const run = this.pollTickBody(conn);
+        this.pollRun = run;
         try {
-            const ts = this.deviceNow();
-            await this.sendAndWait(conn, this.protobuf.encodeRealDataNewRequest(ts));
-            this.consecutivePollErrors = 0;
-            this.pollCount++;
-            if (this.pollCount >= this.slowPollEvery && conn.connected) {
-                this.pollCount = 0;
-                const cmdFactory = this.slowPollQueue[this.slowPollIndex];
-                if (cmdFactory) {
-                    await this.sendAndWait(conn, cmdFactory(ts));
-                }
-                this.slowPollIndex++;
-                if (this.slowPollIndex >= this.slowPollQueue.length) {
-                    this.slowPollIndex = 0;
-                    this.slowPollRotations++;
-                    if (this.slowPollRotations >= 6 && conn.connected) {
-                        this.slowPollRotations = 0;
-                        await this.sendAndWait(conn, this.protobuf.encodeInfoRequest(ts));
-                    }
-                }
-            }
+            await run;
         }
         finally {
+            this.pollRun = null;
             this.pollBusy = false;
+        }
+    }
+    async pollTickBody(conn) {
+        const ts = this.deviceNow();
+        await this.sendAndWait(conn, this.protobuf.encodeRealDataNewRequest(ts));
+        this.consecutivePollErrors = 0;
+        this.pollCount++;
+        if (this.pollCount >= this.slowPollEvery && conn.connected) {
+            this.pollCount = 0;
+            const cmdFactory = this.slowPollQueue[this.slowPollIndex];
+            if (cmdFactory) {
+                await this.sendAndWait(conn, cmdFactory(ts));
+            }
+            this.slowPollIndex++;
+            if (this.slowPollIndex >= this.slowPollQueue.length) {
+                this.slowPollIndex = 0;
+                this.slowPollRotations++;
+                if (this.slowPollRotations >= 6 && conn.connected) {
+                    this.slowPollRotations = 0;
+                    await this.sendAndWait(conn, this.protobuf.encodeInfoRequest(ts));
+                }
+            }
         }
     }
     handleResponse(message) {
@@ -1324,14 +1322,86 @@ class DeviceContext {
             this.pollStartTimer = this.adapter.setTimeout(() => this.startPollCycle(), 1000);
         }
     }
+    handleLinkDown() {
+        this.adapter.log.warn(`[${this.host}] Disconnected from DTU`);
+        this.stopPollCycle();
+        this.settleConfigWaiters(null);
+        if (this.cloudRelay && !this.cloudRelay.paused) {
+            this.adapter.log.info(`[${this.deviceId || this.host}] Pausing cloud relay (local connection lost)`);
+            this.cloudRelay.sendFinalAndPause();
+        }
+        if (this.deviceId) {
+            this.adapter
+                .setStateAsync(`${this.deviceId}.info.connected`, false, true)
+                .catch(err => this.adapter.log.warn(`[${this.host}] Failed to set connected state: ${errorMessage(err)}`));
+        }
+        this.markStatesDisconnected().catch(err => this.adapter.log.warn(`[${this.host}] markStatesDisconnected error: ${errorMessage(err)}`));
+        this.updateAdapterConnectionState().catch(err => this.adapter.log.warn(`[${this.host}] updateAdapterConnectionState error: ${errorMessage(err)}`));
+        this.adapter.onLocalDisconnected(this);
+    }
+    readConfig() {
+        const conn = this.connection;
+        if (!conn?.connected) {
+            return Promise.resolve(null);
+        }
+        return new Promise(resolve => {
+            let timer = undefined;
+            const waiter = (config) => {
+                this.adapter.clearTimeout(timer);
+                resolve(config);
+            };
+            const giveUp = () => {
+                const index = this.configWaiters.indexOf(waiter);
+                if (index >= 0) {
+                    this.configWaiters.splice(index, 1);
+                    waiter(null);
+                }
+            };
+            this.configWaiters.push(waiter);
+            timer = this.adapter.setTimeout(giveUp, CONFIG_READ_TIMEOUT_MS);
+            conn.send(this.wireFrame(this.protobuf.encodeGetConfigRequest(this.deviceNow())))
+                .then(sent => {
+                if (sent === false) {
+                    giveUp();
+                }
+            })
+                .catch(err => {
+                this.adapter.log.debug(`[${this.host}] GetConfig send failed: ${errorMessage(err)}`);
+                giveUp();
+            });
+        });
+    }
+    exclusiveConfig(work) {
+        const run = this.configChain.then(async () => {
+            this.configWriteActive = true;
+            try {
+                await this.pollRun?.catch(() => undefined);
+                await work();
+            }
+            finally {
+                this.configWriteActive = false;
+            }
+        });
+        this.configChain = run.catch(() => undefined);
+        return run;
+    }
+    settleConfigWaiters(config) {
+        const waiters = this.configWaiters;
+        this.configWaiters = [];
+        for (const waiter of waiters) {
+            waiter(config);
+        }
+    }
     async handleConfigData(payload) {
         try {
+            let raw = null;
             try {
-                this.configSnapshot = this.protobuf.decodeGetConfigRaw(payload);
+                raw = this.protobuf.decodeGetConfigRaw(payload);
             }
             catch (err) {
-                this.adapter.log.debug(`[${this.deviceId || this.host}] could not keep a configuration snapshot: ${errorMessage(err)}`);
+                this.adapter.log.debug(`[${this.deviceId || this.host}] could not decode the raw configuration: ${errorMessage(err)}`);
             }
+            this.settleConfigWaiters(raw);
             const config = this.protobuf.decodeGetConfig(payload);
             this.adapter.log.debug(`[${this.deviceId || this.host}] Config: server=${config.serverDomain}:${config.serverPort}, sendTime=${config.serverSendTime}min`);
             await this.setStates([
@@ -1654,7 +1724,7 @@ class DeviceContext {
         }
         if (this.connection?.connected) {
             const connection = this.connection;
-            await executeCommand(stateId, state, {
+            const run = () => executeCommand(stateId, state, {
                 connection: { send: frame => connection.send(this.wireFrame(frame)) },
                 now: () => this.deviceNow(),
                 protobuf: this.protobuf,
@@ -1663,18 +1733,14 @@ class DeviceContext {
                 log: this.adapter.log,
                 setState: (id, val, ack) => this.setState(id, val, ack),
                 resetButton: id => this.scheduleButtonReset(id),
-                configSnapshot: this.configSnapshot,
+                readConfig: () => this.readConfig(),
                 flashGuard: this.flashGuard,
                 flashWriteState: id => this.flashWriteEntry(id),
-                onCellAWritten: value => {
-                    if (this.configSnapshot) {
-                        this.configSnapshot.limitPowerMypower = value;
-                    }
-                },
                 ...(this.transport === "tcp"
                     ? { expectReadback: (kind) => this.expectLimitEcho(kind) }
                     : {}),
             });
+            await (writesConfig(stateId) ? this.exclusiveConfig(run) : run());
             return;
         }
         if (this.enableCloud && this.dtuSerial) {
@@ -1734,7 +1800,7 @@ class DeviceContext {
         this.stateCache.clear();
         this.flashWrites.clear();
         this.energyGuard.clear();
-        this.configSnapshot = null;
+        this.settleConfigWaiters(null);
         this.histPage = 0;
         this.histSamples = [];
         if (this.connection) {

@@ -538,10 +538,16 @@ Read on the config/alarm poll. Over TCP the adapter asks with the warning-list c
 > and `lock_time` are overwritten unguarded. On the 2WB exactly that destroyed the server address,
 > the port and the power limit in a live test.
 >
-> The adapter therefore **never writes a partial set**: it takes the configuration last read from
-> the device, changes only the requested field in it, and sends everything back. If no
-> configuration has been read in the current session, the write is **refused** and the reason is
-> logged — better not to write than to write incompletely.
+> The adapter therefore **never writes a partial set**: it reads the configuration from the device
+> **right before the write**, changes only the requested field in it, sends everything back, and
+> reads it once more to confirm. A reading from the regular poll could be minutes old — a power
+> limit, power factor or reactive power sent in between would then be put back to its old value.
+> If the device does not answer the read, the write is **refused** and the reason is logged —
+> better not to write than to write incompletely.
+>
+> Two fields come back from the device in a different byte order than they are stored
+> (`lock_password`, `lock_time`: read big-endian, written little-endian — on both the 2T and the
+> 2WB). The adapter converts them before sending, so a write leaves them as they were.
 >
 > WiFi credentials are left alone: the device only adopts them when an additional field is set,
 > which the adapter deliberately leaves empty.
@@ -550,7 +556,7 @@ Read on the config/alarm poll. Over TCP the adapter asks with the warning-list c
 |-------|------|------|----------|-------------|
 | `config.serverDomain` | string | — | no | Cloud server domain |
 | `config.serverPort` | number | — | no | Cloud server port |
-| `config.serverSendTime` | number | min | **yes** | Cloud send interval (minutes). ⚠️ **Neither persistent nor a flash write** (firmware-verified): SetConfig field 10 only lands in RAM (`gp-110188`); the SetConfig path writes flash solely in the WiFi/AP password branch. Earlier versions of this documentation called it "persistent (DTU flash)" — that was wrong. Set it again after a device restart |
+| `config.serverSendTime` | number | min | **yes** | Cloud send interval (whole minutes, **5 to 15** — the range the DTU's own cloud path clamps to; the device keeps only the low byte, so 256 would be ignored and 300 would become 44). The state is acknowledged only once the device reports the new value; if it keeps the old one, the log says so. ⚠️ **Neither persistent nor a flash write** (firmware-verified): SetConfig field 10 only lands in RAM (2T `gp-110188`, HMS-800-2WB `0x73820`); on the 2T the SetConfig path writes flash solely in the WiFi/AP password branch, on the 2WB a later write of the network or cloud settings can store it along. Earlier versions of this documentation called it "persistent (DTU flash)" — that was wrong. Set it again after a device restart |
 | `config.wifiSsid` | string | — | no | WiFi SSID |
 | `config.wifiSignalQuality` | number | % | no | WiFi **signal quality 0–100**, **not dBm** despite the field name. The firmware derives it from the raw RSSI as `clamp(2*(95 - |rssi|), 0, 100)` and names the two values `rssi` (raw) and `wifi_rssi` (this one) in its own debug output. A reading of 46 corresponds to roughly −72 dBm. Earlier versions of this documentation called it “real dBm, e.g. −65” — that was wrong. The raw dBm value stays in the neighbouring byte and is not reachable through any message the adapter uses. The device reports the same quantity as `csq` in its NetworkInfo message — the same byte, so a separate state would be a duplicate |
 | `config.invType` | number | — | no | Inverter type |
@@ -568,7 +574,7 @@ Read on the config/alarm poll. Over TCP the adapter asks with the warning-list c
 | `config.meterInterface` | string | — | no | Interface the meter is attached to |
 | `config.zeroExportEnable` | number | — | no | Zero-export flag as reported by the DTU |
 | `config.zeroExport433Addr` | number | — | no | Zero-export 433 MHz address |
-| `config.lockTime` | number | s | no | Inverter lock duration (0 = no lock) |
+| `config.lockTime` | number | — | no | Raw value of the lock-time field, as the DTU reports it (four bytes, big-endian). On the HMS-800-2WB the lowest byte is one the power-limit command writes (`0x7204b`), which is why a device without a lock shows e.g. 16777217. What the bytes mean as a lock duration is not established |
 
 ### `<dtuSerial>.gridProfile.*` — Grid Profile (per DTU, local — read via the cloud for cloud-only devices)
 

@@ -1173,9 +1173,32 @@ describe("protobufHandler – encodeSetConfig full set", function () {
 		assert.strictEqual(msg.serverDomainName, "dataeu.hoymiles.com", "server must not fall back to the default");
 		assert.strictEqual(Number(msg.serverport), 10081, "port must not be cleared to 0");
 		assert.strictEqual(Number(msg.limitPowerMypower), 1000, "power limit must survive");
-		assert.strictEqual(Number(msg.lockPassword), 987654, "the lock password must not be erased");
-		assert.strictEqual(Number(msg.lockTime), 30);
+		assert.ok(Number(msg.lockPassword) !== 0, "the lock password must not be erased");
 		assert.strictEqual(msg.meterKind, "NONE");
+	});
+
+	// GetConfig reads lock_password and lock_time big-endian, SetConfig stores them little-endian
+	// (2WB 0x40807d56 / 0x4080ee84 / 0x4080ee88, 2T 0x408156d0 / 0x40815a86 / 0x40815a8c).
+	it("sends the lock password byte-swapped, so the device stores it as it was", function () {
+		const send = raw =>
+			Number(
+				decodeSet(handler.encodeSetConfig(1753900000, { serverSendTime: 10 }, { lockPassword: raw }))
+					.lockPassword,
+			);
+		assert.strictEqual(send(0x12345678) >>> 0, 0x78563412);
+		assert.strictEqual(send(0x000000ff) >>> 0, 0xff000000, "a result with bit 31 set fits the int32 field");
+		assert.strictEqual(send(-2) >>> 0, 0xfeffffff, "a negative reading is a 32-bit pattern too");
+		assert.strictEqual(send(0), 0);
+	});
+
+	it("sends the first two lock-time bytes as the 16-bit word the device stores", function () {
+		const send = raw =>
+			Number(decodeSet(handler.encodeSetConfig(1753900000, { serverSendTime: 10 }, { lockTime: raw })).lockTime);
+		// Live 2WB reading: 0x01000001 — bytes 01 00 at 0x72048/49, the rest untouched by the write.
+		assert.strictEqual(send(0x01000001), 0x0001);
+		assert.strictEqual(send(0x01000002), 0x0001);
+		assert.strictEqual(send(0x12345678), 0x3412);
+		assert.strictEqual(send(0), 0);
 	});
 
 	it("never sets app_page, which would unlock the WiFi credential branch", function () {

@@ -543,10 +543,16 @@ Gelesen beim Konfigurations-/Alarm-Poll. Über TCP fragt der Adapter mit dem War
 > `server_send_time`, `lock_password` und `lock_time` werden ungeprüft überschrieben. Am 2WB hat
 > genau das in einem Live-Test die Server-Adresse, den Port und das Leistungslimit zerstört.
 >
-> Der Adapter schreibt deshalb **nie einen Teilsatz**: er verwendet die zuletzt vom Gerät gelesene
-> Konfiguration als Grundlage, ändert darin nur das gewünschte Feld und schickt alles zurück. Wurde
-> in der laufenden Sitzung noch keine Konfiguration gelesen, wird der Schreibvorgang **abgelehnt**
-> und der Grund protokolliert — lieber nicht schreiben als unvollständig schreiben.
+> Der Adapter schreibt deshalb **nie einen Teilsatz**: er liest die Konfiguration **unmittelbar vor
+> dem Schreiben** vom Gerät, ändert darin nur das gewünschte Feld, schickt alles zurück und liest
+> zur Bestätigung noch einmal. Ein Stand aus der regelmäßigen Abfrage könnte Minuten alt sein — ein
+> dazwischen gesendetes Leistungslimit, ein Leistungsfaktor oder eine Blindleistung würde dann auf
+> den alten Wert zurückgesetzt. Antwortet das Gerät nicht auf das Lesen, wird der Schreibvorgang
+> **abgelehnt** und der Grund protokolliert — lieber nicht schreiben als unvollständig schreiben.
+>
+> Zwei Felder liefert das Gerät in anderer Byte-Reihenfolge, als es sie speichert (`lock_password`,
+> `lock_time`: gelesen big-endian, geschrieben little-endian — beim 2T wie beim 2WB). Der Adapter
+> rechnet sie vor dem Senden um, damit ein Schreibvorgang sie unverändert lässt.
 >
 > Die WLAN-Zugangsdaten rührt der Adapter dabei nicht an: das Gerät übernimmt sie nur, wenn ein
 > zusätzliches Feld gesetzt ist, das der Adapter bewusst leer lässt.
@@ -555,7 +561,7 @@ Gelesen beim Konfigurations-/Alarm-Poll. Über TCP fragt der Adapter mit dem War
 |------------|-----|---------|------------|--------------|
 | `config.serverDomain` | string | — | nein | Cloud-Server Domain |
 | `config.serverPort` | number | — | nein | Cloud-Server Port |
-| `config.serverSendTime` | number | min | **ja** | Cloud-Sendeintervall (Minuten). ⚠️ **Nicht persistent und ohne Flash-Schreibvorgang** (firmware-belegt): SetConfig Feld 10 landet nur im RAM (`gp-110188`); Flash schreibt der SetConfig-Weg ausschließlich im WLAN-/AP-Passwort-Zweig. Frühere Fassungen dieser Doku nannten es „Persistent (DTU-Flash)" — das war falsch. Nach einem Geräteneustart neu setzen |
+| `config.serverSendTime` | number | min | **ja** | Cloud-Sendeintervall (ganze Minuten, **5 bis 15** — der Bereich, auf den der Cloud-Weg der DTU selbst begrenzt; das Gerät übernimmt nur das untere Byte, 256 würde also ignoriert und aus 300 würde 44). Der Datenpunkt wird erst bestätigt, wenn das Gerät den neuen Wert meldet; behält es den alten, steht das im Log. ⚠️ **Nicht persistent und ohne Flash-Schreibvorgang** (firmware-belegt): SetConfig Feld 10 landet nur im RAM (2T `gp-110188`, HMS-800-2WB `0x73820`); beim 2T schreibt der SetConfig-Weg Flash ausschließlich im WLAN-/AP-Passwort-Zweig, beim 2WB kann ein späteres Schreiben der Netz- oder Cloud-Einstellungen den Wert mitspeichern. Frühere Fassungen dieser Doku nannten es „Persistent (DTU-Flash)" — das war falsch. Nach einem Geräteneustart neu setzen |
 | `config.wifiSsid` | string | — | nein | WLAN SSID |
 | `config.wifiSignalQuality` | number | % | nein | WLAN-**Signalqualität 0–100**, trotz des Feldnamens **keine dBm**. Die Firmware rechnet sie aus dem rohen RSSI als `clamp(2*(95 - |rssi|), 0, 100)` und benennt beide Werte in ihrer eigenen Debug-Ausgabe `rssi` (roh) und `wifi_rssi` (dieser Wert). 46 entspricht etwa −72 dBm. Frühere Fassungen dieser Doku nannten es „echtes dBm, z. B. −65“ — das war falsch. Der rohe dBm-Wert liegt im Nachbarbyte und ist über keine vom Adapter genutzte Nachricht erreichbar. Dieselbe Größe führt das Gerät in der NetworkInfo-Nachricht als `csq` — dasselbe Byte, ein separater State wäre ein Duplikat |
 | `config.invType` | number | — | nein | Wechselrichter-Typ |
@@ -573,7 +579,7 @@ Gelesen beim Konfigurations-/Alarm-Poll. Über TCP fragt der Adapter mit dem War
 | `config.meterInterface` | string | — | nein | Schnittstelle, an der der Zähler hängt |
 | `config.zeroExportEnable` | number | — | nein | Nulleinspeisungs-Flag, wie von der DTU gemeldet |
 | `config.zeroExport433Addr` | number | — | nein | Nulleinspeisung 433-MHz-Adresse |
-| `config.lockTime` | number | s | nein | Wechselrichter-Sperrdauer (0 = keine Sperre) |
+| `config.lockTime` | number | — | nein | Rohwert des Sperrzeit-Felds, so wie die DTU ihn meldet (vier Bytes, big-endian). Beim HMS-800-2WB ist das unterste Byte eines, das der Leistungslimit-Befehl schreibt (`0x7204b`), deshalb zeigt ein Gerät ohne Sperre z. B. 16777217. Was die Bytes als Sperrdauer bedeuten, ist nicht belegt |
 
 ### `<dtuSerial>.gridProfile.*` — Netzprofil (pro DTU, lokal — bei reinen Cloud-Geräten über die Cloud gelesen)
 

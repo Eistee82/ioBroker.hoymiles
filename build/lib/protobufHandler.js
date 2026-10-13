@@ -69,6 +69,10 @@ const writeU16BE = (buf, off, val) => {
     buf[off] = (val >> 8) & 0xff;
     buf[off + 1] = val & 0xff;
 };
+function swapBytes32(value) {
+    const v = value >>> 0;
+    return ((v & 0xff) << 24) | ((v & 0xff00) << 8) | ((v >>> 8) & 0xff00) | (v >>> 24) | 0;
+}
 class ProtobufHandler {
     protos;
     seq;
@@ -290,6 +294,13 @@ class ProtobufHandler {
             if (value !== undefined && value !== null) {
                 carried[name] = value;
             }
+        }
+        if (typeof base.lockPassword === "number") {
+            carried.lockPassword = swapBytes32(base.lockPassword);
+        }
+        if (typeof base.lockTime === "number") {
+            const raw = base.lockTime >>> 0;
+            carried.lockTime = ((raw >>> 24) & 0xff) | (((raw >>> 16) & 0xff) << 8);
         }
         const msg = ResDTO.create({
             ...carried,

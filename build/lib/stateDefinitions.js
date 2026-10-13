@@ -414,7 +414,7 @@ const states = [
     n("config.zeroExport433Addr", "Zero export 433 MHz address", "Nulleinspeisung 433-MHz-Adresse", "value", "", {
         source: "local",
     }),
-    n("config.lockTime", "Inverter lock duration", "Wechselrichter-Sperrdauer", "value", "s", {
+    n("config.lockTime", "Inverter lock time (raw value)", "Wechselrichter-Sperrzeit (Rohwert)", "value", "", {
         source: "local",
     }),
     ...gridProfileStates,

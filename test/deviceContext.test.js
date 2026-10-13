@@ -5241,42 +5241,7 @@ describe("deviceContext – handleStateChange with connection", function () {
 		assert.ok(true, "handleStateChange should not crash with active connection");
 	});
 
-	// SetConfig writes its field 5 into cell A unconditionally (2WB 0x4080ee8e, 2T 0x408164e8). A
-	// snapshot still holding the old limit would put it back with the next configuration write.
-	it("keeps the config snapshot's cell A current after a limit command", async function () {
-		const adapter = {
-			log: { info: () => {}, warn: () => {}, debug: () => {}, error: () => {} },
-			setStateAsync: async () => {},
-			extendObjectAsync: async () => {},
-			setObjectNotExistsAsync: async () => {},
-			getStateAsync: async () => null,
-			setInterval: () => undefined,
-			clearInterval: () => {},
-			setTimeout: () => "timer-handle",
-			clearTimeout: () => {},
-			subscribeStates: () => {},
-			unsubscribeStates: () => {},
-			devices: new Map(),
-			updateConnectionState: async () => {},
-		};
-		const ctx = new DeviceContext({
-			adapter,
-			protobuf: { encodePowerFactorLimit: () => Buffer.alloc(10) },
-			host: "192.168.1.1",
-			enableLocal: false,
-			enableCloud: false,
-			enableCloudRelay: false,
-			dataInterval: 15,
-			slowPollFactor: 6,
-		});
-		await ctx.initFromSerial("TEST1234");
-		ctx.connection = { connected: true, send: async () => true };
-		ctx["configSnapshot"] = { limitPowerMypower: 500, serverSendTime: 5 };
-		await ctx.handleStateChange("inverter.powerFactorLimit", { val: 0.9, ack: false });
-		assert.strictEqual(ctx["configSnapshot"].limitPowerMypower, 900);
-	});
-
-	it("drops the config snapshot when a forwarded cloud command overwrote cell A", async function () {
+	it("books a forwarded cloud power-factor command for the whole cell", async function () {
 		const ctx = new DeviceContext({
 			adapter: {
 				log: { info: () => {}, warn: () => {}, debug: () => {}, error: () => {} },
@@ -5302,10 +5267,8 @@ describe("deviceContext – handleStateChange with connection", function () {
 			slowPollFactor: 6,
 		});
 		await ctx.initFromSerial("TEST1234");
-		ctx["configSnapshot"] = { limitPowerMypower: 500 };
 		ctx["flashWriteEntry"]("inverter.powerLimit").lastValue = 50;
 		ctx["bookCloudFlashWrite"](47);
-		assert.strictEqual(ctx["configSnapshot"], null, "the cell's content is unknown now");
 		assert.strictEqual(ctx["flashWriteEntry"]("inverter.powerLimit").lastValue, null);
 		assert.ok(ctx["flashWriteEntry"]("inverter.powerFactorLimit").lastWriteMs > 0, "action 47 is booked");
 	});
@@ -6073,50 +6036,168 @@ describe("deviceContext – config snapshot", function () {
 			slowPollFactor: 6,
 		});
 		c.deviceId = "DTU1";
+		// The device answers a GetConfig request with `device` (when set), as a real one would.
+		const box = { device: null };
 		c.connection = {
 			connected: true,
 			send: async b => {
 				sent.push(b);
+				if (b[2] === 0xa3 && b[3] === 0x09 && box.device) {
+					const ReqDTO = handler.getType("GetConfig", "GetConfigReqDTO");
+					const answer = Buffer.from(ReqDTO.encode(ReqDTO.create(box.device)).finish());
+					setImmediate(() => void c["handleConfigData"](answer));
+				}
 				return true;
 			},
 			removeAllListeners: () => {},
 			disconnect: () => {},
 		};
-		return { c, warns, sent };
+		return { c, warns, sent, box };
 	}
 
-	it("refuses a configuration write before the configuration was read", async function () {
+	function setConfigFrames(sent) {
+		return sent.filter(b => b[2] === 0xa3 && b[3] === 0x10);
+	}
+
+	it("refuses a configuration write when the device does not answer the read", async function () {
 		const { c, warns, sent } = ctx();
-		await c.handleStateChange("config.serverSendTime", { val: 10, ack: false });
-		assert.strictEqual(sent.length, 0, "nothing may go out — it would clear the untouched fields");
+		// The mock's setTimeout never fires, so stand in for the timeout by dropping the link.
+		const pending = c.handleStateChange("config.serverSendTime", { val: 10, ack: false });
+		await new Promise(r => setImmediate(r));
+		c["settleConfigWaiters"](null);
+		await pending;
+		assert.strictEqual(setConfigFrames(sent).length, 0, "nothing may go out — it would clear the untouched fields");
 		assert.ok(
-			warns.some(m => /without having read it first/i.test(m)),
+			warns.some(m => /did not answer the configuration read/i.test(m)),
 			"the refusal must say why",
 		);
 	});
 
-	it("writes once the device's configuration is known", async function () {
-		const { c, sent } = ctx();
-		const ReqDTO = handler.getType("GetConfig", "GetConfigReqDTO");
-		const payload = ReqDTO.encode(
-			ReqDTO.create({ serverDomainName: "dataeu.hoymiles.com", serverport: 10081, lockPassword: 4711 }),
-		).finish();
-		await c["handleConfigData"](Buffer.from(payload));
+	it("writes from the configuration the device reports right before", async function () {
+		const { c, sent, box } = ctx();
+		box.device = {
+			serverDomainName: "dataeu.hoymiles.com",
+			serverport: 10081,
+			limitPowerMypower: 500,
+			lockPassword: 4711,
+			serverSendTime: 10,
+		};
 		await c.handleStateChange("config.serverSendTime", { val: 10, ack: false });
-		assert.strictEqual(sent.length, 1, "now the write is safe");
+		const frames = setConfigFrames(sent);
+		assert.strictEqual(frames.length, 1, "now the write is safe");
 		const ResDTO = handler.getType("SetConfig", "SetConfigResDTO");
-		const msg = ResDTO.toObject(ResDTO.decode(sent[0].subarray(10)), { longs: Number, defaults: true });
-		assert.strictEqual(msg.serverDomainName, "dataeu.hoymiles.com", "carried over from the read");
-		assert.strictEqual(Number(msg.lockPassword), 4711, "including the field the adapter never exposes");
+		const msg = ResDTO.toObject(ResDTO.decode(frames[0].subarray(10)), { longs: Number, defaults: true });
+		assert.strictEqual(msg.serverDomainName, "dataeu.hoymiles.com", "carried over from the fresh read");
+		assert.strictEqual(Number(msg.limitPowerMypower), 500, "cell A as the device holds it now");
+		assert.strictEqual(
+			Number(msg.lockPassword) >>> 0,
+			0x67120000,
+			"the field the adapter never exposes, in the byte order the device stores it",
+		);
 	});
 
-	it("forgets the snapshot on disconnect", async function () {
+	it("lets a waiting write give up when the link drops", function () {
 		const { c } = ctx();
-		const ReqDTO = handler.getType("GetConfig", "GetConfigReqDTO");
-		await c["handleConfigData"](Buffer.from(ReqDTO.encode(ReqDTO.create({ serverport: 10081 })).finish()));
-		assert.ok(c["configSnapshot"], "snapshot present after a read");
+		let waited = "pending";
+		c["configWaiters"].push(config => {
+			waited = config;
+		});
+		c["handleLinkDown"]();
+		assert.strictEqual(waited, null);
+	});
+
+	it("lets a waiting write give up on disconnect — the next device must not answer it", function () {
+		const { c } = ctx();
+		let waited = "pending";
+		c["configWaiters"].push(config => {
+			waited = config;
+		});
 		c.disconnect();
-		assert.strictEqual(c["configSnapshot"], null, "a snapshot must not outlive its device");
+		assert.strictEqual(waited, null);
+	});
+
+	it("gives up the read when the answer does not come in time", async function () {
+		const { c } = ctx();
+		let fire;
+		c.adapter.setTimeout = fn => {
+			fire = fn;
+			return "t";
+		};
+		const reading = c["readConfig"]();
+		fire();
+		assert.strictEqual(await reading, null);
+		assert.strictEqual(c["configWaiters"].length, 0, "nobody is left waiting");
+	});
+
+	it("gives up the read when the request cannot be sent", async function () {
+		const { c } = ctx();
+		c.connection.send = async () => false;
+		assert.strictEqual(await c["readConfig"](), null);
+		c.connection.send = async () => {
+			throw new Error("socket closed");
+		};
+		assert.strictEqual(await c["readConfig"](), null);
+		assert.strictEqual(c["configWaiters"].length, 0);
+	});
+
+	it("clears the timeout once the answer is there", async function () {
+		const { c, box } = ctx();
+		const cleared = [];
+		c.adapter.setTimeout = () => "read-timer";
+		c.adapter.clearTimeout = t => cleared.push(t);
+		box.device = { serverport: 10081 };
+		const reading = await c["readConfig"]();
+		assert.strictEqual(Number(reading.serverport), 10081);
+		assert.ok(cleared.includes("read-timer"));
+	});
+
+	it("does not take a poll tick's answer for its reading", async function () {
+		const { c, sent, box } = ctx();
+		let finishTick;
+		c["pollRun"] = new Promise(r => {
+			finishTick = r;
+		});
+		box.device = { serverport: 10081, serverSendTime: 10 };
+		const writing = c.handleStateChange("config.serverSendTime", { val: 10, ack: false });
+		await new Promise(r => setImmediate(r));
+		assert.strictEqual(sent.length, 0, "nothing goes out while the poll tick is still waiting for its answer");
+		assert.strictEqual(c["configWriteActive"], true, "and the next tick stays out");
+		finishTick();
+		await writing;
+		assert.strictEqual(setConfigFrames(sent).length, 1);
+		assert.strictEqual(c["configWriteActive"], false);
+	});
+
+	it("runs two configuration writes one after the other", async function () {
+		const { c, sent, box } = ctx();
+		box.device = { serverport: 10081, serverSendTime: 10 };
+		const order = [];
+		const realSend = c.connection.send;
+		c.connection.send = async b => {
+			order.push(b[3] === 0x10 ? "set" : "get");
+			return realSend(b);
+		};
+		await Promise.all([
+			c.handleStateChange("config.serverSendTime", { val: 10, ack: false }),
+			c.handleStateChange("config.serverSendTime", { val: 10, ack: false }),
+		]);
+		assert.deepStrictEqual(order, ["get", "set", "get", "get", "set", "get"]);
+		assert.strictEqual(setConfigFrames(sent).length, 2);
+	});
+
+	it("ends a poll tick stopped while it waits for an answer", async function () {
+		const { c } = ctx();
+		let settled = "pending";
+		c["pendingResponse"] = {
+			cmdKey: "162:9",
+			resolve: () => {},
+			abort: () => {
+				settled = false;
+			},
+			timer: undefined,
+		};
+		c["stopPollCycle"]();
+		assert.strictEqual(settled, false, "a configuration write waiting for the tick would hang otherwise");
 	});
 });
 

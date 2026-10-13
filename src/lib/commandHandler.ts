@@ -9,6 +9,8 @@ import {
 	POWER_LIMIT_MAX,
 	POWER_LIMIT_WATT_MAX,
 	POWER_LIMIT_WATT_MIN,
+	SERVER_SEND_TIME_MIN,
+	SERVER_SEND_TIME_MAX,
 	DEVICE_COMMAND_REBOOT,
 	DEVICE_COMMAND_POWER_ON,
 	DEVICE_COMMAND_POWER_OFF,
@@ -51,10 +53,11 @@ interface CommandContext {
 	/** Per-state memory of the last flash write. Required whenever `flashGuard` is set. */
 	flashWriteState?: (stateId: string) => FlashWriteState;
 	/**
-	 * The device's last GetConfig response, raw. Required by every command that writes the
-	 * configuration — without it a write would clear every field it does not carry.
+	 * Read the device's configuration now and return it raw, or null when it did not answer.
+	 * Required by every command that writes the configuration: the write is built from this answer
+	 * — without a base it would clear every field it does not carry — and confirmed by a second one.
 	 */
-	configSnapshot?: Record<string, unknown> | null;
+	readConfig?: () => Promise<Record<string, unknown> | null>;
 	/**
 	 * Set when the device echoes power limits back in RealData (local TCP). A limit command then
 	 * reports which kind it sent instead of being acknowledged on send; the echo confirms it.
@@ -62,13 +65,6 @@ interface CommandContext {
 	expectReadback?: (kind: PowerLimitKind) => void;
 	/** Time source for the request's time field — the DTU's clock when known (±60 s window). */
 	now?: () => number;
-	/**
-	 * Called with the new content of the DTU's cell A once a limit, power-factor or reactive-power
-	 * command went out, so the configuration snapshot carries it. SetConfig writes its field 5 into
-	 * cell A unconditionally (2WB `0x4080ee8e`, 2T `0x408164e8`); a stale snapshot would put the
-	 * old value back with the next configuration write.
-	 */
-	onCellAWritten?: (value: number) => void;
 }
 
 /** Unit a power-limit command is expressed in — and thus how the device's echo reads. */
@@ -116,10 +112,12 @@ interface CommandDefinition {
 	 */
 	readback?: PowerLimitKind;
 	/**
-	 * The value the DTU stores in its cell A for this command — the number after `A:`. Set for the
-	 * three commands that share that cell (see {@link CELL_A_STATES}).
+	 * Set for commands that write the DTU configuration (SetConfig): the GetConfig field that
+	 * reads the written value back. Such a write is built from a configuration read right before
+	 * it and acknowledged only by the read after it — the `0xa210` answer just says the frame was
+	 * decoded, and the device may still have kept its old value.
 	 */
-	cellA?: (val: number) => number;
+	configField?: string;
 }
 
 /**
@@ -290,7 +288,6 @@ const COMMANDS: Record<string, CommandDefinition> = {
 		writesFlash: true,
 		valueSpan: 100,
 		readback: "percent",
-		cellA: v => Math.round(v * 10),
 	},
 	"inverter.active": {
 		encode: (v, ts, pb) => (v ? pb.encodeInverterOn(ts) : pb.encodeInverterOff(ts)),
@@ -314,7 +311,6 @@ const COMMANDS: Record<string, CommandDefinition> = {
 		// action 47 (0x2f) shares the branch of action 8: its two flash sectors and cell A.
 		writesFlash: true,
 		valueSpan: 2,
-		cellA: v => Math.round(v * 1000),
 	},
 	"inverter.reactivePowerLimit": {
 		validate: v => (!(v >= -50 && v <= 50) ? "Reactive power setpoint must be -50…+50 %" : null),
@@ -323,7 +319,6 @@ const COMMANDS: Record<string, CommandDefinition> = {
 		// action 48 (0x30), same branch: the same two flash sectors and cell A.
 		writesFlash: true,
 		valueSpan: 100,
-		cellA: v => Math.round(v * 10),
 	},
 	"inverter.cleanWarnings": {
 		encode: (_v, ts, pb) => pb.encodeCleanWarnings(ts),
@@ -340,9 +335,13 @@ const COMMANDS: Record<string, CommandDefinition> = {
 		log: v => (v ? "Locking inverter" : "Unlocking inverter"),
 	},
 	"config.serverSendTime": {
-		validate: v => (!v || v < 1 ? "Server send time must be a positive number (minutes)" : null),
+		validate: v =>
+			!Number.isInteger(v) || v < SERVER_SEND_TIME_MIN || v > SERVER_SEND_TIME_MAX
+				? `Server send time must be a whole number of minutes from ${SERVER_SEND_TIME_MIN} to ${SERVER_SEND_TIME_MAX}`
+				: null,
 		encode: (v, ts, pb, base) => pb.encodeSetConfig(ts, { serverSendTime: Number(v) }, base),
 		log: v => `Setting cloud send interval to ${v}min`,
+		configField: "serverSendTime",
 	},
 	// Runtime power limit in watts (action 211, HMS-800W-2T family only). The DTU forwards it with
 	// mode byte 0 — absolute 0.1 W, RAM only — so it costs neither DTU flash nor inverter EEPROM and
@@ -429,11 +428,23 @@ async function executeCommand(stateId: string, state: ioBroker.State, ctx: Comma
 		undoBooking = bookFlashWrite(stateId, Number(state.val), nowMs, lookup);
 	}
 
+	// A configuration write carries every field of its base back into the device — field 5 into
+	// cell A without condition (2WB `0x4080ee8e`, 2T `0x408164e8`). A limit command since the last
+	// slow-poll read has changed that cell, so the base is read right now.
+	let base: Record<string, unknown> | null = null;
+	if (cmd.configField && ctx.readConfig) {
+		base = await ctx.readConfig();
+		if (!base) {
+			log.warn(`[${deviceId}] Cannot execute "${stateId}": the device did not answer the configuration read`);
+			return;
+		}
+	}
+
 	log.info(`[${deviceId}] ${cmd.log(state.val)}`);
 	const timestamp = ctx.now ? ctx.now() : unixSeconds();
 	let frame: Buffer;
 	try {
-		frame = cmd.encode(state.val, timestamp, protobuf, ctx.configSnapshot ?? null);
+		frame = cmd.encode(state.val, timestamp, protobuf, base);
 	} catch (err) {
 		// The config-writing commands refuse to build a partial message. Say so plainly instead of
 		// letting the failure surface as an unexplained encode error.
@@ -461,15 +472,25 @@ async function executeCommand(stateId: string, state: ioBroker.State, ctx: Comma
 		return;
 	}
 	notSentWarned.delete(deviceId);
-	if (cmd.cellA && ctx.onCellAWritten) {
-		ctx.onCellAWritten(cmd.cellA(Number(state.val)));
-	}
 
 	// Acknowledge non-button commands after successful send — except a power limit the device will
-	// echo back: that one is acknowledged by the echo, so the state shows what the DTU accepted.
+	// echo back and a configuration value it reports: those are acknowledged by what the device
+	// says, so the state shows what it accepted.
 	if (!cmd.button) {
 		if (cmd.readback && ctx.expectReadback) {
 			ctx.expectReadback(cmd.readback);
+		} else if (cmd.configField && ctx.readConfig) {
+			// The answer itself acknowledges the state with the device's value (handleConfigData).
+			const after = await ctx.readConfig();
+			if (!after) {
+				log.warn(
+					`[${deviceId}] "${stateId}" is not confirmed — the device did not answer the configuration read`,
+				);
+			} else if (Number(after[cmd.configField]) !== Number(state.val)) {
+				log.warn(
+					`[${deviceId}] The device did not take "${stateId}" = ${state.val}, it keeps ${String(after[cmd.configField])}`,
+				);
+			}
 		} else {
 			await ctx.setState(stateId, state.val, true);
 		}
@@ -479,6 +500,16 @@ async function executeCommand(stateId: string, state: ioBroker.State, ctx: Comma
 	if (cmd.button) {
 		ctx.resetButton(stateId);
 	}
+}
+
+/**
+ * Whether the command writes the DTU configuration. Such a write reads the configuration first and
+ * once more afterwards, so the device layer runs it alone — see `DeviceContext.exclusiveConfig`.
+ *
+ * @param stateId - State ID relative to the device prefix.
+ */
+export function writesConfig(stateId: string): boolean {
+	return COMMANDS[stateId]?.configField !== undefined;
 }
 
 /** Context for sending a command over the cloud instead of the local TCP link. */

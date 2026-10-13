@@ -1,4 +1,4 @@
-import { POWER_LIMIT_MIN, POWER_LIMIT_MAX, POWER_LIMIT_WATT_MAX, POWER_LIMIT_WATT_MIN, DEVICE_COMMAND_REBOOT, DEVICE_COMMAND_POWER_ON, DEVICE_COMMAND_POWER_OFF, DTU_COMMAND_REBOOT, DTU_COMMAND_REBOOT_STORAGE, CLOUD_DEV_TYPE_DTU, CLOUD_DEV_TYPE_MICRO, CLOUD_DEV_TYPE_STORAGE_INVERTER, } from "./constants.js";
+import { POWER_LIMIT_MIN, POWER_LIMIT_MAX, POWER_LIMIT_WATT_MAX, POWER_LIMIT_WATT_MIN, SERVER_SEND_TIME_MIN, SERVER_SEND_TIME_MAX, DEVICE_COMMAND_REBOOT, DEVICE_COMMAND_POWER_ON, DEVICE_COMMAND_POWER_OFF, DTU_COMMAND_REBOOT, DTU_COMMAND_REBOOT_STORAGE, CLOUD_DEV_TYPE_DTU, CLOUD_DEV_TYPE_MICRO, CLOUD_DEV_TYPE_STORAGE_INVERTER, } from "./constants.js";
 import { unixSeconds } from "./utils.js";
 export const CELL_A_STATES = [
     "inverter.powerLimit",
@@ -71,7 +71,6 @@ const COMMANDS = {
         writesFlash: true,
         valueSpan: 100,
         readback: "percent",
-        cellA: v => Math.round(v * 10),
     },
     "inverter.active": {
         encode: (v, ts, pb) => (v ? pb.encodeInverterOn(ts) : pb.encodeInverterOff(ts)),
@@ -93,7 +92,6 @@ const COMMANDS = {
         log: v => `Setting power factor limit to ${v}`,
         writesFlash: true,
         valueSpan: 2,
-        cellA: v => Math.round(v * 1000),
     },
     "inverter.reactivePowerLimit": {
         validate: v => (!(v >= -50 && v <= 50) ? "Reactive power setpoint must be -50…+50 %" : null),
@@ -101,7 +99,6 @@ const COMMANDS = {
         log: v => `Setting reactive power setpoint to ${v} %`,
         writesFlash: true,
         valueSpan: 100,
-        cellA: v => Math.round(v * 10),
     },
     "inverter.cleanWarnings": {
         encode: (_v, ts, pb) => pb.encodeCleanWarnings(ts),
@@ -118,9 +115,12 @@ const COMMANDS = {
         log: v => (v ? "Locking inverter" : "Unlocking inverter"),
     },
     "config.serverSendTime": {
-        validate: v => (!v || v < 1 ? "Server send time must be a positive number (minutes)" : null),
+        validate: v => !Number.isInteger(v) || v < SERVER_SEND_TIME_MIN || v > SERVER_SEND_TIME_MAX
+            ? `Server send time must be a whole number of minutes from ${SERVER_SEND_TIME_MIN} to ${SERVER_SEND_TIME_MAX}`
+            : null,
         encode: (v, ts, pb, base) => pb.encodeSetConfig(ts, { serverSendTime: Number(v) }, base),
         log: v => `Setting cloud send interval to ${v}min`,
+        configField: "serverSendTime",
     },
     "inverter.powerLimitWatt": {
         validate: v => !(v >= POWER_LIMIT_WATT_MIN) || v > POWER_LIMIT_WATT_MAX
@@ -170,11 +170,19 @@ async function executeCommand(stateId, state, ctx) {
         }
         undoBooking = bookFlashWrite(stateId, Number(state.val), nowMs, lookup);
     }
+    let base = null;
+    if (cmd.configField && ctx.readConfig) {
+        base = await ctx.readConfig();
+        if (!base) {
+            log.warn(`[${deviceId}] Cannot execute "${stateId}": the device did not answer the configuration read`);
+            return;
+        }
+    }
     log.info(`[${deviceId}] ${cmd.log(state.val)}`);
     const timestamp = ctx.now ? ctx.now() : unixSeconds();
     let frame;
     try {
-        frame = cmd.encode(state.val, timestamp, protobuf, ctx.configSnapshot ?? null);
+        frame = cmd.encode(state.val, timestamp, protobuf, base);
     }
     catch (err) {
         log.warn(`[${deviceId}] Cannot execute "${stateId}": ${err instanceof Error ? err.message : String(err)}`);
@@ -200,12 +208,18 @@ async function executeCommand(stateId, state, ctx) {
         return;
     }
     notSentWarned.delete(deviceId);
-    if (cmd.cellA && ctx.onCellAWritten) {
-        ctx.onCellAWritten(cmd.cellA(Number(state.val)));
-    }
     if (!cmd.button) {
         if (cmd.readback && ctx.expectReadback) {
             ctx.expectReadback(cmd.readback);
+        }
+        else if (cmd.configField && ctx.readConfig) {
+            const after = await ctx.readConfig();
+            if (!after) {
+                log.warn(`[${deviceId}] "${stateId}" is not confirmed — the device did not answer the configuration read`);
+            }
+            else if (Number(after[cmd.configField]) !== Number(state.val)) {
+                log.warn(`[${deviceId}] The device did not take "${stateId}" = ${state.val}, it keeps ${String(after[cmd.configField])}`);
+            }
         }
         else {
             await ctx.setState(stateId, state.val, true);
@@ -214,6 +228,9 @@ async function executeCommand(stateId, state, ctx) {
     if (cmd.button) {
         ctx.resetButton(stateId);
     }
+}
+export function writesConfig(stateId) {
+    return COMMANDS[stateId]?.configField !== undefined;
 }
 const CLOUD_COMMANDS = {
     "inverter.reboot": { action: () => DEVICE_COMMAND_REBOOT, button: true },

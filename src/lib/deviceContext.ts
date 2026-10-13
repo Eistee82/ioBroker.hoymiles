@@ -15,6 +15,7 @@ import {
 	bookFlashWrite,
 	flashWritingStateForAction,
 	groupLastWriteMs,
+	writesConfig,
 	type FlashGuardOptions,
 	type FlashWriteState,
 	type PowerLimitKind,
@@ -61,6 +62,7 @@ import {
 	CLOUD_RELAY_TLS_PORT,
 	DTU_TIME_WINDOW_S,
 	DTU_CLOCK_VALID_FROM,
+	CONFIG_READ_TIMEOUT_MS,
 } from "./constants.js";
 import { whToKwh } from "./convert.js";
 import { anonymize, errorMessage, safeJsonStringify, unixSeconds } from "./utils.js";
@@ -233,11 +235,17 @@ class DeviceContext {
 	/** Unix timestamp of the first sample of the current curve. */
 	private histStart: number;
 	/**
-	 * The device's last GetConfig response, raw and complete. Needed to write the configuration
-	 * without clearing the fields that are not being changed. Holds credentials the device sends
-	 * in the clear (`lock_password`, `wifi_password`) — never log it, never put it in a state.
+	 * Callers waiting for the next GetConfig answer (see {@link readConfig}). The answer is handed
+	 * over raw and complete, including credentials the device sends in the clear (`lock_password`,
+	 * `wifi_password`) — never log it, never put it in a state.
 	 */
-	private configSnapshot: Record<string, unknown> | null;
+	private configWaiters: Array<(config: Record<string, unknown> | null) => void>;
+	/** Configuration writes queue here, one after the other (see {@link exclusiveConfig}). */
+	private configChain: Promise<void>;
+	/** True while a configuration write runs; the poll cycle sits it out. */
+	private configWriteActive: boolean;
+	/** The poll tick in flight, so a configuration write can wait for it to finish. */
+	private pollRun: Promise<void> | null;
 
 	/** Matched cloud station ID for this device. */
 	cloudStationId: number | null;
@@ -307,7 +315,13 @@ class DeviceContext {
 	private pendingGridServeTid: number | null = null;
 
 	/** Pending response resolver for request-response pairing. */
-	private pendingResponse: { cmdKey: string; resolve: () => void; timer: ioBroker.Timeout | undefined } | null;
+	private pendingResponse: {
+		cmdKey: string;
+		resolve: () => void;
+		/** Settles the wait as failed — so a poll tick stopped mid-way still finishes. */
+		abort?: () => void;
+		timer: ioBroker.Timeout | undefined;
+	} | null;
 	/** Slow-poll command queue — one command per tick, round-robin. */
 	private slowPollQueue: Array<(ts: number) => Buffer>;
 	private slowPollIndex: number;
@@ -344,7 +358,10 @@ class DeviceContext {
 		this.flashWrites = new Map();
 		this.energyGuard = new EnergyGuard();
 		this.warnedCloudFlashRate = false;
-		this.configSnapshot = null;
+		this.configWaiters = [];
+		this.configChain = Promise.resolve();
+		this.configWriteActive = false;
+		this.pollRun = null;
 		this.histPage = 0;
 		this.histSamples = [];
 		this.histStart = 0;
@@ -460,30 +477,7 @@ class DeviceContext {
 			);
 		});
 
-		this.connection.on("disconnected", () => {
-			this.adapter.log.warn(`[${this.host}] Disconnected from DTU`);
-			this.stopPollCycle();
-			if (this.cloudRelay && !this.cloudRelay.paused) {
-				this.adapter.log.info(`[${this.deviceId || this.host}] Pausing cloud relay (local connection lost)`);
-				this.cloudRelay.sendFinalAndPause();
-			}
-			if (this.deviceId) {
-				this.adapter
-					.setStateAsync(`${this.deviceId}.info.connected`, false, true)
-					.catch(err =>
-						this.adapter.log.warn(`[${this.host}] Failed to set connected state: ${errorMessage(err)}`),
-					);
-			}
-			this.markStatesDisconnected().catch(err =>
-				this.adapter.log.warn(`[${this.host}] markStatesDisconnected error: ${errorMessage(err)}`),
-			);
-			this.updateAdapterConnectionState().catch(err =>
-				this.adapter.log.warn(`[${this.host}] updateAdapterConnectionState error: ${errorMessage(err)}`),
-			);
-
-			// Notify adapter that a local device disconnected (for CloudPoller night mode)
-			this.adapter.onLocalDisconnected(this);
-		});
+		this.connection.on("disconnected", () => this.handleLinkDown());
 
 		this.connection.on("message", (message: Buffer) => {
 			this.handleResponse(message);
@@ -1083,10 +1077,6 @@ class DeviceContext {
 			}
 		}
 		bookFlashWrite(stateId, null, now, lookup);
-		// The command overwrote cell A with a value the adapter cannot read from the forwarded
-		// payload. A configuration write copies field 5 from the snapshot into cell A, so the old
-		// snapshot would put the previous value back; drop it until the next GetConfig answer.
-		this.configSnapshot = null;
 	}
 
 	/**
@@ -1243,7 +1233,9 @@ class DeviceContext {
 		}
 		if (this.pendingResponse) {
 			this.adapter.clearTimeout(this.pendingResponse.timer);
+			const { abort } = this.pendingResponse;
 			this.pendingResponse = null;
+			abort?.();
 		}
 		this.pollBusy = false;
 	}
@@ -1279,7 +1271,7 @@ class DeviceContext {
 				settle(false);
 			}, timeoutMs);
 
-			this.pendingResponse = { cmdKey, resolve: () => settle(true), timer };
+			this.pendingResponse = { cmdKey, resolve: () => settle(true), abort: () => settle(false), timer };
 			conn.send(this.wireFrame(message)).catch(err => {
 				this.adapter.log.debug(`[${this.host}] sendAndWait send failed: ${errorMessage(err)}`);
 				if (this.pendingResponse?.cmdKey === cmdKey) {
@@ -1293,42 +1285,48 @@ class DeviceContext {
 
 	private async pollTick(): Promise<void> {
 		const conn = this.connection;
-		if (!conn?.connected || !this.protobuf || this.pollBusy) {
+		if (!conn?.connected || !this.protobuf || this.pollBusy || this.configWriteActive) {
 			return;
 		}
 		this.pollBusy = true;
-
+		const run = this.pollTickBody(conn);
+		this.pollRun = run;
 		try {
-			const ts = this.deviceNow();
+			await run;
+		} finally {
+			this.pollRun = null;
+			this.pollBusy = false;
+		}
+	}
 
-			// Always send RealData and wait for response
-			await this.sendAndWait(conn, this.protobuf.encodeRealDataNewRequest(ts));
-			this.consecutivePollErrors = 0;
+	private async pollTickBody(conn: DeviceConnection): Promise<void> {
+		const ts = this.deviceNow();
 
-			// Slow-poll: one extra command per tick, round-robin
-			this.pollCount++;
-			if (this.pollCount >= this.slowPollEvery && conn.connected) {
-				this.pollCount = 0;
+		// Always send RealData and wait for response
+		await this.sendAndWait(conn, this.protobuf.encodeRealDataNewRequest(ts));
+		this.consecutivePollErrors = 0;
 
-				const cmdFactory = this.slowPollQueue[this.slowPollIndex];
-				if (cmdFactory) {
-					await this.sendAndWait(conn, cmdFactory(ts));
-				}
+		// Slow-poll: one extra command per tick, round-robin
+		this.pollCount++;
+		if (this.pollCount >= this.slowPollEvery && conn.connected) {
+			this.pollCount = 0;
 
-				this.slowPollIndex++;
-				if (this.slowPollIndex >= this.slowPollQueue.length) {
-					this.slowPollIndex = 0;
-					this.slowPollRotations++;
+			const cmdFactory = this.slowPollQueue[this.slowPollIndex];
+			if (cmdFactory) {
+				await this.sendAndWait(conn, cmdFactory(ts));
+			}
 
-					// Info request every 6 full rotations through the queue
-					if (this.slowPollRotations >= 6 && conn.connected) {
-						this.slowPollRotations = 0;
-						await this.sendAndWait(conn, this.protobuf.encodeInfoRequest(ts));
-					}
+			this.slowPollIndex++;
+			if (this.slowPollIndex >= this.slowPollQueue.length) {
+				this.slowPollIndex = 0;
+				this.slowPollRotations++;
+
+				// Info request every 6 full rotations through the queue
+				if (this.slowPollRotations >= 6 && conn.connected) {
+					this.slowPollRotations = 0;
+					await this.sendAndWait(conn, this.protobuf.encodeInfoRequest(ts));
 				}
 			}
-		} finally {
-			this.pollBusy = false;
 		}
 	}
 
@@ -2241,19 +2239,131 @@ class DeviceContext {
 		}
 	}
 
+	/** The local link (TCP or Bluetooth) dropped. */
+	private handleLinkDown(): void {
+		this.adapter.log.warn(`[${this.host}] Disconnected from DTU`);
+		this.stopPollCycle();
+		// A write waiting for a reading will not get one over this link.
+		this.settleConfigWaiters(null);
+		if (this.cloudRelay && !this.cloudRelay.paused) {
+			this.adapter.log.info(`[${this.deviceId || this.host}] Pausing cloud relay (local connection lost)`);
+			this.cloudRelay.sendFinalAndPause();
+		}
+		if (this.deviceId) {
+			this.adapter
+				.setStateAsync(`${this.deviceId}.info.connected`, false, true)
+				.catch(err =>
+					this.adapter.log.warn(`[${this.host}] Failed to set connected state: ${errorMessage(err)}`),
+				);
+		}
+		this.markStatesDisconnected().catch(err =>
+			this.adapter.log.warn(`[${this.host}] markStatesDisconnected error: ${errorMessage(err)}`),
+		);
+		this.updateAdapterConnectionState().catch(err =>
+			this.adapter.log.warn(`[${this.host}] updateAdapterConnectionState error: ${errorMessage(err)}`),
+		);
+
+		// Notify adapter that a local device disconnected (for CloudPoller night mode)
+		this.adapter.onLocalDisconnected(this);
+	}
+
+	/**
+	 * Ask the device for its configuration and wait for the answer.
+	 *
+	 * A configuration write copies every field of its base into the device, field 5 into cell A
+	 * without condition (2WB `0x4080ee8e`, 2T `0x408164e8`). The slow-poll snapshot can be minutes
+	 * old, and a limit command in between (action 8/47/48 locally, from the cloud, or action 211)
+	 * has changed that cell; a write built from it would put the old value back.
+	 *
+	 * @returns The raw configuration, or null when the device did not answer in time.
+	 */
+	private readConfig(): Promise<Record<string, unknown> | null> {
+		const conn = this.connection;
+		if (!conn?.connected) {
+			return Promise.resolve(null);
+		}
+		return new Promise(resolve => {
+			let timer: ioBroker.Timeout | undefined = undefined;
+			const waiter = (config: Record<string, unknown> | null): void => {
+				this.adapter.clearTimeout(timer);
+				resolve(config);
+			};
+			const giveUp = (): void => {
+				const index = this.configWaiters.indexOf(waiter);
+				if (index >= 0) {
+					this.configWaiters.splice(index, 1);
+					waiter(null);
+				}
+			};
+			this.configWaiters.push(waiter);
+			timer = this.adapter.setTimeout(giveUp, CONFIG_READ_TIMEOUT_MS);
+			conn.send(this.wireFrame(this.protobuf.encodeGetConfigRequest(this.deviceNow())))
+				.then(sent => {
+					if (sent === false) {
+						giveUp();
+					}
+				})
+				.catch(err => {
+					this.adapter.log.debug(`[${this.host}] GetConfig send failed: ${errorMessage(err)}`);
+					giveUp();
+				});
+		});
+	}
+
+	/**
+	 * Run a configuration write alone.
+	 *
+	 * Every GetConfig answer goes to whoever waits for one. An answer to the poll cycle's request,
+	 * still on its way, would otherwise be taken for the reading before the write — or for the
+	 * confirmation after it, with the old value. So the write waits for the poll tick in flight,
+	 * keeps the next ones out until it is done, and queues behind any earlier configuration write
+	 * (two writes from one reading would each put the other's field back).
+	 *
+	 * @param work - The write: read, send, read again.
+	 */
+	private exclusiveConfig(work: () => Promise<void>): Promise<void> {
+		const run = this.configChain.then(async () => {
+			this.configWriteActive = true;
+			try {
+				// A failed tick has nothing in flight any more; its error is the poll's to report.
+				await this.pollRun?.catch(() => undefined);
+				await work();
+			} finally {
+				this.configWriteActive = false;
+			}
+		});
+		this.configChain = run.catch(() => undefined);
+		return run;
+	}
+
+	/**
+	 * Hand a configuration answer — or null when there will be none — to everyone waiting for it.
+	 *
+	 * @param config - The raw configuration, or null.
+	 */
+	private settleConfigWaiters(config: Record<string, unknown> | null): void {
+		const waiters = this.configWaiters;
+		this.configWaiters = [];
+		for (const waiter of waiters) {
+			waiter(config);
+		}
+	}
+
 	private async handleConfigData(payload: Buffer): Promise<void> {
 		try {
-			// The snapshot lets a later configuration write round-trip every field, including the
-			// ones deliberately not exposed as states. It is auxiliary: if it fails, the states are
-			// still the point of this handler, and a write will simply refuse itself later rather
-			// than go out incomplete.
+			// The raw answer lets a configuration write round-trip every field, including the ones
+			// deliberately not exposed as states. It is auxiliary: if it fails, the states are still
+			// the point of this handler, and a waiting write refuses itself rather than go out
+			// incomplete.
+			let raw: Record<string, unknown> | null = null;
 			try {
-				this.configSnapshot = this.protobuf.decodeGetConfigRaw(payload);
+				raw = this.protobuf.decodeGetConfigRaw(payload);
 			} catch (err) {
 				this.adapter.log.debug(
-					`[${this.deviceId || this.host}] could not keep a configuration snapshot: ${errorMessage(err)}`,
+					`[${this.deviceId || this.host}] could not decode the raw configuration: ${errorMessage(err)}`,
 				);
 			}
+			this.settleConfigWaiters(raw);
 			const config = this.protobuf.decodeGetConfig(payload);
 			this.adapter.log.debug(
 				`[${this.deviceId || this.host}] Config: server=${config.serverDomain}:${config.serverPort}, sendTime=${config.serverSendTime}min`,
@@ -2734,34 +2844,30 @@ class DeviceContext {
 		// Local link takes precedence: a locally-connected DTU is actuated directly over TCP.
 		if (this.connection?.connected) {
 			const connection = this.connection;
-			await executeCommand(stateId, state, {
-				// Commands go through wireFrame like every other local send. A DTU with firmware
-				// V01.01.01+ decrypts every command frame; a plain one fails authentication, and the
-				// firmware then handles the message with an empty payload (0x40817958 ignores the
-				// decrypt result) — it answers, but nothing happens.
-				connection: { send: frame => connection.send(this.wireFrame(frame)) },
-				now: () => this.deviceNow(),
-				protobuf: this.protobuf,
-				deviceId: this.deviceId,
-				host: this.host,
-				log: this.adapter.log,
-				setState: (id, val, ack) => this.setState(id, val, ack),
-				resetButton: id => this.scheduleButtonReset(id),
-				configSnapshot: this.configSnapshot,
-				flashGuard: this.flashGuard,
-				flashWriteState: id => this.flashWriteEntry(id),
-				// The next SetConfig carries field 5 from this snapshot into cell A — keep it current.
-				onCellAWritten: value => {
-					if (this.configSnapshot) {
-						this.configSnapshot.limitPowerMypower = value;
-					}
-				},
-				// Only the TCP path echoes the commanded limit. On the WB series the RealData field
-				// carries the EMS set point instead, which would not confirm anything.
-				...(this.transport === "tcp"
-					? { expectReadback: (kind: PowerLimitKind) => this.expectLimitEcho(kind) }
-					: {}),
-			});
+			const run = (): Promise<void> =>
+				executeCommand(stateId, state, {
+					// Commands go through wireFrame like every other local send. A DTU with firmware
+					// V01.01.01+ decrypts every command frame; a plain one fails authentication, and the
+					// firmware then handles the message with an empty payload (0x40817958 ignores the
+					// decrypt result) — it answers, but nothing happens.
+					connection: { send: frame => connection.send(this.wireFrame(frame)) },
+					now: () => this.deviceNow(),
+					protobuf: this.protobuf,
+					deviceId: this.deviceId,
+					host: this.host,
+					log: this.adapter.log,
+					setState: (id, val, ack) => this.setState(id, val, ack),
+					resetButton: id => this.scheduleButtonReset(id),
+					readConfig: () => this.readConfig(),
+					flashGuard: this.flashGuard,
+					flashWriteState: id => this.flashWriteEntry(id),
+					// Only the TCP path echoes the commanded limit. On the WB series the RealData field
+					// carries the EMS set point instead, which would not confirm anything.
+					...(this.transport === "tcp"
+						? { expectReadback: (kind: PowerLimitKind) => this.expectLimitEcho(kind) }
+						: {}),
+				});
+			await (writesConfig(stateId) ? this.exclusiveConfig(run) : run());
 			return;
 		}
 		// No local link — for a cloud-connected device, send the same command over the cloud.
@@ -2850,9 +2956,8 @@ class DeviceContext {
 		// next — keeping it would throttle the first write to a different DTU.
 		this.flashWrites.clear();
 		this.energyGuard.clear();
-		// The snapshot describes the device that was connected. Keeping it would let a write go
-		// out built from another device's configuration.
-		this.configSnapshot = null;
+		// A write waiting for a reading must not be answered by whatever device connects next.
+		this.settleConfigWaiters(null);
 		this.histPage = 0;
 		this.histSamples = [];
 		if (this.connection) {

@@ -292,7 +292,10 @@ export interface ConfigResult {
 	wifiMacAddress: string;
 	/** DNS server the DTU uses (GetConfig `cable_dns_0..3`). */
 	dnsServer: string;
-	/** Inverter lock duration in seconds (GetConfig `lock_time`); 0 when no lock is set. */
+	/**
+	 * GetConfig `lock_time` as the DTU reads it: four bytes, big-endian. On the 2WB the lowest one
+	 * is written by the power-limit command; a meaning as a duration is not established.
+	 */
 	lockTime: number;
 }
 

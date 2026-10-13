@@ -689,7 +689,11 @@ const states: StateDefinition[] = [
 	n("config.zeroExport433Addr", "Zero export 433 MHz address", "Nulleinspeisung 433-MHz-Adresse", "value", "", {
 		source: "local",
 	}),
-	n("config.lockTime", "Inverter lock duration", "Wechselrichter-Sperrdauer", "value", "s", {
+	// The four bytes as the DTU reads them, big-endian. Its write stores only the first two, and on
+	// the 2WB the last one (0x7204b) is written by the power-limit command (action 8 at 0x4080abf4)
+	// — which is why a device without a lock reads 16777217. A meaning as a duration is not
+	// established.
+	n("config.lockTime", "Inverter lock time (raw value)", "Wechselrichter-Sperrzeit (Rohwert)", "value", "", {
 		source: "local",
 	}),
 
