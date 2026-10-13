@@ -1177,7 +1177,6 @@ export async function buildDeviceDetails(adapter, deviceId) {
                 ["subnetMask", "config.subnetMask"],
                 ["gateway", "config.gateway"],
                 ["dnsServer", "config.dnsServer"],
-                ["dhcp", "config.netDhcpSwitch"],
             ];
             const present = [];
             for (const [key, suffix] of network) {

@@ -357,7 +357,7 @@ const states = [
     n("dtu.signalQuality", "Signal quality", "Signalqualität", "value.signal", "%", { source: "local" }),
     s("dtu.wifiVersion", "WiFi version", "WLAN-Version", "text", { source: "local" }),
     b("dtu.reboot", "Reboot DTU", "DTU neustarten", "button", { write: true }),
-    n("dtu.stepTime", "Step time", "Schrittzeit", "value", "s", { source: "local" }),
+    n("dtu.stepTime", "Cloud upload interval (same as config.serverSendTime)", "Cloud-Upload-Intervall (gleich config.serverSendTime)", "value", "min", { source: "local" }),
     n("dtu.accessModel", "Network access mode", "Netzwerk-Zugangsart", "value", "", {
         states: { 0: "GPRS", 1: "WiFi", 2: "Ethernet" },
         source: "local",

@@ -168,9 +168,9 @@ The adapter integrates with the ioBroker **Config Manager**, so every inverter a
 - **Live values right on the card:** current power (W), today's energy (kWh), the power of each PV string the inverter actually has (one line per string) and the inverter temperature — all updated automatically. Stations show the aggregated power, the **PV utilization in percent**, the daily, yearly and total energy, and the daily and total income in the plant's currency (the income lines only appear when an electricity price is configured in the cloud).
 - A device **icon** by type — a flat micro-inverter, an upright three-phase inverter (HMT line), or a station. The same icons are used for the device objects in the object tree.
 - A **firmware-update indicator** when the cloud reports one (from `dtu.fwUpdateAvailable`).
-- The **"More"** button opens a read-only details panel, grouped into **Inverter** (model, serial number, hardware/software version), **DTU / firmware** (serial number, firmware versions, WiFi version, update indicator), **Network** (the address in use, signal quality, SSID, IP and MAC addresses, DNS, DHCP) and **Cloud server** (domain, port). The network and server sections only appear for locally connected devices, because those values arrive over the local link alone.
+- The **"More"** button opens a read-only details panel, grouped into **Inverter** (model, serial number, hardware/software version), **DTU / firmware** (serial number, firmware versions, WiFi version, update indicator), **Network** (the address in use, signal quality, SSID, IP and MAC addresses, DNS) and **Cloud server** (domain, port). The network and server sections only appear for locally connected devices, because those values arrive over the local link alone.
 
-> **Why not every network field shows up there:** the DTU's configuration message covers the **whole Hoymiles DTU family**. Besides the WiFi fields it carries a set for **wired networking** (IP, MAC, subnet mask, gateway, cable DNS) and fields for **cellular** (APN, GPRS) and Sub-1GHz radio. An HMS inverter is WiFi-only, so its wired fields stay at `0.0.0.0` and `00:00:00:00:00:00` forever. The adapter hides any field the device reports no real value for — otherwise the panel would state an address that does not exist. A numeric `0` stays visible: for a flag such as DHCP that is an answer, not an absence. Stations show capacity, status and address.
+> **Why not every network field shows up there:** the DTU's configuration message covers the **whole Hoymiles DTU family**. Besides the WiFi fields it carries a set for **wired networking** (IP, MAC, subnet mask, gateway, DHCP flag) and fields for **cellular** (APN, GPRS) and Sub-1GHz radio. The DTU never fills the wired set (firmware-verified for the HMS-800-2WB and the HMS-800W-2T), so those fields stay at `0.0.0.0`, `00:00:00:00:00:00` and `0` forever. The adapter hides any field the device reports no real value for — otherwise the panel would state an address that does not exist — and shows no DHCP row at all, because its `0` would read as "DHCP off". Stations show capacity, status and address.
 
 **Controls and settings — split by persistence**
 
@@ -378,10 +378,10 @@ The adapter determines how many there are, in this order:
 | `dtu.reboot` | boolean | — | Reboot DTU (**writable**, button). Sent over the local link (TCP or Bluetooth) when connected, otherwise over the cloud for cloud-only devices |
 | `dtu.wifiVersion` | string | — | WiFi version |
 | `dtu.fwUpdateAvailable` | boolean | — | Firmware update available (checked once daily via cloud) |
-| `dtu.stepTime` | number | s | Step time |
-| `dtu.accessModel` | number | — | Network access mode (0=GPRS, 1=WiFi, 2=Ethernet) |
+| `dtu.stepTime` | number | min | Cloud upload interval — the same value as `config.serverSendTime` (the DTU reads one RAM byte for both). Earlier versions showed the unit as seconds, which was wrong |
+| `dtu.accessModel` | number | — | Network access mode (0=GPRS, 1=WiFi, 2=Ethernet). HMS-800-2WB and HMS-800W-2T always report 1 |
 | `dtu.communicationTime` | number | — | Last communication (Unix timestamp) |
-| `dtu.connState` | number | — | DTU error code (0=OK) |
+| `dtu.connState` | number | — | DTU error code (0=OK). HMS-800-2WB and HMS-800W-2T always report 0 — it is no status indicator |
 
 ### `station-<id>.grid.*` — Station Aggregates (cloud)
 
@@ -561,20 +561,20 @@ Read on the config/alarm poll. Over TCP the adapter asks with the warning-list c
 |-------|------|------|----------|-------------|
 | `config.serverDomain` | string | — | no | Cloud server domain |
 | `config.serverPort` | number | — | no | Cloud server port |
-| `config.serverSendTime` | number | min | **yes** | Cloud send interval (whole minutes, **5 to 15** — the range the DTU's own cloud path clamps to; the device keeps only the low byte, so 256 would be ignored and 300 would become 44). The state is acknowledged only once the device reports the new value; if it keeps the old one, the log says so. ⚠️ **Neither persistent nor a flash write** (firmware-verified): SetConfig field 10 only lands in RAM (2T `gp-110188`, HMS-800-2WB `0x73820`); on the 2T the SetConfig path writes flash solely in the WiFi/AP password branch, on the 2WB a later write of the network or cloud settings can store it along. Earlier versions of this documentation called it "persistent (DTU flash)" — that was wrong. Set it again after a device restart |
+| `config.serverSendTime` | number | min | **yes** | Cloud send interval (whole minutes, **5 to 15** — the range the DTU's own cloud path clamps to; the device keeps only the low byte, so 256 would be ignored and 300 would become 44). The state is acknowledged only once the device reports the new value; if it keeps the old one, the log says so. ⚠️ **Neither persistent nor a flash write** (firmware-verified): SetConfig field 10 only lands in RAM (2T V01.01.01 `gp-110092`, HMS-800-2WB `0x73820`); on the 2T the SetConfig path writes flash solely in the WiFi/AP password branch, on the 2WB a later write of the network or cloud settings can store it along. Earlier versions of this documentation called it "persistent (DTU flash)" — that was wrong. Set it again after a device restart |
 | `config.wifiSsid` | string | — | no | WiFi SSID |
 | `config.wifiSignalQuality` | number | % | no | WiFi **signal quality 0–100**, **not dBm** despite the field name. The firmware derives it from the raw RSSI as `clamp(2*(95 - |rssi|), 0, 100)` and names the two values `rssi` (raw) and `wifi_rssi` (this one) in its own debug output. A reading of 46 corresponds to roughly −72 dBm. Earlier versions of this documentation called it “real dBm, e.g. −65” — that was wrong. The raw dBm value stays in the neighbouring byte and is not reachable through any message the adapter uses. The device reports the same quantity as `csq` in its NetworkInfo message — the same byte, so a separate state would be a duplicate |
 | `config.invType` | number | — | no | Inverter type |
-| `config.netmodeSelect` | number | — | no | Network mode (0=GPRS, 1=WiFi, 2=Ethernet) |
-| `config.netDhcpSwitch` | number | — | no | DHCP enabled |
+| `config.netmodeSelect` | number | — | no | Network mode (0=GPRS, 1=WiFi, 2=Ethernet). HMS-800-2WB and HMS-800W-2T always report 1 |
+| `config.netDhcpSwitch` | number | — | no | DHCP flag of the wired interface. Never filled by HMS inverters (always 0) — it does not mean "DHCP off" |
 | `config.wifiIpAddress` | string | — | no | WiFi IP address |
 | `config.wifiMacAddress` | string | — | no | WiFi MAC address |
 | `config.dtuApSsid` | string | — | no | DTU access point SSID |
-| `config.ipAddress` | string | — | no | IP address (Ethernet/primary interface) |
-| `config.subnetMask` | string | — | no | Subnet mask |
-| `config.gateway` | string | — | no | Default gateway |
-| `config.dnsServer` | string | — | no | DNS server |
-| `config.macAddress` | string | — | no | MAC address |
+| `config.ipAddress` | string | — | no | IP address of the wired interface. Never filled by HMS inverters (always 0.0.0.0) |
+| `config.subnetMask` | string | — | no | Subnet mask of the wired interface. Never filled by HMS inverters (always 0.0.0.0) |
+| `config.gateway` | string | — | no | Default gateway of the wired interface. Never filled by HMS inverters (always 0.0.0.0) |
+| `config.dnsServer` | string | — | no | The DTU's default DNS server (typically 1.1.1.1). The DTU sets it in place of the DNS server the router hands out |
+| `config.macAddress` | string | — | no | MAC address of the wired interface. Never filled by HMS inverters (always 00:00:00:00:00:00) |
 | `config.meterKind` | string | — | no | Configured meter type. Empty on devices without a meter input — the HMS-800W-2T has none (firmware-verified), so an empty value is the correct answer there |
 | `config.meterInterface` | string | — | no | Interface the meter is attached to |
 | `config.zeroExportEnable` | number | — | no | Zero-export flag as reported by the DTU |

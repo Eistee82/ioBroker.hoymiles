@@ -125,9 +125,9 @@ export const POWER_LIMIT_WATT_MAX = 3276.7;
 export const POWER_LIMIT_WATT_MIN = 0.1;
 /**
  * Range of the cloud send interval (SetConfig field 10), in whole minutes. The DTU stores only the
- * low byte and takes it unclamped on the local path (2WB `0x4080eea4`, 2T `0x40815aa8`); its own
- * cloud path clamps the same value to 5..15 (2WB `0x40811b6a`-`0x40811c36`, 2T
- * `0x4081541a`-`0x408154b4`). The adapter keeps to the manufacturer's range: 256 would be ignored,
+ * low byte and takes it unclamped on the local path (2WB `0x4080eea4`, 2T V01.01.01 `0x408164fe`);
+ * its own cloud path clamps the same value to 5..15 (2WB `0x40811b6a`-`0x40811c36`, 2T V01.01.01
+ * `0x40815e5a`-`0x40815ef4`). The adapter keeps to the manufacturer's range: 256 would be ignored,
  * 300 would become 44, and 60 or more leaves one upload per hour.
  */
 export const SERVER_SEND_TIME_MIN = 5;

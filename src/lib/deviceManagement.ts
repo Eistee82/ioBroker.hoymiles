@@ -1637,8 +1637,9 @@ const EMPTY_NETWORK_VALUES = new Set(["0.0.0.0", "00:00:00:00:00:00", "0.0.0.0.0
 /**
  * True if the device reports something worth showing for this field.
  *
- * A missing state is skipped, and so is one whose value is a placeholder for "not present". The
- * numeric 0 is kept — for a flag such as DHCP it is a real answer, not an absence.
+ * A missing state is skipped, and so is one whose value is a placeholder for "not present". A
+ * number is kept: the rows that use this hold addresses, and a numeric field the device never
+ * fills is not listed at all.
  *
  * @param adapter - Adapter surface used to read the state.
  * @param deviceId - Device id (state-tree prefix).
@@ -1743,7 +1744,8 @@ export async function buildDeviceDetails(
 				["subnetMask", "config.subnetMask"],
 				["gateway", "config.gateway"],
 				["dnsServer", "config.dnsServer"],
-				["dhcp", "config.netDhcpSwitch"],
+				// No DHCP row: the GetConfig builders never fill that field (2WB 0x4080e9b6, 2T V01.01.01
+				// 0x408160dc store nothing at offsets 0x70-0xb0), so its 0 would read as "DHCP off".
 			];
 			const present: Array<[string, string]> = [];
 			for (const [key, suffix] of network) {

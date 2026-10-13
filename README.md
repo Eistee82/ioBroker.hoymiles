@@ -149,6 +149,8 @@ Cloud stations create aggregated device nodes (e.g. `hoymiles.0.station-12345.*`
 ## Changelog
 ### **WORK IN PROGRESS**
 
+- (@Eistee82) **`dtu.stepTime` is in minutes.** It is the cloud upload interval — the same value as `config.serverSendTime` — and was labelled in seconds
+- (@Eistee82) **The device details no longer show "DHCP: 0".** The DTU never fills that field; the documentation now says which network fields HMS inverters always report empty or constant
 - (@Eistee82) **Bluetooth-only setups poll the cloud again.** With no TCP device the cloud relay setting (on by default) made the cloud poll wait for relay events that never come, so it never polled on its own. It now keeps its own timer, and a connected Bluetooth inverter no longer counts as "all devices offline"
 - (@Eistee82) **A configuration write starts from a fresh reading.** Writing `config.serverSendTime` now reads the configuration from the device right before, instead of using the last poll's copy, which could put a power limit sent in between back to its old value. The lock password and lock time are sent in the byte order the device stores them, so a write no longer scrambles them. The state is acknowledged only when the device reports the new value
 - (@Eistee82) **`config.serverSendTime` accepts whole minutes from 5 to 15** — the range the DTU's own cloud path allows. Larger values were cut to their low byte by the device (300 became 44)

@@ -846,8 +846,8 @@ describe("deviceManagement – buildDeviceDetails", function () {
 		assert.strictEqual(items.subnetMask, undefined);
 		assert.strictEqual(items.gateway, undefined);
 		assert.strictEqual(items.ipAddress, undefined, "an empty WiFi address must not be shown either");
-		// A numeric 0 is an answer, not an absence — DHCP off is a real state.
-		assert.ok(items.dhcp, "a numeric 0 must be kept");
+		// The DTU never fills the DHCP field; its 0 would read as "DHCP off".
+		assert.strictEqual(items.dhcp, undefined, "an unreported DHCP flag must not be shown");
 	});
 
 	it("shows the address the adapter is actually talking to", async function () {

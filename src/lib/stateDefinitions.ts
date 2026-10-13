@@ -612,7 +612,16 @@ const states: StateDefinition[] = [
 	// No source restriction: the command handler routes to the local TCP link when connected,
 	// otherwise reboots the DTU over the cloud (ECommandAction.DTU_REBOOT) for cloud-only devices.
 	b("dtu.reboot", "Reboot DTU", "DTU neustarten", "button", { write: true }),
-	n("dtu.stepTime", "Step time", "Schrittzeit", "value", "s", { source: "local" }),
+	// The same RAM byte GetConfig reports as server_send_time (2WB 0x73820 read at 0x4080f4f0 and
+	// 0x4080ea0e; 2T V01.01.01 gp-110092 at 0x40816dc4 and 0x40816132): the upload period in minutes.
+	n(
+		"dtu.stepTime",
+		"Cloud upload interval (same as config.serverSendTime)",
+		"Cloud-Upload-Intervall (gleich config.serverSendTime)",
+		"value",
+		"min",
+		{ source: "local" },
+	),
 	n("dtu.accessModel", "Network access mode", "Netzwerk-Zugangsart", "value", "", {
 		states: { 0: "GPRS", 1: "WiFi", 2: "Ethernet" },
 		source: "local",

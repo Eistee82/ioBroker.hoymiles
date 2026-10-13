@@ -599,11 +599,12 @@ class ProtobufHandler {
 	 * Two fields do not come back the way they were read, so they are converted before they are
 	 * carried over (same on 2WB and 2T):
 	 * - `lock_password` (field 3): GetConfig reads the four bytes big-endian (2WB `0x40807d56`, 2T
-	 *   `0x408156d0`), SetConfig stores the word little-endian (2WB `0x4080ee84`, 2T `0x40815a86`).
+	 *   V01.01.01 `0x40816114` via `0x40811e0a`), SetConfig stores the word little-endian (2WB
+	 *   `0x4080ee84`, 2T `0x408164dc`).
 	 *   Sent unchanged, every write would turn it byte by byte — so it is sent byte-swapped.
 	 * - `lock_time` (field 4): GetConfig reads four bytes big-endian (2WB from `0x72048`, 2T
-	 *   `0x408156da`), SetConfig stores only the low 16 bits little-endian into the first two
-	 *   (2WB `0x4080ee88`, 2T `0x40815a8c`). Sending the first two bytes as that 16-bit word puts
+	 *   `0x4081611e`), SetConfig stores only the low 16 bits little-endian into the first two
+	 *   (2WB `0x4080ee88`, 2T `0x408164e2`). Sending the first two bytes as that 16-bit word puts
 	 *   them back as they were; the other two — on the 2WB the last one (`0x7204b`) is written by
 	 *   the power-limit command — are not touched by the write.
 	 *

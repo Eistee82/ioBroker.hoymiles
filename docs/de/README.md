@@ -171,9 +171,9 @@ Der Adapter ist in den ioBroker-**Konfig-Manager** eingebunden: Jeder Wechselric
 - **Live-Werte direkt auf der Kachel:** aktuelle Leistung (W), Tagesenergie (kWh), die Leistung jedes tatsächlich vorhandenen PV-Strangs (eine Zeile pro Strang) und die Wechselrichter-Temperatur — alles automatisch aktualisiert. Stationen zeigen die aggregierte Leistung, die **PV-Auslastung in Prozent**, Tages-, Jahres- und Gesamtenergie sowie Tages- und Gesamtertrag in der Währung der Anlage (die Ertragszeilen erscheinen nur, wenn in der Cloud ein Strompreis hinterlegt ist).
 - Ein **Geräte-Icon** je Typ — flacher Mikro-Wechselrichter, hochkant dreiphasiger Wechselrichter (HMT-Reihe) oder Anlage/Station. Dieselben Icons werden auch für die Geräte-Objekte im Objektbaum verwendet.
 - Ein **Firmware-Update-Hinweis**, wenn die Cloud eines meldet (aus `dtu.fwUpdateAvailable`).
-- Der **„Mehr"**-Knopf öffnet eine schreibgeschützte Detailansicht, gegliedert in **Wechselrichter** (Modell, Seriennummer, Hardware-/Software-Version), **DTU / Firmware** (Seriennummer, Firmware-Stände, WLAN-Version, Update-Hinweis), **Netzwerk** (verbundene Adresse, Signalqualität, SSID, IP- und MAC-Adressen, DNS, DHCP) und **Cloud-Server** (Domain, Port). Die Netzwerk- und Server-Abschnitte erscheinen nur bei lokal verbundenen Geräten, weil diese Werte ausschließlich über die lokale Verbindung kommen.
+- Der **„Mehr"**-Knopf öffnet eine schreibgeschützte Detailansicht, gegliedert in **Wechselrichter** (Modell, Seriennummer, Hardware-/Software-Version), **DTU / Firmware** (Seriennummer, Firmware-Stände, WLAN-Version, Update-Hinweis), **Netzwerk** (verbundene Adresse, Signalqualität, SSID, IP- und MAC-Adressen, DNS) und **Cloud-Server** (Domain, Port). Die Netzwerk- und Server-Abschnitte erscheinen nur bei lokal verbundenen Geräten, weil diese Werte ausschließlich über die lokale Verbindung kommen.
 
-> **Warum dort nicht alle Netzwerkfelder auftauchen:** Die Konfigurationsnachricht der DTU ist für die **gesamte Hoymiles-DTU-Familie** gedacht und enthält neben den WLAN-Feldern auch einen Satz für **Kabel-Netzwerk** (IP, MAC, Subnetzmaske, Gateway, Kabel-DNS) sowie Felder für **Mobilfunk** (APN, GPRS) und Sub-1-GHz-Funk. Ein HMS-Wechselrichter hat nur WLAN — seine Kabel-Felder bleiben deshalb dauerhaft auf `0.0.0.0` bzw. `00:00:00:00:00:00`. Der Adapter blendet jedes Feld aus, für das das Gerät keinen echten Wert meldet; sonst stünde dort eine Adresse, die es gar nicht gibt. Ein numerischer Wert `0` bleibt sichtbar — bei einem Schalter wie DHCP ist das eine Aussage und keine Leerstelle. Stationen zeigen Leistung, Status und Standort.
+> **Warum dort nicht alle Netzwerkfelder auftauchen:** Die Konfigurationsnachricht der DTU ist für die **gesamte Hoymiles-DTU-Familie** gedacht und enthält neben den WLAN-Feldern auch einen Satz für **Kabel-Netzwerk** (IP, MAC, Subnetzmaske, Gateway, DHCP-Schalter) sowie Felder für **Mobilfunk** (APN, GPRS) und Sub-1-GHz-Funk. Die DTU füllt den Kabel-Satz nie (firmware-belegt für HMS-800-2WB und HMS-800W-2T), die Felder bleiben deshalb dauerhaft auf `0.0.0.0`, `00:00:00:00:00:00` bzw. `0`. Der Adapter blendet jedes Feld aus, für das das Gerät keinen echten Wert meldet — sonst stünde dort eine Adresse, die es gar nicht gibt — und zeigt keine DHCP-Zeile, weil ihre `0` wie „DHCP aus" aussähe. Stationen zeigen Leistung, Status und Standort.
 
 **Steuern und Einstellungen — getrennt nach Persistenz**
 
@@ -381,10 +381,10 @@ Die Anzahl ermittelt der Adapter in dieser Reihenfolge:
 | `dtu.reboot` | boolean | — | DTU neustarten (**schreibbar**). Wird über die lokale Verbindung (TCP oder Bluetooth) gesendet, falls verbunden, sonst über die Cloud für cloud-only-Geräte |
 | `dtu.wifiVersion` | string | — | WLAN-Version |
 | `dtu.fwUpdateAvailable` | boolean | — | Firmware-Update verfügbar (1x täglich via Cloud geprüft) |
-| `dtu.stepTime` | number | s | Schrittzeit |
-| `dtu.accessModel` | number | — | Netzwerk-Zugangsart (0=GPRS, 1=WiFi, 2=Ethernet) |
+| `dtu.stepTime` | number | min | Cloud-Upload-Intervall — derselbe Wert wie `config.serverSendTime` (die DTU liest für beide dasselbe RAM-Byte). Frühere Versionen zeigten die Einheit Sekunden, das war falsch |
+| `dtu.accessModel` | number | — | Netzwerk-Zugangsart (0=GPRS, 1=WiFi, 2=Ethernet). HMS-800-2WB und HMS-800W-2T melden immer 1 |
 | `dtu.communicationTime` | number | — | Letzte Kommunikation (Unix-Timestamp) |
-| `dtu.connState` | number | — | DTU Fehlercode (0=OK) |
+| `dtu.connState` | number | — | DTU Fehlercode (0=OK). HMS-800-2WB und HMS-800W-2T melden immer 0 — kein Statusanzeiger |
 
 ### `station-<id>.grid.*` — Stations-Aggregate (Cloud)
 
@@ -566,20 +566,20 @@ Gelesen beim Konfigurations-/Alarm-Poll. Über TCP fragt der Adapter mit dem War
 |------------|-----|---------|------------|--------------|
 | `config.serverDomain` | string | — | nein | Cloud-Server Domain |
 | `config.serverPort` | number | — | nein | Cloud-Server Port |
-| `config.serverSendTime` | number | min | **ja** | Cloud-Sendeintervall (ganze Minuten, **5 bis 15** — der Bereich, auf den der Cloud-Weg der DTU selbst begrenzt; das Gerät übernimmt nur das untere Byte, 256 würde also ignoriert und aus 300 würde 44). Der Datenpunkt wird erst bestätigt, wenn das Gerät den neuen Wert meldet; behält es den alten, steht das im Log. ⚠️ **Nicht persistent und ohne Flash-Schreibvorgang** (firmware-belegt): SetConfig Feld 10 landet nur im RAM (2T `gp-110188`, HMS-800-2WB `0x73820`); beim 2T schreibt der SetConfig-Weg Flash ausschließlich im WLAN-/AP-Passwort-Zweig, beim 2WB kann ein späteres Schreiben der Netz- oder Cloud-Einstellungen den Wert mitspeichern. Frühere Fassungen dieser Doku nannten es „Persistent (DTU-Flash)" — das war falsch. Nach einem Geräteneustart neu setzen |
+| `config.serverSendTime` | number | min | **ja** | Cloud-Sendeintervall (ganze Minuten, **5 bis 15** — der Bereich, auf den der Cloud-Weg der DTU selbst begrenzt; das Gerät übernimmt nur das untere Byte, 256 würde also ignoriert und aus 300 würde 44). Der Datenpunkt wird erst bestätigt, wenn das Gerät den neuen Wert meldet; behält es den alten, steht das im Log. ⚠️ **Nicht persistent und ohne Flash-Schreibvorgang** (firmware-belegt): SetConfig Feld 10 landet nur im RAM (2T V01.01.01 `gp-110092`, HMS-800-2WB `0x73820`); beim 2T schreibt der SetConfig-Weg Flash ausschließlich im WLAN-/AP-Passwort-Zweig, beim 2WB kann ein späteres Schreiben der Netz- oder Cloud-Einstellungen den Wert mitspeichern. Frühere Fassungen dieser Doku nannten es „Persistent (DTU-Flash)" — das war falsch. Nach einem Geräteneustart neu setzen |
 | `config.wifiSsid` | string | — | nein | WLAN SSID |
 | `config.wifiSignalQuality` | number | % | nein | WLAN-**Signalqualität 0–100**, trotz des Feldnamens **keine dBm**. Die Firmware rechnet sie aus dem rohen RSSI als `clamp(2*(95 - |rssi|), 0, 100)` und benennt beide Werte in ihrer eigenen Debug-Ausgabe `rssi` (roh) und `wifi_rssi` (dieser Wert). 46 entspricht etwa −72 dBm. Frühere Fassungen dieser Doku nannten es „echtes dBm, z. B. −65“ — das war falsch. Der rohe dBm-Wert liegt im Nachbarbyte und ist über keine vom Adapter genutzte Nachricht erreichbar. Dieselbe Größe führt das Gerät in der NetworkInfo-Nachricht als `csq` — dasselbe Byte, ein separater State wäre ein Duplikat |
 | `config.invType` | number | — | nein | Wechselrichter-Typ |
-| `config.netmodeSelect` | number | — | nein | Netzwerkmodus (0=GPRS, 1=WiFi, 2=Ethernet) |
-| `config.netDhcpSwitch` | number | — | nein | DHCP aktiviert |
+| `config.netmodeSelect` | number | — | nein | Netzwerkmodus (0=GPRS, 1=WiFi, 2=Ethernet). HMS-800-2WB und HMS-800W-2T melden immer 1 |
+| `config.netDhcpSwitch` | number | — | nein | DHCP-Schalter der Kabel-Schnittstelle. Von HMS-Wechselrichtern nie gefüllt (immer 0) — bedeutet nicht „DHCP aus" |
 | `config.wifiIpAddress` | string | — | nein | WLAN IP-Adresse |
 | `config.wifiMacAddress` | string | — | nein | WLAN MAC-Adresse |
 | `config.dtuApSsid` | string | — | nein | DTU Access-Point SSID |
-| `config.ipAddress` | string | — | nein | IP-Adresse (Ethernet/primäre Schnittstelle) |
-| `config.subnetMask` | string | — | nein | Subnetzmaske |
-| `config.gateway` | string | — | nein | Standard-Gateway |
-| `config.dnsServer` | string | — | nein | DNS-Server |
-| `config.macAddress` | string | — | nein | MAC-Adresse |
+| `config.ipAddress` | string | — | nein | IP-Adresse der Kabel-Schnittstelle. Von HMS-Wechselrichtern nie gefüllt (immer 0.0.0.0) |
+| `config.subnetMask` | string | — | nein | Subnetzmaske der Kabel-Schnittstelle. Von HMS-Wechselrichtern nie gefüllt (immer 0.0.0.0) |
+| `config.gateway` | string | — | nein | Standard-Gateway der Kabel-Schnittstelle. Von HMS-Wechselrichtern nie gefüllt (immer 0.0.0.0) |
+| `config.dnsServer` | string | — | nein | Standard-DNS-Server der DTU (typisch 1.1.1.1). Die DTU stellt ihn anstelle des DNS-Servers ein, den der Router vergibt |
+| `config.macAddress` | string | — | nein | MAC-Adresse der Kabel-Schnittstelle. Von HMS-Wechselrichtern nie gefüllt (immer 00:00:00:00:00:00) |
 | `config.meterKind` | string | — | nein | Konfigurierter Zählertyp. Leer bei Geräten ohne Zählereingang — der HMS-800W-2T hat keinen (firmware-belegt), dort ist ein leerer Wert die richtige Antwort |
 | `config.meterInterface` | string | — | nein | Schnittstelle, an der der Zähler hängt |
 | `config.zeroExportEnable` | number | — | nein | Nulleinspeisungs-Flag, wie von der DTU gemeldet |
