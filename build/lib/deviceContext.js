@@ -4,7 +4,7 @@ import CloudRelay from "./cloudRelay.js";
 import { formatDtuVersion, formatSwVersion, formatInvVersion, } from "./protobufHandler.js";
 import { executeCommand, executeCloudCommand, bookFlashWrite, flashWritingStateForAction, groupLastWriteMs, writesConfig, } from "./commandHandler.js";
 import Encryption from "./encryption.js";
-import { normalizeMeterMac, parseCommCmdAnswer, ACTION_SHELLY_BIND, encodeShellyBindBody, parseEnergyFlow, parseMeterDevices, SHELLY_DEV_TYPE_GRID, SHELLY_DEV_TYPE_METER_ONLY, } from "./shellyProtocol.js";
+import { normalizeMeterMac, parseCommCmdAnswer, ACTION_SHELLY_BIND, FIELD_METER_PRIMARY, encodeShellyBindBody, parseEnergyFlow, parseMeterDevices, SHELLY_DEV_TYPE_GRID, SHELLY_DEV_TYPE_METER_ONLY, } from "./shellyProtocol.js";
 const SHELLY_CMD_TAG = [0xa3, 0x18];
 const BIND_ANSWER_WINDOW_MS = 30000;
 const CLOUD_ACTION_LIMIT_POWER = 8;
@@ -1053,6 +1053,16 @@ class DeviceContext {
         }
         this.adapter.log.debug(`[${tag}] CommCmd answer: action ${answer.action}, error ${answer.errCode}`);
     }
+    async markMeterReadingsStale() {
+        const stale = [];
+        for (const [stateId, cached] of this.stateCache) {
+            if (DeviceContext.METER_READING_PATTERN.test(stateId)) {
+                stale.push([stateId, cached.val]);
+            }
+        }
+        await this.setStates(stale, true, DeviceContext.Q_DEVICE_DISCONNECTED);
+    }
+    static METER_READING_PATTERN = /^meter\.(gridPower|loadPower|frequency|l[123](Voltage|Current|Power))$/;
     async createShellyStates() {
         if (!this.deviceId) {
             return;
@@ -1070,9 +1080,9 @@ class DeviceContext {
         })));
     }
     async applyShellyData(payload) {
-        const devices = parseMeterDevices(payload);
+        const meter = parseMeterDevices(payload).find(d => d.field === FIELD_METER_PRIMARY);
         const flow = parseEnergyFlow(payload);
-        if (devices.length === 0 && !this.meterMeasurementStatesCreated) {
+        if (!meter && !this.meterMeasurementStatesCreated) {
             return;
         }
         if (!this.meterMeasurementStatesCreated) {
@@ -1081,21 +1091,26 @@ class DeviceContext {
         }
         const entries = [];
         if (flow) {
-            entries.push(["meter.gridPower", flow.grid], ["meter.pvPower", flow.pv], ["meter.loadPower", flow.load], ["meter.storagePower", flow.sp], ["meter.plugPower", flow.plug]);
+            entries.push(["meter.pvPower", flow.pv], ["meter.storagePower", flow.sp], ["meter.plugPower", flow.plug]);
+            if (meter) {
+                entries.push(["meter.gridPower", flow.grid], ["meter.loadPower", flow.load]);
+            }
         }
-        entries.push(["meter.connected", devices.length > 0]);
-        if (devices.length > 0) {
-            const meter = devices[0];
-            entries.push(["meter.lastData", Date.now()]);
-            if (meter.serial) {
-                entries.push(["meter.deviceId", meter.serial]);
-            }
-            if (meter.frequency > 0) {
-                entries.push(["meter.frequency", meter.frequency]);
-            }
-            for (const ph of meter.phases) {
-                entries.push([`meter.l${ph.phase}Voltage`, ph.voltage], [`meter.l${ph.phase}Current`, ph.current], [`meter.l${ph.phase}Power`, ph.activePower]);
-            }
+        entries.push(["meter.connected", meter !== undefined]);
+        if (!meter) {
+            await this.setStates(entries, true);
+            await this.markMeterReadingsStale();
+            return;
+        }
+        entries.push(["meter.lastData", Date.now()]);
+        if (meter.serial) {
+            entries.push(["meter.deviceId", meter.serial]);
+        }
+        if (meter.frequency > 0) {
+            entries.push(["meter.frequency", meter.frequency]);
+        }
+        for (const ph of meter.phases) {
+            entries.push([`meter.l${ph.phase}Voltage`, ph.voltage], [`meter.l${ph.phase}Current`, ph.current], [`meter.l${ph.phase}Power`, ph.activePower]);
         }
         await this.setStates(entries, true);
     }

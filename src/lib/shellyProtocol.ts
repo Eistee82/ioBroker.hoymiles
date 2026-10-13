@@ -11,10 +11,10 @@
  *    `uint64 dtu_daily_energy`, which is correct on the 2T — so the schema must not be changed.
  *    These parsers therefore read the wire format directly and leave the schema alone.
  *
- * Everything named here is firmware-proven. What is not proven is not named: the four values per
- * phase in fields 14/15 are `current`, `voltage`, `act_power` and `freq` (EM logger `0x4082c642`
- * ff., format `0x40919d90`), but their order is not decided, so {@link parseMeterDevices} hands
- * them out as a raw tuple.
+ * Field 13 (the energy flow) is sent on every local poll, with or without a meter. Field 14 carries
+ * the meter — at most one, a device of live type 4 that is online (local builder `0x4080b476`,
+ * `0x4080b942`-`0x4080b964`); field 15 carries the online Shelly plugs (type 1, `0x4080bc10`), not
+ * meters.
  */
 
 /** `Cmd_Shelly_Networking` — starts the meter poll. Handler `0x4081544c`, range check `slti #0x57`. */
@@ -36,7 +36,7 @@ export const SHELLY_DEV_TYPE_GRID = 2;
 
 /** Field numbers inside a `RealDataNew` response. */
 const FIELD_ENERGY_FLOW = 13;
-const FIELD_METER_PRIMARY = 14;
+export const FIELD_METER_PRIMARY = 14;
 const FIELD_METER_SECONDARY = 15;
 
 /** The DTU reports these power values in tenths of a watt (7940 = 794.0 W, live-verified). */

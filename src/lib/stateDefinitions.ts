@@ -61,9 +61,9 @@ const b = (id: string, en: string, de: string, role: string, extra?: Extra): Sta
  * The energy flow itself is firmware-proven (format string at `0x4080b6d8`, cross-checked by
  * `load = grid + plug - sp` at `0x4080b6b0`).
  *
- * `meter.mode` is the switch the user operates. Its numbers are the device types the firmware
- * itself checks for, so nothing has to be translated on the way down: 0 unbinds, 1 polls the meter
- * without regulating, 2 makes it the grid device the zero-export regulation works on.
+ * `meter.mode` is the switch the user operates: 0 sends nothing (the starting value), 1 binds the
+ * meter as device type 0 (polled, no regulation), 2 as device type 2 (the grid device the
+ * zero-export regulation works on).
  */
 export const meterControlStates: StateDefinition[] = [
 	// 0 is the "never bound" starting value, not a command: the device offers no safe way to undo a
@@ -118,8 +118,22 @@ export const meterMeasurementStates: StateDefinition[] = [
 		source: "local",
 	}),
 	n("meter.loadPower", "House load", "Hausverbrauch", "value.power", "W", { source: "local" }),
-	n("meter.storagePower", "Storage power", "Speicherleistung", "value.power", "W", { source: "local" }),
-	n("meter.plugPower", "Plug power", "Steckdosenleistung", "value.power", "W", { source: "local" }),
+	// sp: the sum over the online Shelly plugs (type 1, 0x4080b74a-0x4080b764); plug: the inverter's
+	// own AC power (read_be16 0x715d0 at 0x4080b6a6, the same source as its active power). The ids
+	// are kept for existing scripts.
+	n("meter.storagePower", "Shelly plugs power (sum)", "Leistung der Shelly-Steckdosen (Summe)", "value.power", "W", {
+		source: "local",
+	}),
+	n(
+		"meter.plugPower",
+		"Inverter AC power (meter view)",
+		"Wechselrichter-AC-Leistung (Zählersicht)",
+		"value.power",
+		"W",
+		{
+			source: "local",
+		},
+	),
 
 	// Per-phase readings from the meter itself (RealDataNew field 14). Scales measured against the
 	// meter's own API: voltage in tenths of a volt, current in hundredths of an ampere, power in

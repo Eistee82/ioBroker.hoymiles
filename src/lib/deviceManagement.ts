@@ -1339,12 +1339,17 @@ export async function buildDeviceActions(
 				// MAC first: the mode is what triggers the binding, so it has to find the address
 				// already in place.
 				const mac = String(result.mac ?? "").trim();
-				if (mac && mac !== String(macState?.val ?? "")) {
+				const macChanged = mac !== "" && mac !== String(macState?.val ?? "");
+				if (macChanged) {
 					await adapter.setStateAsync(`${deviceId}.meter.deviceId`, mac, false);
 				}
-				if (result.mode !== undefined && result.mode !== null) {
-					// Always written, even when unchanged: re-sending is how a poll that died gets
-					// restarted, and the device treats the command as idempotent.
+				// Every bind rewrites the binding list in the inverter's flash, so an unchanged dialog
+				// sends nothing.
+				if (
+					result.mode !== undefined &&
+					result.mode !== null &&
+					(macChanged || Number(result.mode) !== modeState?.val)
+				) {
 					await adapter.setStateAsync(`${deviceId}.meter.mode`, Number(result.mode), false);
 				}
 				return { refresh: "none" };

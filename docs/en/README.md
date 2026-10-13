@@ -134,7 +134,7 @@ inverter are offered for selection) and choose a mode:
 
 | Mode | Effect |
 | --- | --- |
-| **Off** | Nothing is sent; an existing connection is left as it is. |
+| **Off** | Not offered in the dialog. Setting `meter.mode` to `0` sends nothing — a bound meter stays bound. |
 | **Meter only** | The inverter reads the meter. Values appear under `<serial>.meter.*`, nothing is regulated. |
 | **Zero export** | The inverter additionally treats the meter as its grid meter and throttles its own output as soon as surplus would go to the grid. |
 
@@ -148,13 +148,18 @@ bound: the regulation never sets more than the limit.
 
 **Good to know**
 
-- `meter.gridPower` is the grid exchange: positive = import, negative = export. Alongside it are
-  `pvPower`, `loadPower`, `storagePower` and `plugPower` — the split is computed by the inverter.
+- `meter.gridPower` is the grid exchange: positive = import, negative = export. Alongside it the
+  inverter computes `pvPower`, `loadPower` (= grid + `plugPower` − `storagePower`), `plugPower` —
+  the inverter's own AC power — and `storagePower` — the sum of the bound Shelly plugs (its sign is
+  not established).
 - Per phase you get `meter.l1Voltage`/`l1Current`/`l1Power` (likewise for L2 and L3) plus
   `meter.frequency`. Power is signed: negative means that phase is currently exporting.
-- `meter.connected` shows whether the meter is currently delivering. If it reads `false`, the
-  connection to the meter has gone to sleep — just confirm the mode again in the dialog, which
-  restarts it.
+- `meter.connected` shows whether the inverter currently has live data from the meter. It drops a
+  meter 20 s after its last update and reconnects by itself. Meanwhile grid exchange, load and the
+  per-phase values keep their last value, marked as not current (`q = 0x42`).
+- Choosing the meter in the dialog again is not free: every binding rewrites the inverter's list of
+  meters in its flash memory and replaces any meter bound before. The dialog therefore only sends
+  when the meter or the mode changed.
 - Only the WB series can do this. The WiFi (T) models have neither a meter input nor a regulation
   for it, so the icon does not appear there.
 
@@ -673,16 +678,16 @@ series has neither a meter input nor a regulation for it, so these states never 
 
 | State | Type | Unit | Writable | Description |
 |-------|------|------|----------|-------------|
-| `meter.mode` | number | — | **yes** | Operating mode: `0` = unbound (starting value, not a command), `1` = meter only, `2` = grid meter for zero export |
+| `meter.mode` | number | — | **yes** | Operating mode: `0` = nothing sent (starting value, not a command — a bound meter stays bound), `1` = meter only, `2` = grid meter for zero export. Each `1`/`2` rewrites the inverter's binding list in flash |
 | `meter.deviceId` | string | — | **yes** | MAC of the meter to bind, bare hex or with separators. Once a meter is bound, the device overwrites it with the MAC it reports, as 12 hex digits including leading zeros |
 | `meter.detected` | string | — | no | Meters bound to the inverter, as MAC addresses (JSON list). This is the inverter's binding list, not a network search: it is empty before the first binding and was observed empty after a device restart |
-| `meter.connected` | boolean | — | no | Whether the meter is currently delivering data |
+| `meter.connected` | boolean | — | no | Whether the inverter currently has live data from the meter (dropped 20 s after its last update). Shelly plugs do not count |
 | `meter.lastData` | number | — | no | Timestamp of the last meter reading |
-| `meter.gridPower` | number | W | no | Grid exchange: positive = import, negative = export |
+| `meter.gridPower` | number | W | no | Grid exchange: positive = import, negative = export. Marked not current while the meter is not delivering |
 | `meter.pvPower` | number | W | no | PV share computed by the inverter |
-| `meter.loadPower` | number | W | no | House load computed by the inverter |
-| `meter.storagePower` | number | W | no | Battery share computed by the inverter |
-| `meter.plugPower` | number | W | no | Plug/aux share computed by the inverter |
+| `meter.loadPower` | number | W | no | House load computed by the inverter (grid + `plugPower` − `storagePower`). Marked not current while the meter is not delivering |
+| `meter.storagePower` | number | W | no | Sum of the bound Shelly plugs (the name is historical; sign not established) |
+| `meter.plugPower` | number | W | no | The inverter's own AC power, as the energy flow uses it (the name is historical) |
 | `meter.frequency` | number | Hz | no | Grid frequency at the meter |
 | `meter.l1Voltage` | number | V | no | Voltage L1 |
 | `meter.l1Current` | number | A | no | Current L1 |

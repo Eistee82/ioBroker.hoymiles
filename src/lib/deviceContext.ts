@@ -25,6 +25,7 @@ import {
 	normalizeMeterMac,
 	parseCommCmdAnswer,
 	ACTION_SHELLY_BIND,
+	FIELD_METER_PRIMARY,
 	encodeShellyBindBody,
 	parseEnergyFlow,
 	parseMeterDevices,
@@ -1762,8 +1763,9 @@ class DeviceContext {
 	 * {@link SHELLY_DEV_TYPE_GRID} the meter additionally becomes the grid device its energy
 	 * management regulates on, which is what makes zero export work without the adapter in the loop.
 	 *
-	 * The command is idempotent — re-sending it restarts a poll that has died, which the device is
-	 * known to do after a few minutes.
+	 * Not free to repeat: every bind replaces the whole binding list (`memset 0x71c40`,
+	 * `0x408154a2`) and writes it to flash without comparing (region 34 at `0x4080324e`, region 41
+	 * via `0x40802ce4`). So it is sent only when the user changes the meter or its role.
 	 *
 	 * @param mac - meter MAC (with or without separators)
 	 * @param devType - 0 = meter only, 2 = grid device
@@ -1810,6 +1812,25 @@ class DeviceContext {
 		this.adapter.log.debug(`[${tag}] CommCmd answer: action ${answer.action}, error ${answer.errCode}`);
 	}
 
+	/**
+	 * Flag the meter's own readings as not current, keeping their last values — the same rule as
+	 * for a lost link. Without the meter the inverter reports grid exchange and load as 0 W, which
+	 * would read as a measurement.
+	 */
+	private async markMeterReadingsStale(): Promise<void> {
+		const stale: Array<[string, ioBroker.StateValue]> = [];
+		for (const [stateId, cached] of this.stateCache) {
+			if (DeviceContext.METER_READING_PATTERN.test(stateId)) {
+				stale.push([stateId, cached.val]);
+			}
+		}
+		await this.setStates(stale, true, DeviceContext.Q_DEVICE_DISCONNECTED);
+	}
+
+	/** The meter's own readings — the ones that go stale when the meter drops out. */
+	private static readonly METER_READING_PATTERN =
+		/^meter\.(gridPower|loadPower|frequency|l[123](Voltage|Current|Power))$/;
+
 	/** Create the `shelly` channel and its states. Called once, on the first frame with a meter. */
 	private async createShellyStates(): Promise<void> {
 		if (!this.deviceId) {
@@ -1833,9 +1854,10 @@ class DeviceContext {
 	}
 
 	private async applyShellyData(payload: Buffer): Promise<void> {
-		const devices = parseMeterDevices(payload);
+		// Field 14 is the meter, field 15 the Shelly plugs — a plug alone is no meter.
+		const meter = parseMeterDevices(payload).find(d => d.field === FIELD_METER_PRIMARY);
 		const flow = parseEnergyFlow(payload);
-		if (devices.length === 0 && !this.meterMeasurementStatesCreated) {
+		if (!meter && !this.meterMeasurementStatesCreated) {
 			return; // no meter bound (yet) — nothing to show
 		}
 		if (!this.meterMeasurementStatesCreated) {
@@ -1845,35 +1867,36 @@ class DeviceContext {
 
 		const entries: Array<[string, ioBroker.StateValue]> = [];
 		if (flow) {
-			entries.push(
-				["meter.gridPower", flow.grid],
-				["meter.pvPower", flow.pv],
-				["meter.loadPower", flow.load],
-				["meter.storagePower", flow.sp],
-				["meter.plugPower", flow.plug],
-			);
+			// PV and the inverter's own AC power come from the inverter; the plug sum from the plugs.
+			// Grid exchange and load need the meter (13.2 only from an online type-4 device,
+			// 0x4080b72e-0x4080b744), so without one they are stale, not 0 W.
+			entries.push(["meter.pvPower", flow.pv], ["meter.storagePower", flow.sp], ["meter.plugPower", flow.plug]);
+			if (meter) {
+				entries.push(["meter.gridPower", flow.grid], ["meter.loadPower", flow.load]);
+			}
 		}
-		// "Connected" means the DTU's meter poll is alive. It dies silently after a few minutes,
-		// and then the device simply drops out of the frame — so presence in this frame is the
-		// only honest indicator.
-		entries.push(["meter.connected", devices.length > 0]);
-		if (devices.length > 0) {
-			const meter = devices[0];
-			entries.push(["meter.lastData", Date.now()]);
-			if (meter.serial) {
-				entries.push(["meter.deviceId", meter.serial]);
-			}
-			if (meter.frequency > 0) {
-				entries.push(["meter.frequency", meter.frequency]);
-			}
-			// The device labels its own phases, so use that number rather than the array position.
-			for (const ph of meter.phases) {
-				entries.push(
-					[`meter.l${ph.phase}Voltage`, ph.voltage],
-					[`meter.l${ph.phase}Current`, ph.current],
-					[`meter.l${ph.phase}Power`, ph.activePower],
-				);
-			}
+		// The meter is in the frame only while the inverter has live data from it: it is dropped
+		// 20 s after its last update (0x408304f8). Presence is the honest indicator.
+		entries.push(["meter.connected", meter !== undefined]);
+		if (!meter) {
+			await this.setStates(entries, true);
+			await this.markMeterReadingsStale();
+			return;
+		}
+		entries.push(["meter.lastData", Date.now()]);
+		if (meter.serial) {
+			entries.push(["meter.deviceId", meter.serial]);
+		}
+		if (meter.frequency > 0) {
+			entries.push(["meter.frequency", meter.frequency]);
+		}
+		// The device labels its own phases, so use that number rather than the array position.
+		for (const ph of meter.phases) {
+			entries.push(
+				[`meter.l${ph.phase}Voltage`, ph.voltage],
+				[`meter.l${ph.phase}Current`, ph.current],
+				[`meter.l${ph.phase}Power`, ph.activePower],
+			);
 		}
 		await this.setStates(entries, true);
 	}

@@ -149,6 +149,9 @@ Cloud stations create aggregated device nodes (e.g. `hoymiles.0.station-12345.*`
 ## Changelog
 ### **WORK IN PROGRESS**
 
+- (@Eistee82) **Meter values follow the meter, not the plugs.** `meter.connected`, the per-phase values and the frequency now come only from the meter record (RealData field 14); a Shelly plug (field 15) alone no longer counts as a connected meter. While the meter delivers nothing, grid exchange, load and the phase values keep their last value marked as not current (q=0x42) instead of showing 0 W as a measurement
+- (@Eistee82) **`meter.plugPower` and `meter.storagePower` are named for what they carry:** the inverter's own AC power and the sum of the bound Shelly plugs
+- (@Eistee82) **The meter dialog only binds when something changed.** Every binding rewrites the inverter's meter list in flash; confirming an unchanged dialog no longer does
 - (@Eistee82) **The first meter can be bound from the meter dialog.** The dialog offered only a selection from `meter.detected`, which is the inverter's list of meters already bound — empty before the first binding — so it was a dead end. The MAC address is now free to type, with the bound meters as suggestions; `meter.detected` is renamed "Bound meters"
 - (@Eistee82) **A refused meter binding is reported.** When the inverter answers the bind command with error 6 (an update is running, or the Bluetooth session is not authorised), the log says so instead of the mode just looking set. `meter.deviceId` is stored as 12 hex digits whatever separators were typed
 - (@Eistee82) **`dtu.stepTime` is in minutes.** It is the cloud upload interval — the same value as `config.serverSendTime` — and was labelled in seconds

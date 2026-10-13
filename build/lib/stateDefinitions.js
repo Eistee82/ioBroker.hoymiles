@@ -55,8 +55,12 @@ export const meterMeasurementStates = [
         source: "local",
     }),
     n("meter.loadPower", "House load", "Hausverbrauch", "value.power", "W", { source: "local" }),
-    n("meter.storagePower", "Storage power", "Speicherleistung", "value.power", "W", { source: "local" }),
-    n("meter.plugPower", "Plug power", "Steckdosenleistung", "value.power", "W", { source: "local" }),
+    n("meter.storagePower", "Shelly plugs power (sum)", "Leistung der Shelly-Steckdosen (Summe)", "value.power", "W", {
+        source: "local",
+    }),
+    n("meter.plugPower", "Inverter AC power (meter view)", "Wechselrichter-AC-Leistung (Zählersicht)", "value.power", "W", {
+        source: "local",
+    }),
     n("meter.frequency", "Grid frequency", "Netzfrequenz", "value.frequency", "Hz", { source: "local" }),
     ...[1, 2, 3].flatMap(p => [
         n(`meter.l${p}Voltage`, `Voltage L${p}`, `Spannung L${p}`, "value.voltage", "V", { source: "local" }),

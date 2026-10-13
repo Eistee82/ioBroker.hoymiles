@@ -6467,6 +6467,65 @@ describe("deviceContext – Shelly meter", function () {
 		assert.strictEqual(adapter.writes.get("4161A031AB61.meter.deviceId"), "bc2411b807c0");
 	});
 
+	// Field 15 carries the online Shelly plugs (type 1, 0x4080bc10), not a meter.
+	const plug = fld(
+		15,
+		2,
+		msg(
+			Buffer.concat([
+				fld(1, 2, msg(Buffer.concat([vfld(1, 0x112233445566n), vfld(2, 1)]))),
+				fld(2, 2, msg(Buffer.concat([vfld(1, 1), vfld(2, 2300), vfld(3, 100), vfld(4, 230)]))),
+			]),
+		),
+	);
+
+	it("does not take a Shelly plug for a meter", async function () {
+		const adapter = makeTrackingAdapter();
+		const ctx = makeCtx(adapter, "ble");
+		await ctx.applyShellyData(Buffer.concat([flow, plug]));
+		assert.strictEqual(adapter.writes.size, 0, "a plug alone creates no meter branch");
+		await ctx.applyShellyData(Buffer.concat([flow, plug, meter]));
+		assert.strictEqual(
+			adapter.writes.get("4161A031AB61.meter.deviceId"),
+			"bc2411b807c0",
+			"the meter, not the plug",
+		);
+		assert.strictEqual(adapter.writes.get("4161A031AB61.meter.l1Voltage"), 230.1);
+	});
+
+	it("marks grid, load and phases as not current while the meter is missing", async function () {
+		const adapter = makeTrackingAdapter();
+		const raw = [];
+		const setStateAsync = adapter.setStateAsync;
+		adapter.setStateAsync = async (id, val) => {
+			raw.push({ id, val });
+			return setStateAsync(id, val);
+		};
+		const ctx = makeCtx(adapter, "ble");
+		await ctx.applyShellyData(Buffer.concat([flow, meter]));
+		raw.length = 0;
+		await ctx.applyShellyData(Buffer.concat([flow, plug]));
+		const stale = raw.filter(w => typeof w.val === "object" && w.val !== null && w.val.q === 0x42);
+		const staleIds = stale.map(w => w.id.replace("4161A031AB61.", "")).sort();
+		assert.deepStrictEqual(staleIds, [
+			"meter.gridPower",
+			"meter.l1Current",
+			"meter.l1Power",
+			"meter.l1Voltage",
+			"meter.loadPower",
+		]);
+		assert.strictEqual(
+			stale.find(w => w.id.endsWith("meter.gridPower")).val.val,
+			-500,
+			"the last measured value stays, not 0 W",
+		);
+		assert.strictEqual(adapter.writes.get("4161A031AB61.meter.connected"), false);
+		assert.ok(
+			!stale.some(w => /pvPower|plugPower|storagePower/.test(w.id)),
+			"what the inverter computes without the meter stays current",
+		);
+	});
+
 	it("keeps reporting once the meter has been seen, so a dying poll is visible", async function () {
 		const adapter = makeTrackingAdapter();
 		const ctx = makeCtx(adapter, "ble");

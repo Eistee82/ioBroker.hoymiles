@@ -1040,9 +1040,9 @@ describe("deviceManagement – energy meter", function () {
 		assert.strictEqual(mock.setCalls[1].ack, false);
 	});
 
-	it("re-sends an unchanged mode so a dead poll can be restarted", async function () {
-		// The device's meter poll dies after a few minutes; re-binding is the documented way back,
-		// and the command is idempotent.
+	// Every bind replaces the binding list and writes it to flash without comparing (2WB region 34
+	// at 0x4080324e); there is no "restart a dead poll" in it — the clients reconnect by themselves.
+	it("sends nothing when neither the meter nor the mode changed", async function () {
 		const mock = makeMock(
 			{ "BLE123.meter.deviceId": { val: "bc2411b807c0" }, "BLE123.meter.mode": { val: 2 } },
 			{ "hoymiles.0.BLE123.meter.mode": { common: {} } },
@@ -1050,9 +1050,20 @@ describe("deviceManagement – energy meter", function () {
 		const actions = await buildDeviceActions(mock, "BLE123", true);
 		const meter = actions.find(a => a.id === "shellyMeter");
 		await meter.handler("BLE123", { showForm: async () => ({ mac: "bc2411b807c0", mode: 2 }) });
-		assert.ok(
-			mock.setCalls.some(c => c.id === "BLE123.meter.mode"),
-			"mode must be written even when unchanged",
+		assert.deepStrictEqual(mock.setCalls, []);
+	});
+
+	it("binds again when only the meter changed", async function () {
+		const mock = makeMock(
+			{ "BLE123.meter.deviceId": { val: "bc2411b807c0" }, "BLE123.meter.mode": { val: 2 } },
+			{ "hoymiles.0.BLE123.meter.mode": { common: {} } },
+		);
+		const actions = await buildDeviceActions(mock, "BLE123", true);
+		const meter = actions.find(a => a.id === "shellyMeter");
+		await meter.handler("BLE123", { showForm: async () => ({ mac: "aabbccddeeff", mode: 2 }) });
+		assert.deepStrictEqual(
+			mock.setCalls.map(c => c.id),
+			["BLE123.meter.deviceId", "BLE123.meter.mode"],
 		);
 	});
 

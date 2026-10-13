@@ -975,10 +975,13 @@ export async function buildDeviceActions(adapter, deviceId, isLocal, model = "")
                     return { refresh: "none" };
                 }
                 const mac = String(result.mac ?? "").trim();
-                if (mac && mac !== String(macState?.val ?? "")) {
+                const macChanged = mac !== "" && mac !== String(macState?.val ?? "");
+                if (macChanged) {
                     await adapter.setStateAsync(`${deviceId}.meter.deviceId`, mac, false);
                 }
-                if (result.mode !== undefined && result.mode !== null) {
+                if (result.mode !== undefined &&
+                    result.mode !== null &&
+                    (macChanged || Number(result.mode) !== modeState?.val)) {
                     await adapter.setStateAsync(`${deviceId}.meter.mode`, Number(result.mode), false);
                 }
                 return { refresh: "none" };

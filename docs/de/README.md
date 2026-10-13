@@ -135,7 +135,7 @@ Wechselrichter gebundene Zähler stehen zur Auswahl) und die Betriebsart festleg
 
 | Betriebsart | Wirkung |
 | --- | --- |
-| **Aus** | Es wird nichts gesendet; eine bestehende Verbindung bleibt, wie sie ist. |
+| **Aus** | Im Dialog nicht angeboten. `meter.mode` auf `0` zu setzen sendet nichts — ein gebundener Zähler bleibt gebunden. |
 | **Nur Zähler** | Der Wechselrichter liest den Zähler aus. Die Werte erscheinen unter `<Seriennummer>.meter.*`, geregelt wird nichts. |
 | **Nulleinspeisung** | Zusätzlich behandelt der Wechselrichter den Zähler als Netzzähler und regelt seine Leistung selbst herunter, sobald Überschuss ins Netz ginge. |
 
@@ -149,15 +149,20 @@ nie mehr ein als das Limit.
 
 **Gut zu wissen**
 
-- `meter.gridPower` ist der Netzaustausch: positiv = Bezug, negativ = Einspeisung. Dazu kommen
-  `pvPower`, `loadPower`, `storagePower` und `plugPower` — die Aufteilung rechnet der Wechselrichter
-  selbst aus.
+- `meter.gridPower` ist der Netzaustausch: positiv = Bezug, negativ = Einspeisung. Daneben rechnet
+  der Wechselrichter `pvPower`, `loadPower` (= Netz + `plugPower` − `storagePower`), `plugPower` —
+  seine eigene AC-Leistung — und `storagePower` — die Summe der gebundenen Shelly-Steckdosen (deren
+  Vorzeichen ist nicht belegt).
 - Je Phase gibt es `meter.l1Voltage`/`l1Current`/`l1Power` (entsprechend für L2 und L3) sowie
   `meter.frequency`. Die Leistung ist vorzeichenbehaftet: negativ heißt, dass diese Phase gerade
   einspeist.
-- `meter.connected` zeigt, ob der Zähler gerade Daten liefert. Steht es auf `false`, ist die
-  Verbindung zum Zähler eingeschlafen — dann im Dialog die Betriebsart einfach erneut bestätigen,
-  das startet sie neu.
+- `meter.connected` zeigt, ob der Wechselrichter gerade aktuelle Daten vom Zähler hat. Er nimmt
+  einen Zähler 20 s nach dessen letzter Meldung heraus und verbindet sich selbst neu. So lange
+  behalten Netzaustausch, Verbrauch und die Phasenwerte ihren letzten Wert, markiert als nicht
+  aktuell (`q = 0x42`).
+- Den Zähler im Dialog erneut zu wählen ist nicht kostenlos: Jedes Binden schreibt die Zählerliste
+  des Wechselrichters neu in seinen Flash-Speicher und ersetzt einen vorher gebundenen Zähler. Der
+  Dialog sendet deshalb nur, wenn sich Zähler oder Betriebsart geändert haben.
 - Nur die WB-Serie kann das. Die WiFi-Modelle (T-Serie) haben weder einen Zählereingang noch eine
   Regelung dafür; dort erscheint das Symbol gar nicht.
 
@@ -679,16 +684,16 @@ Datenpunkte nie.
 
 | Datenpunkt | Typ | Einheit | Schreibbar | Beschreibung |
 |------------|-----|---------|------------|--------------|
-| `meter.mode` | number | — | **ja** | Betriebsart: `0` = nicht gekoppelt (Startwert, kein Befehl), `1` = nur auslesen, `2` = Netzzähler für Nulleinspeisung |
+| `meter.mode` | number | — | **ja** | Betriebsart: `0` = nichts gesendet (Startwert, kein Befehl — ein gebundener Zähler bleibt gebunden), `1` = nur auslesen, `2` = Netzzähler für Nulleinspeisung. Jedes `1`/`2` schreibt die Bindungsliste des Wechselrichters neu in den Flash |
 | `meter.deviceId` | string | — | **ja** | MAC des zu koppelnden Zählers, reines Hex oder mit Trennzeichen. Ist ein Zähler gekoppelt, überschreibt das Gerät den Wert mit der gemeldeten MAC, 12 Hex-Ziffern einschließlich führender Nullen |
 | `meter.detected` | string | — | nein | An den Wechselrichter gebundene Zähler als MAC-Adressen (JSON-Liste). Das ist die Bindungsliste des Wechselrichters, keine Netzwerksuche: Vor dem ersten Binden ist sie leer, und nach einem Geräteneustart wurde sie leer beobachtet |
-| `meter.connected` | boolean | — | nein | Ob der Zähler gerade Daten liefert |
+| `meter.connected` | boolean | — | nein | Ob der Wechselrichter gerade aktuelle Daten vom Zähler hat (20 s nach der letzten Meldung herausgenommen). Shelly-Steckdosen zählen nicht |
 | `meter.lastData` | number | — | nein | Zeitstempel der letzten Zählermessung |
-| `meter.gridPower` | number | W | nein | Netzaustausch: positiv = Bezug, negativ = Einspeisung |
+| `meter.gridPower` | number | W | nein | Netzaustausch: positiv = Bezug, negativ = Einspeisung. Als nicht aktuell markiert, solange der Zähler nicht liefert |
 | `meter.pvPower` | number | W | nein | Vom Wechselrichter errechneter PV-Anteil |
-| `meter.loadPower` | number | W | nein | Vom Wechselrichter errechneter Hausverbrauch |
-| `meter.storagePower` | number | W | nein | Vom Wechselrichter errechneter Batterie-Anteil |
-| `meter.plugPower` | number | W | nein | Vom Wechselrichter errechneter Steckdosen-/Zusatz-Anteil |
+| `meter.loadPower` | number | W | nein | Vom Wechselrichter errechneter Hausverbrauch (Netz + `plugPower` − `storagePower`). Als nicht aktuell markiert, solange der Zähler nicht liefert |
+| `meter.storagePower` | number | W | nein | Summe der gebundenen Shelly-Steckdosen (der Name ist historisch; Vorzeichen nicht belegt) |
+| `meter.plugPower` | number | W | nein | Eigene AC-Leistung des Wechselrichters, wie der Energiefluss sie verwendet (der Name ist historisch) |
 | `meter.frequency` | number | Hz | nein | Netzfrequenz am Zähler |
 | `meter.l1Voltage` | number | V | nein | Spannung L1 |
 | `meter.l1Current` | number | A | nein | Strom L1 |
