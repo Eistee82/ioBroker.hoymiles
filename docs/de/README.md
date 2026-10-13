@@ -219,6 +219,11 @@ Der Adapter unterstützt verschiedene Verbindungsmodi je nach Konfiguration:
 | **Cloud (WR online)** | — | — | Alle 5min | Alle `serverSendTime` | 30s nach Relay-Send |
 | **Cloud (WR offline)** | — | — | Alle 5min | Nur Wetter + FW | Nur Wetter + FW |
 
+Die Relay-Spalten setzen mindestens ein TCP-Gerät voraus. Mit Bluetooth-Geräten (HMS-800-2WB)
+allein gibt es kein Relay; die Cloud wird dann mit eigenem Takt abgefragt, alle `serverSendTime`,
+unabhängig von der Relay-Einstellung. Ein verbundener Bluetooth-Wechselrichter zählt als lokale
+Verbindung: Solange einer verbunden ist, fällt die Cloud-Abfrage nicht in den Nachttakt.
+
 ### Automatischer Reconnect
 
 Der Wechselrichter (DTU) ist nur erreichbar wenn er Strom produziert (Sonne scheint). Der Adapter verbindet sich automatisch mit exponentiellem Backoff (1s, 2s, 4s, ... max 60s). Bei erfolgreicher Verbindung wird der Backoff auf 1s zurückgesetzt.

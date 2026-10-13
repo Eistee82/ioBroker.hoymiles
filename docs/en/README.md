@@ -216,6 +216,11 @@ The adapter supports several connection modes depending on the configuration:
 | **Cloud (WR online)** | — | — | Every 5min | Every `serverSendTime` | 30s after relay send |
 | **Cloud (WR offline)** | — | — | Every 5min | Weather + FW only | Weather + FW only |
 
+The relay columns need at least one TCP device. With Bluetooth devices (HMS-800-2WB) alone there is
+no relay, so the cloud is polled on its own timer, every `serverSendTime`, whatever the relay
+setting says. A connected Bluetooth inverter counts as a local link: while one is up, the cloud
+poll does not drop to its night pace.
+
 ### Automatic Reconnect
 
 The inverter (DTU) is only reachable when producing power (sun is shining). The adapter automatically reconnects with exponential backoff (1s, 2s, 4s, ... up to 60s max). When the connection succeeds, the backoff resets to 1s.
