@@ -69,6 +69,10 @@ const writeU16BE = (buf, off, val) => {
     buf[off] = (val >> 8) & 0xff;
     buf[off + 1] = val & 0xff;
 };
+function swapBytes32(value) {
+    const v = value >>> 0;
+    return ((v & 0xff) << 24) | ((v & 0xff00) << 8) | ((v >>> 8) & 0xff00) | (v >>> 24) | 0;
+}
 class ProtobufHandler {
     protos;
     seq;
@@ -266,13 +270,13 @@ class ProtobufHandler {
         return this.encodeCommandAction(ACTION.LIMIT_POWER_RUNTIME, timestamp, `S:1,P:${Math.round(watts * 10)}\r`);
     }
     encodeInverterOn(timestamp) {
-        return this.encodeCommandAction(ACTION.MI_START, timestamp, undefined, CMD.COMMAND_CLOUD);
+        return this.encodeCommandAction(ACTION.MI_START, timestamp);
     }
     encodeInverterOff(timestamp) {
-        return this.encodeCommandAction(ACTION.MI_SHUTDOWN, timestamp, undefined, CMD.COMMAND_CLOUD);
+        return this.encodeCommandAction(ACTION.MI_SHUTDOWN, timestamp);
     }
     encodeInverterReboot(timestamp) {
-        return this.encodeCommandAction(ACTION.INV_REBOOT, timestamp, undefined, CMD.COMMAND_CLOUD);
+        return this.encodeCommandAction(ACTION.INV_REBOOT, timestamp);
     }
     encodeSetConfig(timestamp, config, base) {
         const ResDTO = this.getType("SetConfig", "SetConfigResDTO");
@@ -290,6 +294,13 @@ class ProtobufHandler {
             if (value !== undefined && value !== null) {
                 carried[name] = value;
             }
+        }
+        if (typeof base.lockPassword === "number") {
+            carried.lockPassword = swapBytes32(base.lockPassword);
+        }
+        if (typeof base.lockTime === "number") {
+            const raw = base.lockTime >>> 0;
+            carried.lockTime = ((raw >>> 24) & 0xff) | (((raw >>> 16) & 0xff) << 8);
         }
         const msg = ResDTO.create({
             ...carried,
@@ -326,7 +337,7 @@ class ProtobufHandler {
         return this.buildMessage(CMD.HEARTBEAT[0], CMD.HEARTBEAT[1], payload);
     }
     encodeDtuReboot(timestamp) {
-        return this.encodeCommandAction(ACTION.DTU_REBOOT, timestamp, undefined, CMD.COMMAND_CLOUD);
+        return this.encodeCommandAction(ACTION.DTU_REBOOT, timestamp);
     }
     encodePerformanceDataMode(timestamp) {
         return this.encodeCommandAction(ACTION.PERFORMANCE_DATA_MODE, timestamp);
@@ -334,8 +345,8 @@ class ProtobufHandler {
     encodePowerFactorLimit(value, timestamp) {
         return this.encodeCommandAction(ACTION.POWER_FACTOR_LIMIT, timestamp, `A:${Math.round(value * 1000)},B:0,C:0\r`);
     }
-    encodeReactivePowerLimit(degrees, timestamp) {
-        return this.encodeCommandAction(ACTION.REACTIVE_POWER_LIMIT, timestamp, `A:${Math.round(degrees * 10)},B:0,C:0\r`);
+    encodeReactivePowerLimit(percent, timestamp) {
+        return this.encodeCommandAction(ACTION.REACTIVE_POWER_LIMIT, timestamp, `A:${Math.round(percent * 10)},B:0,C:0\r`);
     }
     encodeCleanWarnings(timestamp) {
         return this.encodeCommandAction(ACTION.CLEAN_WARN, timestamp);
@@ -344,10 +355,10 @@ class ProtobufHandler {
         return this.encodeCommandAction(ACTION.CLEAN_GROUNDING_FAULT, timestamp);
     }
     encodeLockInverter(timestamp) {
-        return this.encodeCommandAction(ACTION.LOCK, timestamp, undefined, CMD.COMMAND_CLOUD);
+        return this.encodeCommandAction(ACTION.LOCK, timestamp);
     }
     encodeUnlockInverter(timestamp) {
-        return this.encodeCommandAction(ACTION.UNLOCK, timestamp, undefined, CMD.COMMAND_CLOUD);
+        return this.encodeCommandAction(ACTION.UNLOCK, timestamp);
     }
     encodeDevConfigFetch(timestamp, dtuSn, devSn, currentPackage = 0) {
         const ResDTO = this.getType("DevConfig", "DevConfigFetchResDTO");
@@ -553,6 +564,19 @@ class ProtobufHandler {
             dnsServer: dns,
             lockTime: num(obj.lockTime),
         };
+    }
+    isWarnListLayout(payload) {
+        const reader = protobuf.Reader.create(payload);
+        while (reader.pos < reader.len) {
+            const key = reader.uint32();
+            const field = key >>> 3;
+            const wireType = key & 7;
+            if ((field === 3 && wireType === 0) || field === 4 || field === 5 || field === 6) {
+                return true;
+            }
+            reader.skipType(wireType);
+        }
+        return false;
     }
     decodeAlarmData(payload) {
         const obj = this.decodePayload("AlarmData", "WInfoReqDTO", payload);

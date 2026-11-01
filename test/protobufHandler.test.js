@@ -237,6 +237,18 @@ describe("protobufHandler", function () {
 			assert.strictEqual(obj.data, "A:250,B:0,C:0\r");
 		});
 
+		// A is per mille of a plain ratio (inverter: A / 1000, no angle function); the DTU stores it
+		// in cell A as a signed number.
+		it("encodeReactivePowerLimit sends negative setpoints and rounds to whole per mille", function () {
+			const ResDTO = handler.protos.CommandPB.lookupType("CommandResDTO");
+			const data = v =>
+				ResDTO.toObject(
+					ResDTO.decode(handler.parseResponse(handler.encodeReactivePowerLimit(v, 1700000000)).payload),
+				).data;
+			assert.strictEqual(data(-50), "A:-500,B:0,C:0\r");
+			assert.strictEqual(data(0.04), "A:0,B:0,C:0\r");
+		});
+
 		it("encodeCleanWarnings creates valid message with action 42", function () {
 			const msg = handler.encodeCleanWarnings(1700000000);
 			const parsed = handler.parseResponse(msg);
@@ -314,11 +326,11 @@ describe("protobufHandler", function () {
 	});
 
 	describe("encodeDtuReboot", function () {
-		it("creates valid message with correct command bytes", function () {
+		it("creates valid message with the local command tag 0xa305", function () {
 			const msg = handler.encodeDtuReboot(1700000000);
 			assert.ok(Buffer.isBuffer(msg));
 			assert.ok(msg.length > HEADER_SIZE);
-			assert.strictEqual(msg[2], 0x23);
+			assert.strictEqual(msg[2], 0xa3);
 			assert.strictEqual(msg[3], 0x05);
 		});
 
@@ -414,9 +426,9 @@ describe("protobufHandler – additional encoders", function () {
 		assert.strictEqual(obj.action, ACTION.READ_MI_HU_WARN);
 	});
 
-	it("encodeInverterOn creates valid message with MI_START via COMMAND_CLOUD", function () {
+	it("encodeInverterOn creates valid message with MI_START via the local tag 0xa305", function () {
 		const msg = handler.encodeInverterOn(1700000000);
-		assert.strictEqual(msg[2], 0x23); // COMMAND_CLOUD
+		assert.strictEqual(msg[2], 0xa3);
 		assert.strictEqual(msg[3], 0x05);
 		const parsed = handler.parseResponse(msg);
 		const ResDTO = handler.protos.CommandPB.lookupType("CommandResDTO");
@@ -424,22 +436,56 @@ describe("protobufHandler – additional encoders", function () {
 		assert.strictEqual(obj.action, ACTION.MI_START);
 	});
 
-	it("encodeInverterOff creates valid message with MI_SHUTDOWN via COMMAND_CLOUD", function () {
+	it("encodeInverterOff creates valid message with MI_SHUTDOWN via the local tag 0xa305", function () {
 		const msg = handler.encodeInverterOff(1700000000);
-		assert.strictEqual(msg[2], 0x23);
+		assert.strictEqual(msg[2], 0xa3);
 		const parsed = handler.parseResponse(msg);
 		const ResDTO = handler.protos.CommandPB.lookupType("CommandResDTO");
 		const obj = ResDTO.toObject(ResDTO.decode(parsed.payload), { longs: Number, defaults: true });
 		assert.strictEqual(obj.action, ACTION.MI_SHUTDOWN);
 	});
 
-	it("encodeInverterReboot creates valid message with INV_REBOOT via COMMAND_CLOUD", function () {
+	it("encodeInverterReboot creates valid message with INV_REBOOT via the local tag 0xa305", function () {
 		const msg = handler.encodeInverterReboot(1700000000);
-		assert.strictEqual(msg[2], 0x23);
+		assert.strictEqual(msg[2], 0xa3);
 		const parsed = handler.parseResponse(msg);
 		const ResDTO = handler.protos.CommandPB.lookupType("CommandResDTO");
 		const obj = ResDTO.toObject(ResDTO.decode(parsed.payload), { longs: Number, defaults: true });
 		assert.strictEqual(obj.action, ACTION.INV_REBOOT);
+	});
+
+	// Measured 2026-10-06: over BLE the 2WB ignores the cloud tag 0x2305, the 2T runs it but
+	// answers towards the cloud only. All six device commands must use the local tag.
+	it("sends on/off, both reboots and lock/unlock with the local command tag, never 0x2305", function () {
+		for (const name of [
+			"encodeInverterOn",
+			"encodeInverterOff",
+			"encodeInverterReboot",
+			"encodeDtuReboot",
+			"encodeLockInverter",
+			"encodeUnlockInverter",
+		]) {
+			const msg = handler[name](1700000000);
+			assert.strictEqual(msg.readUInt16BE(2), 0xa305, `${name} must use 0xa305`);
+		}
+	});
+
+	// Both 0xa204 layouts decode as each other without an error — the layout has to be read from the
+	// wire. Payloads: the 2T's answer to a304 recorded 2026-10-13, the 2WB's (3=1, 5=15) rebuilt from
+	// the recording, and an AlarmData with one entry.
+	it("tells the warn-list layout from AlarmData by its wire structure", function () {
+		const t2Answer = Buffer.from("0a0c34313433413031434544453410a1a8b9d6062801", "hex");
+		const wbAnswer = Buffer.from("0a0c34313631413033314142363110c1d6e7d40618012" + "80f", "hex");
+		assert.strictEqual(handler.isWarnListLayout(t2Answer), true, "2T a204 (warn_device=1)");
+		assert.strictEqual(handler.isWarnListLayout(wbAnswer), true, "2WB a204 (package_nub=1, warn_device=15)");
+		const AlarmDto = handler.protos.AlarmData.lookupType("WInfoReqDTO");
+		const alarm = Buffer.from(
+			AlarmDto.encode(
+				AlarmDto.create({ dtuSn: "4143A01CEDE4", time: 1700000000, mWInfo: [{ pvSn: 1, wcode: 121 }] }),
+			).finish(),
+		);
+		assert.strictEqual(handler.isWarnListLayout(alarm), false, "AlarmData with an entry");
+		assert.strictEqual(handler.isWarnListLayout(Buffer.alloc(0)), false, "empty payload");
 	});
 
 	it("encodeSetConfig creates valid message with SET_CONFIG command", function () {
@@ -1127,9 +1173,32 @@ describe("protobufHandler – encodeSetConfig full set", function () {
 		assert.strictEqual(msg.serverDomainName, "dataeu.hoymiles.com", "server must not fall back to the default");
 		assert.strictEqual(Number(msg.serverport), 10081, "port must not be cleared to 0");
 		assert.strictEqual(Number(msg.limitPowerMypower), 1000, "power limit must survive");
-		assert.strictEqual(Number(msg.lockPassword), 987654, "the lock password must not be erased");
-		assert.strictEqual(Number(msg.lockTime), 30);
+		assert.ok(Number(msg.lockPassword) !== 0, "the lock password must not be erased");
 		assert.strictEqual(msg.meterKind, "NONE");
+	});
+
+	// GetConfig reads lock_password and lock_time big-endian, SetConfig stores them little-endian
+	// (2WB 0x40807d56 / 0x4080ee84 / 0x4080ee88, 2T 0x408156d0 / 0x40815a86 / 0x40815a8c).
+	it("sends the lock password byte-swapped, so the device stores it as it was", function () {
+		const send = raw =>
+			Number(
+				decodeSet(handler.encodeSetConfig(1753900000, { serverSendTime: 10 }, { lockPassword: raw }))
+					.lockPassword,
+			);
+		assert.strictEqual(send(0x12345678) >>> 0, 0x78563412);
+		assert.strictEqual(send(0x000000ff) >>> 0, 0xff000000, "a result with bit 31 set fits the int32 field");
+		assert.strictEqual(send(-2) >>> 0, 0xfeffffff, "a negative reading is a 32-bit pattern too");
+		assert.strictEqual(send(0), 0);
+	});
+
+	it("sends the first two lock-time bytes as the 16-bit word the device stores", function () {
+		const send = raw =>
+			Number(decodeSet(handler.encodeSetConfig(1753900000, { serverSendTime: 10 }, { lockTime: raw })).lockTime);
+		// Live 2WB reading: 0x01000001 — bytes 01 00 at 0x72048/49, the rest untouched by the write.
+		assert.strictEqual(send(0x01000001), 0x0001);
+		assert.strictEqual(send(0x01000002), 0x0001);
+		assert.strictEqual(send(0x12345678), 0x3412);
+		assert.strictEqual(send(0), 0);
 	});
 
 	it("never sets app_page, which would unlock the WiFi credential branch", function () {

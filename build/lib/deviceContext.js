@@ -2,10 +2,11 @@ import DtuConnection from "./dtuConnection.js";
 import BleConnection from "./bleConnection.js";
 import CloudRelay from "./cloudRelay.js";
 import { formatDtuVersion, formatSwVersion, formatInvVersion, } from "./protobufHandler.js";
-import { executeCommand, executeCloudCommand, flashWritingStateForAction, } from "./commandHandler.js";
+import { executeCommand, executeCloudCommand, bookFlashWrite, flashWritingStateForAction, groupLastWriteMs, writesConfig, } from "./commandHandler.js";
 import Encryption from "./encryption.js";
-import { buildShellyBindData, encodeShellyBindBody, parseEnergyFlow, parseMeterDevices, SHELLY_DEV_TYPE_GRID, SHELLY_DEV_TYPE_METER_ONLY, } from "./shellyProtocol.js";
+import { normalizeMeterMac, parseCommCmdAnswer, ACTION_SHELLY_BIND, FIELD_METER_PRIMARY, encodeShellyBindBody, parseEnergyFlow, parseMeterDevices, SHELLY_DEV_TYPE_GRID, SHELLY_DEV_TYPE_METER_ONLY, } from "./shellyProtocol.js";
 const SHELLY_CMD_TAG = [0xa3, 0x18];
+const BIND_ANSWER_WINDOW_MS = 30000;
 const CLOUD_ACTION_LIMIT_POWER = 8;
 const CLOUD_ACTION_LIMIT_POWER_RUNTIME = 211;
 import { channels, states, meterMeasurementStates, meterControlStates, localTcpStates, hybridChannels, hybridStates, buildStateCommon, } from "./stateDefinitions.js";
@@ -13,7 +14,7 @@ import { getAlarmDescription } from "./alarmCodes.js";
 import { decodeGridProfile, byteSwap16 } from "./gridProfile.js";
 import EnergyGuard from "./energyGuard.js";
 import { cloudTagLabel, describeCloudTag, refusalReason } from "./cloudTranslator.js";
-import { INFO_FALLBACK_TIMEOUT_MS, SCALE_POWER_LIMIT_BLE, SCALE_POWER_LIMIT_TCP, CLOUD_DEV_TYPE_DTU, POWER_LIMIT_DEADBAND_DEFAULT, POWER_LIMIT_MIN_INTERVAL_SEC_DEFAULT, HIST_MAX_PAGES, HM_HEADER_SIZE, LOCAL_GCM_TAG_LEN, CLOUD_RELAY_TLS_PORT, } from "./constants.js";
+import { INFO_FALLBACK_TIMEOUT_MS, SCALE_POWER_LIMIT_BLE, SCALE_POWER_LIMIT_TCP, CLOUD_DEV_TYPE_DTU, POWER_LIMIT_DEADBAND_DEFAULT, POWER_LIMIT_MIN_INTERVAL_SEC_DEFAULT, HIST_MAX_PAGES, HM_HEADER_SIZE, LOCAL_GCM_TAG_LEN, CLOUD_RELAY_TLS_PORT, DTU_TIME_WINDOW_S, DTU_CLOCK_VALID_FROM, CONFIG_READ_TIMEOUT_MS, } from "./constants.js";
 import { whToKwh } from "./convert.js";
 import { anonymize, errorMessage, safeJsonStringify, unixSeconds } from "./utils.js";
 import { inverterIcon } from "./deviceIcons.js";
@@ -71,7 +72,12 @@ class DeviceContext {
     histPage;
     histSamples;
     histStart;
-    configSnapshot;
+    lastBindMs;
+    modeBeforeBind;
+    configWaiters;
+    configChain;
+    configWriteActive;
+    pollRun;
     cloudStationId;
     pollTimer;
     pvStatesCreated;
@@ -83,6 +89,8 @@ class DeviceContext {
     meterControlStatesCreated;
     lastPowerLimitKind;
     extraListsReported;
+    clockOffset;
+    clockSkewWarned;
     histStatesCreated;
     pollCount;
     slowPollEvery;
@@ -121,7 +129,12 @@ class DeviceContext {
         this.flashWrites = new Map();
         this.energyGuard = new EnergyGuard();
         this.warnedCloudFlashRate = false;
-        this.configSnapshot = null;
+        this.lastBindMs = 0;
+        this.modeBeforeBind = 0;
+        this.configWaiters = [];
+        this.configChain = Promise.resolve();
+        this.configWriteActive = false;
+        this.pollRun = null;
         this.histPage = 0;
         this.histSamples = [];
         this.histStart = 0;
@@ -151,6 +164,8 @@ class DeviceContext {
         this.meterControlStatesCreated = false;
         this.lastPowerLimitKind = null;
         this.extraListsReported = false;
+        this.clockOffset = 0;
+        this.clockSkewWarned = false;
         this.histStatesCreated = false;
         this.pollCount = 0;
         this.cloudServerDomain = "";
@@ -198,7 +213,7 @@ class DeviceContext {
                 return;
             }
             this.connection = new DtuConnection(this.host, 10081, () => {
-                const ts = unixSeconds();
+                const ts = this.deviceNow();
                 return this.wireFrame(this.protobuf.encodeHeartbeat(ts));
             }, this.adapter);
         }
@@ -210,22 +225,7 @@ class DeviceContext {
             errorRepeatCount = 0;
             this.onConnected().catch(err => this.adapter.log.warn(`[${this.host}] onConnected error: ${errorMessage(err)}`));
         });
-        this.connection.on("disconnected", () => {
-            this.adapter.log.warn(`[${this.host}] Disconnected from DTU`);
-            this.stopPollCycle();
-            if (this.cloudRelay && !this.cloudRelay.paused) {
-                this.adapter.log.info(`[${this.deviceId || this.host}] Pausing cloud relay (local connection lost)`);
-                this.cloudRelay.sendFinalAndPause();
-            }
-            if (this.deviceId) {
-                this.adapter
-                    .setStateAsync(`${this.deviceId}.info.connected`, false, true)
-                    .catch(err => this.adapter.log.warn(`[${this.host}] Failed to set connected state: ${errorMessage(err)}`));
-            }
-            this.markStatesDisconnected().catch(err => this.adapter.log.warn(`[${this.host}] markStatesDisconnected error: ${errorMessage(err)}`));
-            this.updateAdapterConnectionState().catch(err => this.adapter.log.warn(`[${this.host}] updateAdapterConnectionState error: ${errorMessage(err)}`));
-            this.adapter.onLocalDisconnected(this);
-        });
+        this.connection.on("disconnected", () => this.handleLinkDown());
         this.connection.on("message", (message) => {
             this.handleResponse(message);
         });
@@ -248,9 +248,9 @@ class DeviceContext {
         if (this.deviceId) {
             await this.adapter.setStateAsync(`${this.deviceId}.info.connected`, true, true);
         }
-        for (const [, cached] of this.stateCache) {
+        for (const [stateId, cached] of this.stateCache) {
             if (cached.q === DeviceContext.Q_DEVICE_DISCONNECTED) {
-                cached.q = 0;
+                this.stateCache.delete(stateId);
             }
         }
         await this.updateAdapterConnectionState();
@@ -260,7 +260,7 @@ class DeviceContext {
         }
         this.adapter.onLocalConnected(this);
         this.infoReceived = false;
-        const ts = unixSeconds();
+        const ts = this.deviceNow();
         this.connection?.send(this.wireFrame(this.protobuf.encodeInfoRequest(ts))).catch(e => {
             this.adapter.log.debug(`[${this.deviceId}] InfoRequest send failed: ${errorMessage(e)}`);
         });
@@ -491,7 +491,9 @@ class DeviceContext {
         this.slowPollQueue = [
             ts => this.protobuf.encodeGetConfigRequest(ts),
             ...(this.transport !== "ble" ? [(ts) => this.protobuf.encodeAlarmTrigger(ts)] : []),
-            ts => this.protobuf.encodeMiWarnRequest(ts),
+            this.transport === "ble"
+                ? (ts) => this.protobuf.encodeWarnDataRequest(ts, 0)
+                : (ts) => this.protobuf.encodeMiWarnRequest(ts),
             ts => {
                 this.histPage = 0;
                 return this.protobuf.encodeHistPowerRequest(ts, 0);
@@ -518,7 +520,7 @@ class DeviceContext {
         }
         this.gridChunks.clear();
         this.connection
-            .send(this.wireFrame(this.protobuf.encodeDevConfigFetch(unixSeconds(), this.dtuSerial, this.inverterSn)))
+            .send(this.wireFrame(this.protobuf.encodeDevConfigFetch(this.deviceNow(), this.dtuSerial, this.inverterSn)))
             .catch(e => {
             this.adapter.log.debug(`[${this.deviceId}] DevConfigFetch send failed: ${errorMessage(e)}`);
         });
@@ -604,14 +606,11 @@ class DeviceContext {
         if (!stateId) {
             return;
         }
-        let entry = this.flashWrites.get(stateId);
-        if (!entry) {
-            entry = { lastValue: null, lastWriteMs: 0, skipsLogged: 0 };
-            this.flashWrites.set(stateId, entry);
-        }
+        const lookup = (id) => this.flashWriteEntry(id);
+        const lastWriteMs = groupLastWriteMs(stateId, lookup);
         const now = Date.now();
-        const sinceMs = now - entry.lastWriteMs;
-        if (entry.lastWriteMs > 0 && this.flashGuard.minIntervalMs > 0 && sinceMs < this.flashGuard.minIntervalMs) {
+        const sinceMs = now - lastWriteMs;
+        if (lastWriteMs > 0 && this.flashGuard.minIntervalMs > 0 && sinceMs < this.flashGuard.minIntervalMs) {
             if (!this.warnedCloudFlashRate) {
                 this.warnedCloudFlashRate = true;
                 this.adapter.log.warn(`[${this.deviceId}] The cloud is sending power-limit commands faster than the configured ` +
@@ -620,9 +619,15 @@ class DeviceContext {
                     `but each one erases two flash sectors in the inverter.`);
             }
         }
-        entry.lastValue = null;
-        entry.lastWriteMs = now;
-        entry.skipsLogged = 0;
+        bookFlashWrite(stateId, null, now, lookup);
+    }
+    flashWriteEntry(stateId) {
+        let entry = this.flashWrites.get(stateId);
+        if (!entry) {
+            entry = { lastValue: null, lastWriteMs: 0, skipsLogged: 0 };
+            this.flashWrites.set(stateId, entry);
+        }
+        return entry;
     }
     handleCloudAck(cmd) {
         if (!this.protobuf) {
@@ -701,7 +706,9 @@ class DeviceContext {
         }
         if (this.pendingResponse) {
             this.adapter.clearTimeout(this.pendingResponse.timer);
+            const { abort } = this.pendingResponse;
             this.pendingResponse = null;
+            abort?.();
         }
         this.pollBusy = false;
     }
@@ -724,7 +731,7 @@ class DeviceContext {
                 }
                 settle(false);
             }, timeoutMs);
-            this.pendingResponse = { cmdKey, resolve: () => settle(true), timer };
+            this.pendingResponse = { cmdKey, resolve: () => settle(true), abort: () => settle(false), timer };
             conn.send(this.wireFrame(message)).catch(err => {
                 this.adapter.log.debug(`[${this.host}] sendAndWait send failed: ${errorMessage(err)}`);
                 if (this.pendingResponse?.cmdKey === cmdKey) {
@@ -737,37 +744,40 @@ class DeviceContext {
     }
     async pollTick() {
         const conn = this.connection;
-        if (!conn?.connected || !this.protobuf || this.pollBusy) {
+        if (!conn?.connected || !this.protobuf || this.pollBusy || this.configWriteActive) {
             return;
         }
         this.pollBusy = true;
+        const run = this.pollTickBody(conn);
+        this.pollRun = run;
         try {
-            const ts = unixSeconds();
-            await this.sendAndWait(conn, this.protobuf.encodeRealDataNewRequest(ts));
-            this.consecutivePollErrors = 0;
-            this.pollCount++;
-            if (this.pollCount >= this.slowPollEvery && conn.connected) {
-                this.pollCount = 0;
-                const cmdFactory = this.slowPollQueue[this.slowPollIndex];
-                if (cmdFactory) {
-                    await this.sendAndWait(conn, cmdFactory(ts));
-                }
-                this.slowPollIndex++;
-                if (this.slowPollIndex >= this.slowPollQueue.length) {
-                    this.slowPollIndex = 0;
-                    this.slowPollRotations++;
-                    if (this.slowPollRotations >= 6 && conn.connected) {
-                        this.slowPollRotations = 0;
-                        await this.sendAndWait(conn, this.protobuf.encodeInfoRequest(ts));
-                    }
-                }
-            }
-            if (this.deviceId) {
-                await this.adapter.setStateAsync(`${this.deviceId}.info.lastResponse`, Date.now(), true);
-            }
+            await run;
         }
         finally {
+            this.pollRun = null;
             this.pollBusy = false;
+        }
+    }
+    async pollTickBody(conn) {
+        const ts = this.deviceNow();
+        await this.sendAndWait(conn, this.protobuf.encodeRealDataNewRequest(ts));
+        this.consecutivePollErrors = 0;
+        this.pollCount++;
+        if (this.pollCount >= this.slowPollEvery && conn.connected) {
+            this.pollCount = 0;
+            const cmdFactory = this.slowPollQueue[this.slowPollIndex];
+            if (cmdFactory) {
+                await this.sendAndWait(conn, cmdFactory(ts));
+            }
+            this.slowPollIndex++;
+            if (this.slowPollIndex >= this.slowPollQueue.length) {
+                this.slowPollIndex = 0;
+                this.slowPollRotations++;
+                if (this.slowPollRotations >= 6 && conn.connected) {
+                    this.slowPollRotations = 0;
+                    await this.sendAndWait(conn, this.protobuf.encodeInfoRequest(ts));
+                }
+            }
         }
     }
     handleResponse(message) {
@@ -825,6 +835,9 @@ class DeviceContext {
                     break;
                 case 0xa210:
                     this.adapter.log.debug(`[${tag}] SetConfig response received`);
+                    break;
+                case 0xa218:
+                    this.handleCommCmdAnswer(decryptedPayload).catch(err => this.adapter.log.warn(`[${tag}] handleCommCmdAnswer error: ${errorMessage(err)}`));
                     break;
                 case 0xa205:
                 case 0x2305:
@@ -934,7 +947,7 @@ class DeviceContext {
             }
         }
     }
-    static DATA_STATE_PATTERN = /^(grid\.|pv\d+\.|inverter\.(temperature|active|warnCount|warnMessage|activePowerLimit|powerLimitWatt)|meter\.)/;
+    static DATA_STATE_PATTERN = /^(grid\.|pv\d+\.|inverter\.(temperature|active|warnCount|warnMessage|activePowerLimit|powerLimitWatt)|meter\.(?!(mode|deviceId|detected)$))/;
     async markStatesDisconnected() {
         if (!this.ready) {
             return;
@@ -976,9 +989,9 @@ class DeviceContext {
     }
     async handleShellyStateChange(stateId, state) {
         if (stateId === "meter.deviceId") {
-            const mac = String(state.val ?? "").trim();
+            let mac;
             try {
-                buildShellyBindData(mac, SHELLY_DEV_TYPE_METER_ONLY);
+                mac = normalizeMeterMac(String(state.val ?? ""));
             }
             catch (err) {
                 this.adapter.log.warn(`[${this.deviceId}] Meter MAC rejected: ${errorMessage(err)}`);
@@ -1000,9 +1013,11 @@ class DeviceContext {
             return;
         }
         const devType = mode === 2 ? SHELLY_DEV_TYPE_GRID : SHELLY_DEV_TYPE_METER_ONLY;
+        const before = this.deviceId ? await this.adapter.getStateAsync(`${this.deviceId}.meter.mode`) : null;
         try {
             const sent = await this.bindShellyMeter(mac, devType);
             if (sent) {
+                this.modeBeforeBind = before?.ack && typeof before.val === "number" ? before.val : 0;
                 await this.setState("meter.mode", mode, true);
             }
             else {
@@ -1020,12 +1035,43 @@ class DeviceContext {
         if (!this.connection?.connected || !this.protobuf) {
             throw new Error("Device is not connected.");
         }
-        const body = encodeShellyBindBody(mac, devType, unixSeconds());
+        const body = encodeShellyBindBody(mac, devType, this.deviceNow());
         const frame = this.protobuf.buildMessage(SHELLY_CMD_TAG[0], SHELLY_CMD_TAG[1], body);
         this.adapter.log.info(`[${this.deviceId || this.host}] Binding Shelly meter ${anonymize(mac)} as ` +
             `${devType === SHELLY_DEV_TYPE_GRID ? "grid device (zero export)" : "meter only"}`);
-        return this.connection.send(this.wireFrame(frame));
+        const sent = await this.connection.send(this.wireFrame(frame));
+        if (sent) {
+            this.lastBindMs = Date.now();
+        }
+        return sent;
     }
+    async handleCommCmdAnswer(payload) {
+        const answer = parseCommCmdAnswer(payload);
+        const tag = this.deviceId || this.host;
+        if (!answer) {
+            this.adapter.log.debug(`[${tag}] CommCmd answer without an action (${payload.length} bytes)`);
+            return;
+        }
+        const prompt = Date.now() - this.lastBindMs < BIND_ANSWER_WINDOW_MS;
+        if (answer.action === ACTION_SHELLY_BIND && answer.errCode === 6 && prompt) {
+            this.lastBindMs = 0;
+            await this.setState("meter.mode", this.modeBeforeBind, true);
+            this.adapter.log.warn(`[${tag}] The inverter refused the meter binding — an update is running or the ` +
+                `Bluetooth session is not authorised. Choose the meter mode again later.`);
+            return;
+        }
+        this.adapter.log.debug(`[${tag}] CommCmd answer: action ${answer.action}, error ${answer.errCode}`);
+    }
+    async markMeterReadingsStale() {
+        const stale = [];
+        for (const [stateId, cached] of this.stateCache) {
+            if (DeviceContext.METER_READING_PATTERN.test(stateId)) {
+                stale.push([stateId, cached.val]);
+            }
+        }
+        await this.setStates(stale, true, DeviceContext.Q_DEVICE_DISCONNECTED);
+    }
+    static METER_READING_PATTERN = /^meter\.(gridPower|loadPower|frequency|l[123](Voltage|Current|Power))$/;
     async createShellyStates() {
         if (!this.deviceId) {
             return;
@@ -1043,9 +1089,9 @@ class DeviceContext {
         })));
     }
     async applyShellyData(payload) {
-        const devices = parseMeterDevices(payload);
+        const meter = parseMeterDevices(payload).find(d => d.field === FIELD_METER_PRIMARY);
         const flow = parseEnergyFlow(payload);
-        if (devices.length === 0 && !this.meterMeasurementStatesCreated) {
+        if (!meter && !this.meterMeasurementStatesCreated) {
             return;
         }
         if (!this.meterMeasurementStatesCreated) {
@@ -1054,21 +1100,26 @@ class DeviceContext {
         }
         const entries = [];
         if (flow) {
-            entries.push(["meter.gridPower", flow.grid], ["meter.pvPower", flow.pv], ["meter.loadPower", flow.load], ["meter.storagePower", flow.sp], ["meter.plugPower", flow.plug]);
+            entries.push(["meter.pvPower", flow.pv], ["meter.storagePower", flow.sp], ["meter.plugPower", flow.plug]);
+            if (meter) {
+                entries.push(["meter.gridPower", flow.grid], ["meter.loadPower", flow.load]);
+            }
         }
-        entries.push(["meter.connected", devices.length > 0]);
-        if (devices.length > 0) {
-            const meter = devices[0];
-            entries.push(["meter.lastData", Date.now()]);
-            if (meter.serial) {
-                entries.push(["meter.deviceId", meter.serial]);
-            }
-            if (meter.frequency > 0) {
-                entries.push(["meter.frequency", meter.frequency]);
-            }
-            for (const ph of meter.phases) {
-                entries.push([`meter.l${ph.phase}Voltage`, ph.voltage], [`meter.l${ph.phase}Current`, ph.current], [`meter.l${ph.phase}Power`, ph.activePower]);
-            }
+        entries.push(["meter.connected", meter !== undefined]);
+        if (!meter) {
+            await this.setStates(entries, true);
+            await this.markMeterReadingsStale();
+            return;
+        }
+        entries.push(["meter.lastData", Date.now()]);
+        if (meter.serial) {
+            entries.push(["meter.deviceId", meter.serial]);
+        }
+        if (meter.frequency > 0) {
+            entries.push(["meter.frequency", meter.frequency]);
+        }
+        for (const ph of meter.phases) {
+            entries.push([`meter.l${ph.phase}Voltage`, ph.voltage], [`meter.l${ph.phase}Current`, ph.current], [`meter.l${ph.phase}Power`, ph.activePower]);
         }
         await this.setStates(entries, true);
     }
@@ -1078,7 +1129,7 @@ class DeviceContext {
             const pvDailyWh = data.pv.reduce((sum, pv) => sum + (pv.energyDaily || 0), 0);
             const dailyEnergyWh = data.dtuDailyEnergy > 0 ? data.dtuDailyEnergy : pvDailyWh;
             const entries = [
-                ["info.lastResponse", unixSeconds()],
+                ["info.lastResponse", Date.now()],
                 ["inverter.active", data.sgs.length > 0 && (data.dtuPower > 0 || sgsPower > 0)],
                 ["grid.dailyEnergy", whToKwh(dailyEnergyWh)],
             ];
@@ -1135,11 +1186,30 @@ class DeviceContext {
         }
         return kept;
     }
+    deviceNow() {
+        return unixSeconds() + this.clockOffset;
+    }
+    learnClock(dtuTime) {
+        if (!(dtuTime >= DTU_CLOCK_VALID_FROM)) {
+            return;
+        }
+        this.clockOffset = dtuTime - unixSeconds();
+        if (Math.abs(this.clockOffset) > DTU_TIME_WINDOW_S) {
+            if (!this.clockSkewWarned) {
+                this.clockSkewWarned = true;
+                this.adapter.log.warn(`[${this.deviceId || this.host}] The DTU clock is ${this.clockOffset} s off the host clock. The DTU ignores requests outside ±${DTU_TIME_WINDOW_S} s, so the adapter now stamps them on the DTU clock. Check the time on this host (NTP).`);
+            }
+        }
+        else {
+            this.clockSkewWarned = false;
+        }
+    }
     async handleInfoData(payload) {
         try {
             const info = this.protobuf.decodeInfoData(payload);
             const logLevel = this.deviceId ? "debug" : "info";
             this.adapter.log[logLevel](`[${this.host}] Device info: DTU SN=${info.dtuSn}, devices=${info.deviceNumber}, PVs=${info.pvNumber}`);
+            this.learnClock(info.timestamp);
             this.setupEncryption(info);
             if (!this.deviceId && info.dtuSn) {
                 const existing = this.adapter.devices.get(info.dtuSn);
@@ -1290,7 +1360,7 @@ class DeviceContext {
             }
             if (this.protobuf && this.connection?.connected && this.transport !== "ble") {
                 this.adapter.log.info(`[${this.host}] Enabling performance data mode`);
-                const ts = unixSeconds();
+                const ts = this.deviceNow();
                 void this.connection.send(this.wireFrame(this.protobuf.encodePerformanceDataMode(ts))).catch(e => {
                     this.adapter.log.debug(`[${this.deviceId}] PerformanceDataMode send failed: ${errorMessage(e)}`);
                 });
@@ -1298,14 +1368,86 @@ class DeviceContext {
             this.pollStartTimer = this.adapter.setTimeout(() => this.startPollCycle(), 1000);
         }
     }
+    handleLinkDown() {
+        this.adapter.log.warn(`[${this.host}] Disconnected from DTU`);
+        this.stopPollCycle();
+        this.settleConfigWaiters(null);
+        if (this.cloudRelay && !this.cloudRelay.paused) {
+            this.adapter.log.info(`[${this.deviceId || this.host}] Pausing cloud relay (local connection lost)`);
+            this.cloudRelay.sendFinalAndPause();
+        }
+        if (this.deviceId) {
+            this.adapter
+                .setStateAsync(`${this.deviceId}.info.connected`, false, true)
+                .catch(err => this.adapter.log.warn(`[${this.host}] Failed to set connected state: ${errorMessage(err)}`));
+        }
+        this.markStatesDisconnected().catch(err => this.adapter.log.warn(`[${this.host}] markStatesDisconnected error: ${errorMessage(err)}`));
+        this.updateAdapterConnectionState().catch(err => this.adapter.log.warn(`[${this.host}] updateAdapterConnectionState error: ${errorMessage(err)}`));
+        this.adapter.onLocalDisconnected(this);
+    }
+    readConfig() {
+        const conn = this.connection;
+        if (!conn?.connected) {
+            return Promise.resolve(null);
+        }
+        return new Promise(resolve => {
+            let timer = undefined;
+            const waiter = (config) => {
+                this.adapter.clearTimeout(timer);
+                resolve(config);
+            };
+            const giveUp = () => {
+                const index = this.configWaiters.indexOf(waiter);
+                if (index >= 0) {
+                    this.configWaiters.splice(index, 1);
+                    waiter(null);
+                }
+            };
+            this.configWaiters.push(waiter);
+            timer = this.adapter.setTimeout(giveUp, CONFIG_READ_TIMEOUT_MS);
+            conn.send(this.wireFrame(this.protobuf.encodeGetConfigRequest(this.deviceNow())))
+                .then(sent => {
+                if (sent === false) {
+                    giveUp();
+                }
+            })
+                .catch(err => {
+                this.adapter.log.debug(`[${this.host}] GetConfig send failed: ${errorMessage(err)}`);
+                giveUp();
+            });
+        });
+    }
+    exclusiveConfig(work) {
+        const run = this.configChain.then(async () => {
+            this.configWriteActive = true;
+            try {
+                await this.pollRun?.catch(() => undefined);
+                await work();
+            }
+            finally {
+                this.configWriteActive = false;
+            }
+        });
+        this.configChain = run.catch(() => undefined);
+        return run;
+    }
+    settleConfigWaiters(config) {
+        const waiters = this.configWaiters;
+        this.configWaiters = [];
+        for (const waiter of waiters) {
+            waiter(config);
+        }
+    }
     async handleConfigData(payload) {
         try {
+            let raw = null;
             try {
-                this.configSnapshot = this.protobuf.decodeGetConfigRaw(payload);
+                raw = this.protobuf.decodeGetConfigRaw(payload);
             }
             catch (err) {
-                this.adapter.log.debug(`[${this.deviceId || this.host}] could not keep a configuration snapshot: ${errorMessage(err)}`);
+                this.adapter.log.debug(`[${this.deviceId || this.host}] could not decode the raw configuration: ${errorMessage(err)}`);
             }
+            this.settleConfigWaiters(raw);
             const config = this.protobuf.decodeGetConfig(payload);
             this.adapter.log.debug(`[${this.deviceId || this.host}] Config: server=${config.serverDomain}:${config.serverPort}, sendTime=${config.serverSendTime}min`);
             await this.setStates([
@@ -1361,12 +1503,15 @@ class DeviceContext {
         };
     }
     async handleAlarmData(payload) {
-        try {
-            const data = this.protobuf.decodeAlarmData(payload);
-            await this.finalizeAlarms(data.alarms.map(DeviceContext.normalizeAlarm));
+        if (!this.protobuf.isWarnListLayout(payload)) {
+            try {
+                const data = this.protobuf.decodeAlarmData(payload);
+                await this.finalizeAlarms(data.alarms.map(DeviceContext.normalizeAlarm));
+            }
+            catch (err) {
+                this.adapter.log.warn(`[${this.deviceId || this.host}] Error decoding AlarmData: ${errorMessage(err)}`);
+            }
             return;
-        }
-        catch {
         }
         let data;
         try {
@@ -1391,7 +1536,7 @@ class DeviceContext {
         this.adapter.log.debug(`[${this.deviceId || this.host}] Warn list package ${now + 1}/${total} (${pageAlarms.length} entries)`);
         if (now + 1 < total) {
             this.connection
-                ?.send(this.wireFrame(this.protobuf.encodeWarnDataRequest(unixSeconds(), now + 1)))
+                ?.send(this.wireFrame(this.protobuf.encodeWarnDataRequest(this.deviceNow(), now + 1)))
                 .catch(e => this.adapter.log.debug(`[${this.deviceId || this.host}] warn next-pkg failed: ${errorMessage(e)}`));
             return;
         }
@@ -1496,7 +1641,7 @@ class DeviceContext {
             const pages = data.pageCount > 0 ? Math.min(data.pageCount, HIST_MAX_PAGES) : 1;
             if (data.powerArray.length > 0 && this.histPage + 1 < pages && this.connection?.connected) {
                 this.histPage++;
-                const next = this.protobuf.encodeHistPowerRequest(unixSeconds(), this.histPage);
+                const next = this.protobuf.encodeHistPowerRequest(this.deviceNow(), this.histPage);
                 void this.connection
                     .send(this.wireFrame(next))
                     .catch(err => this.adapter.log.debug(`[${this.deviceId}] HistPower page ${this.histPage} request failed: ${errorMessage(err)}`));
@@ -1531,7 +1676,7 @@ class DeviceContext {
             this.adapter.log.debug(`[${this.deviceId || this.host}] grid profile package ${pkg + 1}/${total} (${chunk.length} bytes)`);
             if (pkg + 1 < total) {
                 this.connection
-                    ?.send(this.wireFrame(this.protobuf.encodeDevConfigFetch(unixSeconds(), this.dtuSerial, this.inverterSn, pkg + 1)))
+                    ?.send(this.wireFrame(this.protobuf.encodeDevConfigFetch(this.deviceNow(), this.dtuSerial, this.inverterSn, pkg + 1)))
                     .catch(e => this.adapter.log.debug(`[${this.deviceId}] grid profile next-pkg failed: ${errorMessage(e)}`));
                 return;
             }
@@ -1625,28 +1770,23 @@ class DeviceContext {
         }
         if (this.connection?.connected) {
             const connection = this.connection;
-            await executeCommand(stateId, state, {
+            const run = () => executeCommand(stateId, state, {
                 connection: { send: frame => connection.send(this.wireFrame(frame)) },
+                now: () => this.deviceNow(),
                 protobuf: this.protobuf,
                 deviceId: this.deviceId,
                 host: this.host,
                 log: this.adapter.log,
                 setState: (id, val, ack) => this.setState(id, val, ack),
                 resetButton: id => this.scheduleButtonReset(id),
-                configSnapshot: this.configSnapshot,
+                readConfig: () => this.readConfig(),
                 flashGuard: this.flashGuard,
-                flashWriteState: id => {
-                    let entry = this.flashWrites.get(id);
-                    if (!entry) {
-                        entry = { lastValue: null, lastWriteMs: 0, skipsLogged: 0 };
-                        this.flashWrites.set(id, entry);
-                    }
-                    return entry;
-                },
+                flashWriteState: id => this.flashWriteEntry(id),
                 ...(this.transport === "tcp"
                     ? { expectReadback: (kind) => this.expectLimitEcho(kind) }
                     : {}),
             });
+            await (writesConfig(stateId) ? this.exclusiveConfig(run) : run());
             return;
         }
         if (this.enableCloud && this.dtuSerial) {
@@ -1706,7 +1846,7 @@ class DeviceContext {
         this.stateCache.clear();
         this.flashWrites.clear();
         this.energyGuard.clear();
-        this.configSnapshot = null;
+        this.settleConfigWaiters(null);
         this.histPage = 0;
         this.histSamples = [];
         if (this.connection) {

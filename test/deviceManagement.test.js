@@ -398,23 +398,46 @@ describe("deviceManagement – buildDeviceActions", function () {
 		assert.deepStrictEqual(mock.setCalls, [{ id: "SN1.inverter.reboot", val: true, ack: false }]);
 	});
 
-	it("settings action persists the values the form returns", async function () {
+	it("settings action persists the value the form returns", async function () {
 		const mock = makeMock();
 		const actions = await buildDeviceActions(mock, "SN1", true);
 		const settings = actions.find(a => a.id === "settings");
+		const context = { showForm: async () => ({ inverter_powerLimit: 80 }) };
+		await settings.handler("SN1", context);
+		assert.deepStrictEqual(mock.setCalls, [{ id: "SN1.inverter.powerLimit", val: 80, ack: false }]);
+	});
+
+	// The three share the DTU's cell A and one command slot: sent in a row, each overwrites the one
+	// before and the later ones can find the slot busy.
+	it("settings action sends nothing when more than one field changed", async function () {
+		const mock = makeMock({
+			"SN1.inverter.powerLimit": { val: 80, ack: true },
+			"SN1.inverter.powerFactorLimit": { val: 0.9, ack: true },
+			"SN1.inverter.reactivePowerLimit": { val: 10, ack: true },
+		});
+		const actions = await buildDeviceActions(mock, "SN1", true);
+		const messages = [];
 		const context = {
 			showForm: async () => ({
-				inverter_powerLimit: 80,
-				inverter_powerFactorLimit: 0.9,
+				inverter_powerLimit: 70,
+				inverter_powerFactorLimit: 0.95,
 				inverter_reactivePowerLimit: 10,
 			}),
+			showMessage: async text => messages.push(text),
 		};
-		await settings.handler("SN1", context);
-		assert.deepStrictEqual(mock.setCalls, [
-			{ id: "SN1.inverter.powerLimit", val: 80, ack: false },
-			{ id: "SN1.inverter.powerFactorLimit", val: 0.9, ack: false },
-			{ id: "SN1.inverter.reactivePowerLimit", val: 10, ack: false },
-		]);
+		await actions.find(a => a.id === "settings").handler("SN1", context);
+		assert.deepStrictEqual(mock.setCalls, []);
+		assert.strictEqual(messages.length, 1, "the user must be told why nothing happened");
+	});
+
+	it("settings action never sends an empty field as 0", async function () {
+		const mock = makeMock({ "SN1.inverter.powerLimit": { val: 80, ack: true } });
+		const actions = await buildDeviceActions(mock, "SN1", true);
+		const context = {
+			showForm: async () => ({ inverter_powerLimit: 80, inverter_reactivePowerLimit: "" }),
+		};
+		await actions.find(a => a.id === "settings").handler("SN1", context);
+		assert.deepStrictEqual(mock.setCalls, []);
 	});
 
 	it("settings action rewrites only the fields the user changed", async function () {
@@ -661,6 +684,7 @@ describe("deviceManagement – labels", function () {
 			"confirmRebootDtu",
 			"settings",
 			"settingsTitle",
+			"settingsOneAtATime",
 			"discover",
 			"testCloud",
 			"detailsHeader",
@@ -685,12 +709,12 @@ describe("deviceManagement – labels", function () {
 			"shellyMeterTitle",
 			"shellyMac",
 			"shellyMacHelp",
+			"shellyMacInvalid",
 			"shellyMode",
 			"shellyModeHelp",
 			"shellyModeOff",
 			"shellyModeMeter",
 			"shellyModeZeroExport",
-			"shellyNoneFound",
 		]) {
 			used.add(key);
 		}
@@ -822,8 +846,8 @@ describe("deviceManagement – buildDeviceDetails", function () {
 		assert.strictEqual(items.subnetMask, undefined);
 		assert.strictEqual(items.gateway, undefined);
 		assert.strictEqual(items.ipAddress, undefined, "an empty WiFi address must not be shown either");
-		// A numeric 0 is an answer, not an absence — DHCP off is a real state.
-		assert.ok(items.dhcp, "a numeric 0 must be kept");
+		// The DTU never fills the DHCP field; its 0 would read as "DHCP off".
+		assert.strictEqual(items.dhcp, undefined, "an unreported DHCP flag must not be shown");
 	});
 
 	it("shows the address the adapter is actually talking to", async function () {
@@ -1017,9 +1041,9 @@ describe("deviceManagement – energy meter", function () {
 		assert.strictEqual(mock.setCalls[1].ack, false);
 	});
 
-	it("re-sends an unchanged mode so a dead poll can be restarted", async function () {
-		// The device's meter poll dies after a few minutes; re-binding is the documented way back,
-		// and the command is idempotent.
+	// Every bind replaces the binding list and writes it to flash without comparing (2WB region 34
+	// at 0x4080324e); there is no "restart a dead poll" in it — the clients reconnect by themselves.
+	it("sends nothing when neither the meter nor the mode changed", async function () {
 		const mock = makeMock(
 			{ "BLE123.meter.deviceId": { val: "bc2411b807c0" }, "BLE123.meter.mode": { val: 2 } },
 			{ "hoymiles.0.BLE123.meter.mode": { common: {} } },
@@ -1027,9 +1051,44 @@ describe("deviceManagement – energy meter", function () {
 		const actions = await buildDeviceActions(mock, "BLE123", true);
 		const meter = actions.find(a => a.id === "shellyMeter");
 		await meter.handler("BLE123", { showForm: async () => ({ mac: "bc2411b807c0", mode: 2 }) });
-		assert.ok(
-			mock.setCalls.some(c => c.id === "BLE123.meter.mode"),
-			"mode must be written even when unchanged",
+		assert.deepStrictEqual(mock.setCalls, []);
+	});
+
+	it("does not take the bound meter typed with colons for a change", async function () {
+		const mock = makeMock(
+			{ "BLE123.meter.deviceId": { val: "bc2411b807c0" }, "BLE123.meter.mode": { val: 2 } },
+			{ "hoymiles.0.BLE123.meter.mode": { common: {} } },
+		);
+		const actions = await buildDeviceActions(mock, "BLE123", true);
+		const meter = actions.find(a => a.id === "shellyMeter");
+		await meter.handler("BLE123", { showForm: async () => ({ mac: "BC:24:11:B8:07:C0", mode: 2 }) });
+		assert.deepStrictEqual(mock.setCalls, []);
+	});
+
+	it("refuses an invalid MAC in the dialog and sends nothing", async function () {
+		const mock = makeMock({}, { "hoymiles.0.BLE123.meter.mode": { common: {} } });
+		const actions = await buildDeviceActions(mock, "BLE123", true);
+		const meter = actions.find(a => a.id === "shellyMeter");
+		const messages = [];
+		await meter.handler("BLE123", {
+			showForm: async () => ({ mac: "shellypro3em", mode: 2 }),
+			showMessage: async text => messages.push(text),
+		});
+		assert.deepStrictEqual(mock.setCalls, []);
+		assert.strictEqual(messages.length, 1);
+	});
+
+	it("binds again when only the meter changed", async function () {
+		const mock = makeMock(
+			{ "BLE123.meter.deviceId": { val: "bc2411b807c0" }, "BLE123.meter.mode": { val: 2 } },
+			{ "hoymiles.0.BLE123.meter.mode": { common: {} } },
+		);
+		const actions = await buildDeviceActions(mock, "BLE123", true);
+		const meter = actions.find(a => a.id === "shellyMeter");
+		await meter.handler("BLE123", { showForm: async () => ({ mac: "aabbccddeeff", mode: 2 }) });
+		assert.deepStrictEqual(
+			mock.setCalls.map(c => c.id),
+			["BLE123.meter.deviceId", "BLE123.meter.mode"],
 		);
 	});
 
@@ -1043,11 +1102,12 @@ describe("deviceManagement – energy meter", function () {
 });
 
 describe("deviceManagement – meter selection", function () {
-	// Nobody should have to look up a MAC address: the inverter reports the meters it knows in
-	// every info response (dtuInfo.shls), and those are offered for selection.
-	it("offers what the inverter found, as a readable dropdown", function () {
+	// dtuInfo.shls is the inverter's list of bound meters (2WB 0x4080f53a), not a network search:
+	// it is empty before the first binding, so the address must always be free to type.
+	it("offers the bound meters as readable suggestions", function () {
 		const schema = buildMeterSchema(["bc2411b807c0", "aabbccddeeff"]);
-		assert.strictEqual(schema.items.mac.type, "select", "must be a selection, not free text");
+		assert.strictEqual(schema.items.mac.type, "autocomplete");
+		assert.strictEqual(schema.items.mac.freeSolo, true, "a meter not bound yet must be enterable");
 		assert.deepStrictEqual(
 			schema.items.mac.options.map(o => o.label),
 			["BC:24:11:B8:07:C0", "AA:BB:CC:DD:EE:FF"],
@@ -1060,11 +1120,12 @@ describe("deviceManagement – meter selection", function () {
 		);
 	});
 
-	it("explains itself when the inverter found nothing", function () {
-		// An empty dropdown would be a dead end the user cannot act on.
+	it("lets the first meter be entered when nothing is bound yet", function () {
+		// A selection-only field here was a dead end: nothing to pick before the first binding.
 		const schema = buildMeterSchema([]);
-		assert.strictEqual(schema.items.mac.type, "staticText");
-		assert.ok(schema.items.mac.text.en.length > 0);
+		assert.strictEqual(schema.items.mac.type, "autocomplete");
+		assert.strictEqual(schema.items.mac.freeSolo, true);
+		assert.deepStrictEqual(schema.items.mac.options, []);
 	});
 
 	it("only offers the two modes that do something", function () {

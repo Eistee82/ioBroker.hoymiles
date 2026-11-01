@@ -13,6 +13,7 @@ import type {
 	ErrorResponse,
 } from "@iobroker/dm-utils";
 import { POWER_LIMIT_WATT_MAX, POWER_LIMIT_WATT_MIN } from "./constants.js";
+import { normalizeMeterMac } from "./shellyProtocol.js";
 import { MAX_PV_PORTS } from "./deviceContext.js";
 import { ACK_ICON, ACK_GROUND_ICON, inverterIcon, METER_ICON, STATION_ICON } from "./deviceIcons.js";
 import { states as DTU_STATES, stationStates as STATION_STATES } from "./stateDefinitions.js";
@@ -147,30 +148,30 @@ export const DM_I18N = {
 		"zh-cn": "电能表 MAC 地址",
 	},
 	shellyMacHelp: {
-		en: "The meter is identified by its MAC address, not by its name. The inverter must already have found it on the network.",
-		de: "Der Zähler wird über seine MAC-Adresse angesprochen, nicht über seinen Namen. Der Wechselrichter muss ihn im Netzwerk bereits gefunden haben.",
-		ru: "Счётчик определяется по MAC-адресу, а не по имени. Инвертор должен уже найти его в сети.",
-		pt: "O contador é identificado pelo endereço MAC, não pelo nome. O inversor já o deve ter encontrado na rede.",
-		nl: "De meter wordt via zijn MAC-adres aangesproken, niet via zijn naam. De omvormer moet hem al op het netwerk hebben gevonden.",
-		fr: "Le compteur est identifié par son adresse MAC, pas par son nom. L'onduleur doit déjà l'avoir trouvé sur le réseau.",
-		it: "Il contatore è identificato dall'indirizzo MAC, non dal nome. L'inverter deve averlo già trovato in rete.",
-		es: "El contador se identifica por su dirección MAC, no por su nombre. El inversor ya debe haberlo encontrado en la red.",
-		pl: "Licznik jest identyfikowany po adresie MAC, a nie po nazwie. Falownik musi go już znaleźć w sieci.",
-		uk: "Лічильник визначається за MAC-адресою, а не за іменем. Інвертор має вже знайти його в мережі.",
-		"zh-cn": "电能表通过 MAC 地址识别，而非名称。逆变器必须已在网络中找到它。",
+		en: "12 hex digits, e.g. from the Shelly app or your router (colons are fine). Meters already bound to the inverter are offered for selection.",
+		de: "12 Hex-Ziffern, z. B. aus der Shelly-App oder dem Router (Doppelpunkte sind erlaubt). Bereits an den Wechselrichter gebundene Zähler stehen zur Auswahl.",
+		ru: "12 шестнадцатеричных цифр, например из приложения Shelly или роутера (двоеточия допустимы). Счётчики, уже привязанные к инвертору, предлагаются для выбора.",
+		pt: "12 dígitos hexadecimais, por ex. da app Shelly ou do router (dois-pontos são permitidos). Os contadores já associados ao inversor são propostos para seleção.",
+		nl: "12 hexadecimale cijfers, bijv. uit de Shelly-app of de router (dubbele punten mogen). Meters die al aan de omvormer gekoppeld zijn, worden ter keuze aangeboden.",
+		fr: "12 chiffres hexadécimaux, par ex. depuis l'app Shelly ou le routeur (les deux-points sont acceptés). Les compteurs déjà associés à l'onduleur sont proposés.",
+		it: "12 cifre esadecimali, ad es. dall'app Shelly o dal router (i due punti sono ammessi). I contatori già associati all'inverter sono proposti per la selezione.",
+		es: "12 dígitos hexadecimales, p. ej. de la app de Shelly o del router (se admiten dos puntos). Los contadores ya vinculados al inversor se ofrecen para elegir.",
+		pl: "12 cyfr szesnastkowych, np. z aplikacji Shelly lub routera (dwukropki są dozwolone). Liczniki już powiązane z falownikiem są proponowane do wyboru.",
+		uk: "12 шістнадцяткових цифр, наприклад із застосунку Shelly або роутера (двокрапки допустимі). Лічильники, вже прив'язані до інвертора, пропонуються для вибору.",
+		"zh-cn": "12 位十六进制数字，例如来自 Shelly 应用或路由器（可带冒号）。已绑定到逆变器的电能表可直接选择。",
 	},
-	shellyNoneFound: {
-		en: "The inverter has not found a meter yet. Make sure the meter is on the same network and announces itself, then try again in a few minutes.",
-		de: "Der Wechselrichter hat noch keinen Zähler gefunden. Stelle sicher, dass der Zähler im selben Netzwerk ist und sich ankündigt, und versuche es in ein paar Minuten erneut.",
-		ru: "Инвертор ещё не нашёл счётчик. Убедитесь, что счётчик в той же сети и объявляет себя, и повторите через несколько минут.",
-		pt: "O inversor ainda não encontrou nenhum contador. Verifique se o contador está na mesma rede e se se anuncia, e tente novamente dentro de alguns minutos.",
-		nl: "De omvormer heeft nog geen meter gevonden. Zorg dat de meter in hetzelfde netwerk zit en zichzelf aankondigt, en probeer het over een paar minuten opnieuw.",
-		fr: "L'onduleur n'a pas encore trouvé de compteur. Vérifiez que le compteur est sur le même réseau et qu'il s'annonce, puis réessayez dans quelques minutes.",
-		it: "L'inverter non ha ancora trovato alcun contatore. Verifica che il contatore sia sulla stessa rete e che si annunci, poi riprova tra qualche minuto.",
-		es: "El inversor aún no ha encontrado ningún contador. Comprueba que el contador esté en la misma red y que se anuncie, e inténtalo de nuevo en unos minutos.",
-		pl: "Falownik nie znalazł jeszcze licznika. Upewnij się, że licznik jest w tej samej sieci i się rozgłasza, i spróbuj ponownie za kilka minut.",
-		uk: "Інвертор ще не знайшов лічильник. Переконайтеся, що лічильник у тій самій мережі та оголошує себе, і спробуйте за кілька хвилин.",
-		"zh-cn": "逆变器尚未找到电能表。请确认电能表在同一网络中并已广播，几分钟后再试。",
+	shellyMacInvalid: {
+		en: "That is not a MAC address. Enter 12 hex digits, with or without colons — nothing was sent.",
+		de: "Das ist keine MAC-Adresse. Bitte 12 Hex-Ziffern eingeben, mit oder ohne Doppelpunkte — es wurde nichts gesendet.",
+		ru: "Это не MAC-адрес. Введите 12 шестнадцатеричных цифр, с двоеточиями или без, — ничего не отправлено.",
+		pt: "Isto não é um endereço MAC. Introduza 12 dígitos hexadecimais, com ou sem dois-pontos — nada foi enviado.",
+		nl: "Dat is geen MAC-adres. Voer 12 hexadecimale cijfers in, met of zonder dubbele punten — er is niets verzonden.",
+		fr: "Ce n'est pas une adresse MAC. Saisissez 12 chiffres hexadécimaux, avec ou sans deux-points — rien n'a été envoyé.",
+		it: "Questo non è un indirizzo MAC. Inserisci 12 cifre esadecimali, con o senza due punti — non è stato inviato nulla.",
+		es: "Eso no es una dirección MAC. Introduce 12 dígitos hexadecimales, con o sin dos puntos; no se ha enviado nada.",
+		pl: "To nie jest adres MAC. Wpisz 12 cyfr szesnastkowych, z dwukropkami lub bez — nic nie zostało wysłane.",
+		uk: "Це не MAC-адреса. Введіть 12 шістнадцяткових цифр, із двокрапками чи без, — нічого не надіслано.",
+		"zh-cn": "这不是 MAC 地址。请输入 12 位十六进制数字（可带或不带冒号）——未发送任何内容。",
 	},
 	shellyMode: {
 		en: "Mode",
@@ -303,17 +304,31 @@ export const DM_I18N = {
 		"zh-cn": "功率因数限制",
 	},
 	reactivePowerLimit: {
-		en: "Reactive power limit",
-		de: "Blindleistungs-Limit",
-		ru: "Ограничение реактивной мощности",
-		pt: "Limite de potência reativa",
-		nl: "Blindvermogenlimiet",
-		fr: "Limite de puissance réactive",
-		it: "Limite di potenza reattiva",
-		es: "Límite de potencia reactiva",
-		pl: "Limit mocy biernej",
-		uk: "Обмеження реактивної потужності",
-		"zh-cn": "无功功率限制",
+		en: "Reactive power setpoint",
+		de: "Blindleistungs-Sollwert",
+		ru: "Уставка реактивной мощности",
+		pt: "Valor de referência da potência reativa",
+		nl: "Instelwaarde blindvermogen",
+		fr: "Consigne de puissance réactive",
+		it: "Valore di riferimento della potenza reattiva",
+		es: "Consigna de potencia reactiva",
+		pl: "Wartość zadana mocy biernej",
+		uk: "Уставка реактивної потужності",
+		"zh-cn": "无功功率设定值",
+	},
+	settingsOneAtATime: {
+		en: "Power limit, power factor and reactive power share one memory cell in the device — each one overwrites the others. Change only one of them at a time. Nothing was sent.",
+		de: "Leistungslimit, Leistungsfaktor und Blindleistung teilen sich im Gerät eine Speicherzelle — jeder Wert überschreibt die anderen. Bitte nur einen davon auf einmal ändern. Es wurde nichts gesendet.",
+		ru: "Ограничение мощности, коэффициент мощности и реактивная мощность используют в устройстве одну ячейку памяти — каждое значение перезаписывает остальные. Изменяйте только одно из них за раз. Ничего не отправлено.",
+		pt: "O limite de potência, o fator de potência e a potência reativa partilham uma única célula de memória no aparelho — cada valor substitui os outros. Altere apenas um de cada vez. Nada foi enviado.",
+		nl: "Vermogenslimiet, vermogensfactor en blindvermogen delen in het apparaat één geheugencel — elke waarde overschrijft de andere. Wijzig er telkens maar één. Er is niets verzonden.",
+		fr: "La limite de puissance, le facteur de puissance et la puissance réactive partagent une seule cellule mémoire dans l'appareil — chaque valeur écrase les autres. Ne modifiez qu'une seule d'entre elles à la fois. Rien n'a été envoyé.",
+		it: "Limite di potenza, fattore di potenza e potenza reattiva condividono una sola cella di memoria nell'apparecchio — ogni valore sovrascrive gli altri. Modificane solo uno alla volta. Non è stato inviato nulla.",
+		es: "El límite de potencia, el factor de potencia y la potencia reactiva comparten una sola celda de memoria en el aparato — cada valor sobrescribe los demás. Cambie solo uno de ellos a la vez. No se ha enviado nada.",
+		pl: "Limit mocy, współczynnik mocy i moc bierna dzielą w urządzeniu jedną komórkę pamięci — każda wartość nadpisuje pozostałe. Zmieniaj tylko jedną z nich naraz. Nic nie zostało wysłane.",
+		uk: "Обмеження потужності, коефіцієнт потужності та реактивна потужність використовують у пристрої одну комірку пам'яті — кожне значення перезаписує інші. Змінюйте лише одне з них за раз. Нічого не надіслано.",
+		"zh-cn":
+			"功率限制、功率因数和无功功率在设备中共用一个存储单元 — 每个值都会覆盖其他值。请每次只更改其中一个。未发送任何内容。",
 	},
 	cleanWarnings: {
 		en: "Acknowledge warnings",
@@ -601,18 +616,21 @@ export const DM_I18N = {
 		uk: "Під час роботи",
 		"zh-cn": "运行时",
 	},
+	// "Usually": a later persisting write can take the runtime value along (the watt limit with
+	// the next persistent limit, the send interval on the 2WB with the next network or cloud
+	// settings write).
 	helpVolatile: {
-		en: "Runtime only — the device forgets this value on restart.",
-		de: "Nur zur Laufzeit — das Gerät vergisst diesen Wert beim Neustart.",
-		ru: "Только во время работы — DTU забывает это значение при перезапуске.",
-		pt: "Apenas em tempo de execução — o DTU esquece este valor ao reiniciar.",
-		nl: "Alleen tijdens runtime — de DTU vergeet deze waarde bij herstart.",
-		fr: "Uniquement à l'exécution — le DTU oublie cette valeur au redémarrage.",
-		it: "Solo runtime — il DTU dimentica questo valore al riavvio.",
-		es: "Solo en tiempo de ejecución — el DTU olvida este valor al reiniciar.",
-		pl: "Tylko w czasie pracy — DTU zapomina tę wartość po restarcie.",
-		uk: "Лише під час роботи — DTU забуває це значення після перезапуску.",
-		"zh-cn": "仅运行时有效 — DTU 重启后会忘记此值。",
+		en: "Runtime value — the device usually loses it on restart.",
+		de: "Laufzeitwert — das Gerät verliert ihn beim Neustart in der Regel.",
+		ru: "Рабочее значение — при перезапуске устройство обычно его теряет.",
+		pt: "Valor de execução — o dispositivo normalmente o perde ao reiniciar.",
+		nl: "Runtimewaarde — het apparaat verliest deze meestal bij een herstart.",
+		fr: "Valeur d'exécution — l'appareil la perd généralement au redémarrage.",
+		it: "Valore di esecuzione — di solito il dispositivo lo perde al riavvio.",
+		es: "Valor en tiempo de ejecución — el dispositivo normalmente lo pierde al reiniciar.",
+		pl: "Wartość robocza — urządzenie zwykle traci ją po restarcie.",
+		uk: "Робоче значення — під час перезапуску пристрій зазвичай його втрачає.",
+		"zh-cn": "运行时值 — 设备重启后通常会丢失。",
 	},
 	helpFlashWrite: {
 		en: "These values stay in the device and survive a restart. Frequent changes wear out its memory — not suitable for automatic control.",
@@ -799,7 +817,9 @@ export const COMMAND_DEFS: CommandDef[] = [
 		kind: "number",
 		label: "serverSendTime",
 		help: "helpVolatile",
-		min: 1,
+		min: 5,
+		max: 15,
+		step: 1,
 		unit: "min",
 		group: "runtime",
 		cloudCapable: false,
@@ -836,7 +856,7 @@ export const COMMAND_DEFS: CommandDef[] = [
 		help: "helpFlashWrite",
 		min: -50,
 		max: 50,
-		unit: "°",
+		unit: "%",
 		cloudCapable: false,
 	},
 	// --- Actions (card footer) ---
@@ -1165,34 +1185,25 @@ export const SETTINGS_SCHEMA: JsonFormSchema = {
 /**
  * Form for connecting an energy meter. Deliberately just two fields: the address identifies the
  * meter, the mode decides what the inverter does with it.
- */
-/**
- * Form for connecting an energy meter.
  *
- * The address is picked from what the inverter itself found — nobody should have to look up a MAC
- * address. `detected` comes from `dtuInfo.shls`, which the device sends in every info response.
+ * The address is always free to type. `detected` (`dtuInfo.shls`) is the inverter's list of
+ * meters already bound — empty before the first binding and after a restart — so it can only
+ * offer suggestions; a selection-only field would leave the first binding with nothing to pick.
  *
- * @param detected - meter MACs the device reported, most recent selection first
+ * @param detected - meter MACs already bound or chosen, most recent selection first
  */
 export function buildMeterSchema(detected: string[]): JsonFormSchema {
 	return {
 		type: "panel",
 		items: {
-			mac: detected.length
-				? {
-						type: "select",
-						label: DM_I18N.shellyMac,
-						help: DM_I18N.shellyMacHelp,
-						options: detected.map(m => ({ label: formatMeterMac(m), value: m })),
-						sm: 12,
-					}
-				: {
-						// Nothing found yet — say so instead of showing an empty dropdown the user
-						// cannot get past.
-						type: "staticText",
-						text: DM_I18N.shellyNoneFound,
-						sm: 12,
-					},
+			mac: {
+				type: "autocomplete",
+				freeSolo: true,
+				label: DM_I18N.shellyMac,
+				help: DM_I18N.shellyMacHelp,
+				options: detected.map(m => ({ label: formatMeterMac(m), value: m })),
+				sm: 12,
+			},
 			mode: {
 				type: "select",
 				label: DM_I18N.shellyMode,
@@ -1275,17 +1286,27 @@ export async function buildDeviceActions(
 					title: DM_I18N.settingsTitle,
 				});
 				if (result) {
+					// Only write what the user actually moved. Each of these costs two flash
+					// sectors, so rewriting an untouched field would be pure wear. An empty field
+					// is no value — Number("") would go out as 0.
+					const changed: { id: string; value: number }[] = [];
 					for (const d of SETTING_DEFS) {
-						const value = result[formKey(d.id)];
-						if (value === undefined || value === null) {
+						const raw = result[formKey(d.id)];
+						if (raw === undefined || raw === null || String(raw).trim() === "") {
 							continue;
 						}
-						// Only write what the user actually moved. Each of these costs two flash
-						// sectors, so rewriting an untouched field would be pure wear.
-						if (Number(value) === data[formKey(d.id)]) {
-							continue;
+						const value = Number(raw);
+						if (Number.isFinite(value) && value !== data[formKey(d.id)]) {
+							changed.push({ id: d.id, value });
 						}
-						await adapter.setStateAsync(`${deviceId}.${d.id}`, Number(value), false);
+					}
+					// The three are one command to the DTU: they share cell A and one command slot,
+					// so sent in a row each overwrites the one before and the later ones can hit a
+					// busy slot (CELL_A_STATES in commandHandler.ts).
+					if (changed.length > 1) {
+						await context.showMessage(DM_I18N.settingsOneAtATime);
+					} else if (changed.length === 1) {
+						await adapter.setStateAsync(`${deviceId}.${changed[0].id}`, changed[0].value, false);
 					}
 				}
 				return { refresh: "none" };
@@ -1304,9 +1325,9 @@ export async function buildDeviceActions(
 			handler: async (_devId, context: ActionContext): Promise<{ refresh: "none" }> => {
 				const macState = await adapter.getStateAsync(`${deviceId}.meter.deviceId`);
 				const modeState = await adapter.getStateAsync(`${deviceId}.meter.mode`);
-				// The inverter reports the meters it knows in every info response; offer those
-				// instead of asking for a MAC address. Whatever is already selected stays in the
-				// list even if the device did not mention it this round.
+				// The inverter reports the meters bound to it in every info response; offer those
+				// as suggestions. Whatever is already selected stays in the list even if the
+				// device did not mention it this round.
 				const detected = await adapter.getStateAsync(`${deviceId}.meter.detected`);
 				const current = String(macState?.val ?? "");
 				let macs: string[] = [];
@@ -1331,13 +1352,28 @@ export async function buildDeviceActions(
 				}
 				// MAC first: the mode is what triggers the binding, so it has to find the address
 				// already in place.
-				const mac = String(result.mac ?? "").trim();
-				if (mac && mac !== String(macState?.val ?? "")) {
+				// Compared in the form the device stores, so "BC:24:…" for the bound meter is no change.
+				const typed = String(result.mac ?? "").trim();
+				let mac = "";
+				if (typed) {
+					try {
+						mac = normalizeMeterMac(typed);
+					} catch {
+						await context.showMessage(DM_I18N.shellyMacInvalid);
+						return { refresh: "none" };
+					}
+				}
+				const macChanged = mac !== "" && mac !== String(macState?.val ?? "");
+				if (macChanged) {
 					await adapter.setStateAsync(`${deviceId}.meter.deviceId`, mac, false);
 				}
-				if (result.mode !== undefined && result.mode !== null) {
-					// Always written, even when unchanged: re-sending is how a poll that died gets
-					// restarted, and the device treats the command as idempotent.
+				// Every bind rewrites the binding list in the inverter's flash, so an unchanged dialog
+				// sends nothing.
+				if (
+					result.mode !== undefined &&
+					result.mode !== null &&
+					(macChanged || Number(result.mode) !== modeState?.val)
+				) {
 					await adapter.setStateAsync(`${deviceId}.meter.mode`, Number(result.mode), false);
 				}
 				return { refresh: "none" };
@@ -1608,8 +1644,9 @@ const EMPTY_NETWORK_VALUES = new Set(["0.0.0.0", "00:00:00:00:00:00", "0.0.0.0.0
 /**
  * True if the device reports something worth showing for this field.
  *
- * A missing state is skipped, and so is one whose value is a placeholder for "not present". The
- * numeric 0 is kept — for a flag such as DHCP it is a real answer, not an absence.
+ * A missing state is skipped, and so is one whose value is a placeholder for "not present". A
+ * number is kept: the rows that use this hold addresses, and a numeric field the device never
+ * fills is not listed at all.
  *
  * @param adapter - Adapter surface used to read the state.
  * @param deviceId - Device id (state-tree prefix).
@@ -1714,7 +1751,8 @@ export async function buildDeviceDetails(
 				["subnetMask", "config.subnetMask"],
 				["gateway", "config.gateway"],
 				["dnsServer", "config.dnsServer"],
-				["dhcp", "config.netDhcpSwitch"],
+				// No DHCP row: the GetConfig builders never fill that field (2WB 0x4080e9b6, 2T V01.01.01
+				// 0x408160dc store nothing at offsets 0x70-0xb0), so its 0 would read as "DHCP off".
 			];
 			const present: Array<[string, string]> = [];
 			for (const [key, suffix] of network) {

@@ -1,7 +1,7 @@
 import assert from "node:assert";
 import { EventEmitter } from "node:events";
 import BleConnection from "../build/lib/bleConnection.js";
-import { bleBuildFrame, bleParseFrame } from "../build/lib/bleCrypto.js";
+import { bleBuildFrame, bleParseFrame, bleDecrypt, pbFindVarint } from "../build/lib/bleCrypto.js";
 import { EsphomeGateway } from "../build/lib/esphomeGateway.js";
 
 const MAC = EsphomeGateway.macToNumber("AA:BB:CC:DD:EE:FF");
@@ -119,11 +119,33 @@ function reconnectDelays(ctl) {
  * Bootstrap a201 payload = protobuf field 8 { field 27 = encRand } (SN-CBC encrypted on the wire).
  *
  * @param seq - 16-bit sequence number
+ * @param dtuTime - optional DTU clock (Unix seconds) for field 2
  */
-function bootstrapFrame(seq) {
+function bootstrapFrame(seq, dtuTime) {
 	const inner = Buffer.concat([Buffer.from([0xda, 0x01, 0x10]), ENC_RAND]); // f27 (bytes,16)
-	const outer = Buffer.concat([Buffer.from([0x42, inner.length]), inner]); // f8 (message)
+	const f8 = Buffer.concat([Buffer.from([0x42, inner.length]), inner]); // f8 (message)
+	// Optional f2 = the DTU's clock (Unix seconds, varint).
+	const outer = dtuTime == null ? f8 : Buffer.concat([Buffer.from([0x10]), varint(dtuTime), f8]);
 	return bleBuildFrame(0xa201, outer, { mode: "sncbc", sn: SN, seq });
+}
+
+/**
+ * Protobuf varint encoding.
+ *
+ * @param n - non-negative integer
+ */
+function varint(n) {
+	const out = [];
+	let v = n;
+	do {
+		let b = v % 128;
+		v = Math.floor(v / 128);
+		if (v > 0) {
+			b += 128;
+		}
+		out.push(b);
+	} while (v > 0);
+	return Buffer.from(out);
 }
 
 /**
@@ -262,6 +284,26 @@ describe("BleConnection", function () {
 		conn.disconnect();
 	});
 
+	// The DTU drops a time-checked request (a318 included) outside ±60 s of its own clock — so the
+	// pairing requests must carry the DTU's clock from a201 field 2, not the host clock.
+	it("stamps its pairing requests on the DTU clock taken from a201", async function () {
+		const gateway = new FakeGateway();
+		const { timers, ctl } = makeTimers();
+		const conn = new BleConnection({ gateway, mac: MAC, sn: SN, pin: PIN, timers, log: silentLog });
+		conn.connect();
+		await sleep(50);
+		const dtuTime = Math.floor(Date.now() / 1000) + 3600;
+		gateway.push(bootstrapFrame(1, dtuTime));
+		await ctl.fireTick(); // boot -> commcmd
+		await ctl.fireTick(); // sends CommCmd Y + status poll
+		const y = gateway.writes.map(w => bleParseFrame(w)).find(f => f && f.tag === 0xa318);
+		assert.ok(y, "CommCmd (a318) must have been sent");
+		const plain = bleDecrypt(ENC_RAND, 0xa318, y.seq, y.payload);
+		const ts = pbFindVarint(plain, 1);
+		assert.ok(Math.abs(ts - dtuTime) <= 2, `a318 time ${ts} should follow the DTU clock ${dtuTime}`);
+		conn.disconnect();
+	});
+
 	it("writes the CCCD (notify handle + 1) so the device starts sending", async function () {
 		const gateway = new FakeGateway();
 		const { timers } = makeTimers();
@@ -339,7 +381,9 @@ describe("BleConnection", function () {
 		conn.disconnect();
 	});
 
-	it("emits pairingFailed and stops on a rejected PIN (sts=4)", async function () {
+	// Firmware: sts 4 on the base status means "DTU locked" (lock_state == 1), not "PIN wrong". The
+	// connection must not stop for good — it retries later and sends no PIN while locked.
+	it("treats sts=4 on the base status as a locked DTU and retries later instead of stopping", async function () {
 		const gateway = new FakeGateway();
 		const { timers, ctl } = makeTimers();
 		const conn = new BleConnection({ gateway, mac: MAC, sn: SN, pin: PIN, timers, log: silentLog });
@@ -354,12 +398,33 @@ describe("BleConnection", function () {
 		gateway.push(bootstrapFrame(1));
 		await ctl.fireTick();
 		await ctl.fireTick();
-		gateway.push(statusFrame(3, 2)); // PIN needed
-		await ctl.fireTick(); // send PIN
-		gateway.push(statusFrame(4, 3)); // rejected
+		gateway.push(statusFrame(4, 2)); // locked
 
-		assert.ok(failReason && /PIN/i.test(failReason), `pairingFailed with reason, got: ${failReason}`);
+		assert.strictEqual(failReason, null, "a locked DTU must not stop the connection for good");
 		assert.strictEqual(conn.connected, false);
+		assert.ok(reconnectDelays(ctl).length >= 1, "a reconnect must be scheduled");
+		conn.disconnect();
+	});
+
+	// Firmware: sts 2 is the status cell's start value until the first action 64 is evaluated.
+	it("keeps polling on sts=2 (not evaluated yet) and pairs on the next sts=1", async function () {
+		const gateway = new FakeGateway();
+		const { timers, ctl } = makeTimers();
+		const conn = new BleConnection({ gateway, mac: MAC, sn: SN, pin: PIN, timers, log: silentLog });
+		let failReason = null;
+		conn.on("pairingFailed", r => {
+			failReason = r;
+		});
+		conn.connect();
+		await sleep(50);
+		gateway.push(bootstrapFrame(1));
+		await ctl.fireTick();
+		await ctl.fireTick();
+		gateway.push(statusFrame(2, 2)); // not evaluated yet
+		assert.strictEqual(failReason, null, "sts=2 must not fail the pairing");
+		assert.strictEqual(conn.connected, false);
+		gateway.push(statusFrame(1, 3)); // paired
+		assert.strictEqual(conn.connected, true);
 		conn.disconnect();
 	});
 
@@ -513,6 +578,85 @@ describe("BleConnection", function () {
 		await ctl.fireTick();
 
 		assert.strictEqual(conn.connected, true, "traffic must keep the session up");
+		conn.disconnect();
+	});
+});
+
+// Recorded on 2026-10-06 from the real HMS-800-2WB (RMI-4161A031AB61): bootstrap a201 (SN-CBC, no
+// GCM tag), CommCmd answer a218 and status a219 sts=1 (GCM, 16-byte tag behind totalLen).
+// Session encRand bb4e74eac9d4a98cc6c6fdd3ceabf354. See _fwanalysis/LIVE_TESTLOG_2026-10-06.md.
+const LIVE_A201 = Buffer.from(
+	"484da2010001240c009a46072e6e30e97268dea0296f7a7a69d41adcc274bef2c389cfcc6f8ef193ce6877c2157a36cf06a092fe558c7a216962cf59ced1f59a12e993633aecaba3cb34a1bcc90fc69813ae7946a76aa142c86b1c0019b81824e556d209f2922d76c3c84995594c00465f39b48045f95c15c1fbcde37404224dd532a64f00ad8c278bca0a8af8105c5b2ab138d170217503fb0d",
+	"hex",
+);
+const LIVE_A218 = Buffer.from(
+	"484da2180002d029001a3b85c36f8986226585cf43f223ed383867c78d922c7f8e3a8b64f213d25680f1",
+	"hex",
+);
+const LIVE_A219 = Buffer.from(
+	"484da2190003442e002ec94e424a3f085b25e1944a7065a115171120ec0104b16d0bd6665c765ee2ceacba3dcfa7ede7b58705f5c0934ece36d07b3a8352",
+	"hex",
+);
+
+describe("BleConnection — receive framing", function () {
+	this.timeout(8000);
+
+	async function connecting() {
+		const gateway = new FakeGateway();
+		const { timers, ctl } = makeTimers();
+		const conn = new BleConnection({ gateway, mac: MAC, sn: SN, pin: PIN, timers, log: silentLog });
+		conn.connect();
+		await sleep(50);
+		return { gateway, conn, ctl };
+	}
+
+	function pushInChunks(gateway, data, size) {
+		for (let i = 0; i < data.length; i += size) {
+			gateway.push(data.subarray(i, i + size));
+		}
+	}
+
+	it("pairs from the recorded device frames delivered in 7-byte chunks", async function () {
+		const { gateway, conn, ctl } = await connecting();
+		pushInChunks(gateway, LIVE_A201, 7);
+		await ctl.fireTick();
+		await ctl.fireTick();
+		// a218 and a219 arrive back to back, split so that a GCM tag straddles two chunks.
+		pushInChunks(gateway, Buffer.concat([LIVE_A218, LIVE_A219]), 7);
+		assert.strictEqual(conn.connected, true, "the recorded a219 sts=1 must pair the session");
+		conn.disconnect();
+	});
+
+	it('does not cut a frame at an "HM" inside the ciphertext', async function () {
+		const { gateway, conn, ctl } = await connecting();
+		gateway.push(bootstrapFrame(1));
+		await ctl.fireTick();
+		await ctl.fireTick();
+		// Find a status frame whose encrypted body contains the bytes "HM".
+		let frame = null;
+		for (let seq = 2; seq < 20000 && !frame; seq++) {
+			const f = statusFrame(1, seq);
+			if (f.indexOf(Buffer.from("HM"), 2) > 0) {
+				frame = f;
+			}
+		}
+		assert.ok(frame, "setup: a frame with HM in its ciphertext");
+		gateway.push(frame);
+		assert.strictEqual(conn.connected, true, "the frame must be taken whole and decrypted");
+		conn.disconnect();
+	});
+
+	it("resynchronises after foreign bytes and drops a frame with a bad CRC", async function () {
+		const { gateway, conn, ctl } = await connecting();
+		gateway.push(bootstrapFrame(1));
+		await ctl.fireTick();
+		await ctl.fireTick();
+		const bad = Buffer.from(statusFrame(1, 2));
+		bad[6] ^= 0xff; // break the CRC
+		gateway.push(Buffer.concat([Buffer.from([0x00, 0x11, 0x48]), bad]));
+		assert.strictEqual(conn.connected, false, "a frame with a bad CRC must not be taken");
+		gateway.push(statusFrame(1, 3));
+		assert.strictEqual(conn.connected, true, "the next good frame must still be read");
 		conn.disconnect();
 	});
 });

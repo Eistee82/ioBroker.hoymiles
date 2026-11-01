@@ -3,8 +3,10 @@ import {
 	COMMANDS,
 	executeCommand,
 	executeCloudCommand,
+	bookFlashWrite,
 	flashWritingStateForAction,
 	shouldSkipFlashWrite,
+	writesConfig,
 } from "../build/lib/commandHandler.js";
 import { ProtobufHandler } from "../build/lib/protobufHandler.js";
 
@@ -59,6 +61,9 @@ describe("commandHandler – COMMANDS", function () {
 		assert.ok(v);
 		assert.ok(v(1) !== null, "1 should be rejected");
 		assert.ok(v(101) !== null, "101 should be rejected");
+		// A non-numeric state value arrives as NaN; it must not pass, or "A:NaN" reaches the DTU,
+		// whose atoi reads it as 0 — a limit of 0 %.
+		assert.ok(v(NaN) !== null, "NaN should be rejected");
 		assert.strictEqual(v(2), null, "2 should be valid");
 		assert.strictEqual(v(100), null, "100 should be valid");
 		assert.strictEqual(v(50), null, "50 should be valid");
@@ -69,6 +74,7 @@ describe("commandHandler – COMMANDS", function () {
 		assert.ok(v);
 		assert.ok(v(0) !== null, "0 should be rejected");
 		assert.ok(v(0.5) !== null, "0.5 should be rejected");
+		assert.ok(v(NaN) !== null, "NaN should be rejected");
 		assert.strictEqual(v(0.9), null, "0.9 should be valid");
 		assert.strictEqual(v(-0.9), null, "-0.9 should be valid");
 		assert.strictEqual(v(1), null, "1 should be valid");
@@ -80,6 +86,7 @@ describe("commandHandler – COMMANDS", function () {
 		assert.ok(v);
 		assert.ok(v(-51) !== null, "-51 should be rejected");
 		assert.ok(v(51) !== null, "51 should be rejected");
+		assert.ok(v(NaN) !== null, "NaN should be rejected");
 		assert.strictEqual(v(0), null, "0 should be valid");
 		assert.strictEqual(v(-50), null, "-50 should be valid");
 		assert.strictEqual(v(50), null, "50 should be valid");
@@ -90,8 +97,14 @@ describe("commandHandler – COMMANDS", function () {
 		assert.ok(v);
 		assert.ok(v(0) !== null, "0 should be rejected");
 		assert.ok(v(-1) !== null, "-1 should be rejected");
-		assert.strictEqual(v(1), null, "1 should be valid");
-		assert.strictEqual(v(5), null, "5 should be valid");
+		assert.ok(v(NaN) !== null, "NaN should be rejected");
+		// The DTU keeps only the low byte, unclamped; its own cloud path clamps to 5..15.
+		for (const bad of [1, 4, 16, 256, 300, 5.5]) {
+			assert.ok(v(bad) !== null, `${bad} should be rejected`);
+		}
+		for (const good of [5, 7, 15]) {
+			assert.strictEqual(v(good), null, `${good} should be valid`);
+		}
 	});
 
 	it("powerLimitWatt validate accepts [0.1, 3276.7] W only", function () {
@@ -105,6 +118,32 @@ describe("commandHandler – COMMANDS", function () {
 		assert.strictEqual(v(0.1), null, "0.1 W should be valid");
 		assert.strictEqual(v(800), null, "800 W should be valid");
 		assert.strictEqual(v(3276.7), null, "3276.7 W should be valid (max)");
+	});
+
+	// The request time must come from the DTU's clock when the device layer provides one (±60 s window).
+	it("stamps the command with ctx.now() when given", async function () {
+		let stamped = null;
+		const pb = {
+			encodeUnlockInverter: ts => {
+				stamped = ts;
+				return Buffer.alloc(12);
+			},
+		};
+		await executeCommand(
+			"inverter.lock",
+			{ val: false, ack: false, ts: 0, lc: 0, from: "", q: 0 },
+			{
+				connection: { connected: true, send: async () => {} },
+				protobuf: pb,
+				deviceId: "D",
+				host: "h",
+				log: { info: () => {}, warn: () => {}, debug: () => {}, error: () => {} },
+				setState: async () => {},
+				resetButton: () => {},
+				now: () => 1234567890,
+			},
+		);
+		assert.strictEqual(stamped, 1234567890);
 	});
 
 	it("powerLimitWatt writes no flash, powerLimit does", function () {
@@ -453,7 +492,7 @@ describe("commandHandler – flash guard", function () {
 		assert.strictEqual(shouldSkipFlashWrite(52, { ...last, lastValue: 50 }, guard, Date.now(), 100), null);
 	});
 
-	it("does not send a throttled command but still acknowledges the state", async function () {
+	it("does not send a throttled command and acknowledges what the device still holds", async function () {
 		const sent = [];
 		const acks = [];
 		const infos = [];
@@ -461,11 +500,96 @@ describe("commandHandler – flash guard", function () {
 		await executeCommand("inverter.powerLimit", { val: 50, ack: false }, ctx);
 		await executeCommand("inverter.powerLimit", { val: 52, ack: false }, ctx);
 		assert.strictEqual(sent.length, 1, "the second write is inside the dead band and must not be sent");
-		assert.strictEqual(acks.length, 2, "both values are acknowledged — the wish was refused, not lost");
+		assert.deepStrictEqual(
+			acks.map(a => a.val),
+			[50, 50],
+			"the skipped wish is answered with the value last written, not with the refused one",
+		);
 		assert.ok(
 			infos.some(m => /flash/i.test(m)),
 			"the skipped write must say why",
 		);
+	});
+
+	// Limit, power factor and reactive power share the DTU's cell A, its flash copy and one command
+	// slot (2WB 0x4080aa90, 2T 0x40813492): the guard has to treat them as one.
+	it("counts the minimum interval across limit, power factor and reactive power", async function () {
+		const sent = [];
+		const acks = [];
+		const ctx = flashCtx(sent, acks, [], { deadband: 0, minIntervalMs: 60000 });
+		await executeCommand("inverter.powerLimit", { val: 50, ack: false }, ctx);
+		await executeCommand("inverter.powerFactorLimit", { val: 0.9, ack: false }, ctx);
+		assert.strictEqual(sent.length, 1, "the power factor comes too soon after the limit");
+		assert.deepStrictEqual(
+			acks.map(a => a.id),
+			["inverter.powerLimit"],
+			"a skipped power factor that was never written is not acknowledged",
+		);
+	});
+
+	it("forgets the limit once the power factor has overwritten cell A", async function () {
+		const sent = [];
+		const ctx = flashCtx(sent, [], [], { deadband: 5, minIntervalMs: 0 });
+		await executeCommand("inverter.powerLimit", { val: 50, ack: false }, ctx);
+		await executeCommand("inverter.powerFactorLimit", { val: 0.9, ack: false }, ctx);
+		await executeCommand("inverter.powerLimit", { val: 50, ack: false }, ctx);
+		assert.strictEqual(sent.length, 3, "the same limit has to go out again — cell A holds 900 now");
+	});
+
+	it("does not undo a booking that a later write of the group has replaced", function () {
+		const memory = new Map();
+		const lookup = id => {
+			if (!memory.has(id)) {
+				memory.set(id, { lastValue: null, lastWriteMs: 0, skipsLogged: 0 });
+			}
+			return memory.get(id);
+		};
+		const undoLimit = bookFlashWrite("inverter.powerLimit", 50, 1000, lookup);
+		bookFlashWrite("inverter.powerFactorLimit", null, 1000, lookup);
+		undoLimit();
+		assert.strictEqual(lookup("inverter.powerFactorLimit").lastWriteMs, 1000, "the later booking stands");
+		assert.strictEqual(lookup("inverter.powerLimit").lastWriteMs, 1000);
+	});
+
+	it("restores the memory when the only booking is undone", function () {
+		const memory = new Map();
+		const lookup = id => {
+			if (!memory.has(id)) {
+				memory.set(id, { lastValue: null, lastWriteMs: 0, skipsLogged: 0 });
+			}
+			return memory.get(id);
+		};
+		bookFlashWrite("inverter.reactivePowerLimit", 10, 500, lookup);
+		const undo = bookFlashWrite("inverter.powerLimit", 50, 1000, lookup);
+		assert.strictEqual(lookup("inverter.reactivePowerLimit").lastValue, null, "cell A no longer holds Q");
+		undo();
+		assert.strictEqual(lookup("inverter.reactivePowerLimit").lastValue, 10);
+		assert.strictEqual(lookup("inverter.powerLimit").lastWriteMs, 0);
+	});
+
+	it("neither acknowledges nor books a command the connection could not send", async function () {
+		const sent = [];
+		const acks = [];
+		const infos = [];
+		const ctx = flashCtx(sent, acks, infos, { deadband: 5, minIntervalMs: 60000 });
+		let up = false;
+		ctx.connection = {
+			send: async buf => {
+				if (up) {
+					sent.push(buf);
+				}
+				return up;
+			},
+		};
+		await executeCommand("inverter.powerLimit", { val: 50, ack: false }, ctx);
+		assert.strictEqual(acks.length, 0, "nothing reached the device");
+		assert.ok(
+			infos.some(m => /not sent/.test(m)),
+			"the failure must be logged",
+		);
+		up = true;
+		await executeCommand("inverter.powerLimit", { val: 50, ack: false }, ctx);
+		assert.strictEqual(sent.length, 1, "the failed attempt must not throttle the retry");
 	});
 
 	it("does not throttle a command that writes no flash", async function () {
@@ -474,6 +598,85 @@ describe("commandHandler – flash guard", function () {
 		await executeCommand("inverter.reboot", { val: true, ack: false }, ctx);
 		await executeCommand("inverter.reboot", { val: true, ack: false }, ctx);
 		assert.strictEqual(sent.length, 2, "reboot does not touch flash and must never be throttled");
+	});
+
+	// SetConfig carries every field of its base into the device — field 5 into cell A without
+	// condition (2WB 0x4080ee8e, 2T 0x408164e8) — so the base is read right before the write.
+	function configCtx(answers) {
+		const sent = [];
+		const acks = [];
+		const warns = [];
+		const reads = [];
+		const ctx = {
+			...flashCtx(sent, acks, warns, undefined),
+			readConfig: async () => {
+				reads.push(sent.length);
+				return answers.shift() ?? null;
+			},
+		};
+		return { ctx, sent, acks, warns, reads };
+	}
+
+	function decodeSetConfig(frame) {
+		const ResDTO = handler.getType("SetConfig", "SetConfigResDTO");
+		return ResDTO.toObject(ResDTO.decode(frame.subarray(10)), { longs: Number, defaults: true });
+	}
+
+	it("builds a configuration write from a reading taken right before it", async function () {
+		const fresh = { serverSendTime: 5, limitPowerMypower: 500, serverport: 10081 };
+		const { ctx, sent, reads } = configCtx([fresh, { ...fresh, serverSendTime: 10 }]);
+		await executeCommand("config.serverSendTime", { val: 10, ack: false }, ctx);
+		assert.deepStrictEqual(reads, [0, 1], "one read before the write, one after it");
+		assert.strictEqual(sent.length, 1);
+		assert.strictEqual(
+			Number(decodeSetConfig(sent[0]).limitPowerMypower),
+			500,
+			"cell A as the device holds it right now",
+		);
+	});
+
+	it("leaves the acknowledgement to the device's answer", async function () {
+		const fresh = { serverSendTime: 5, serverport: 10081 };
+		const { ctx, acks, warns } = configCtx([fresh, { ...fresh, serverSendTime: 10 }]);
+		await executeCommand("config.serverSendTime", { val: 10, ack: false }, ctx);
+		assert.deepStrictEqual(acks, [], "the answer's handler acknowledges the state with the device's value");
+		assert.ok(!warns.some(m => /not take|not confirmed/.test(m)), "the value was taken");
+	});
+
+	it("says so when the device keeps its old value", async function () {
+		const fresh = { serverSendTime: 5, serverport: 10081 };
+		const { ctx, warns } = configCtx([fresh, fresh]);
+		await executeCommand("config.serverSendTime", { val: 10, ack: false }, ctx);
+		assert.ok(warns.some(m => /did not take/.test(m) && /keeps 5/.test(m)));
+	});
+
+	it("warns when the write cannot be confirmed", async function () {
+		const { ctx, sent, warns } = configCtx([{ serverSendTime: 5, serverport: 10081 }]);
+		await executeCommand("config.serverSendTime", { val: 10, ack: false }, ctx);
+		assert.strictEqual(sent.length, 1);
+		assert.ok(warns.some(m => /not confirmed/.test(m)));
+	});
+
+	it("refuses a configuration write without a way to read the configuration", async function () {
+		const { ctx, sent, warns } = configCtx([]);
+		delete ctx.readConfig;
+		await executeCommand("config.serverSendTime", { val: 10, ack: false }, ctx);
+		assert.strictEqual(sent.length, 0);
+		assert.ok(warns.some(m => /without having read it first/i.test(m)));
+	});
+
+	it("marks only the configuration writes as such", function () {
+		assert.strictEqual(writesConfig("config.serverSendTime"), true);
+		assert.strictEqual(writesConfig("inverter.powerLimit"), false);
+		assert.strictEqual(writesConfig("no.such.state"), false);
+	});
+
+	it("refuses a configuration write when the device does not answer the read", async function () {
+		const { ctx, sent, acks, warns } = configCtx([]);
+		await executeCommand("config.serverSendTime", { val: 10, ack: false }, ctx);
+		assert.strictEqual(sent.length, 0, "an old snapshot must not stand in for the reading");
+		assert.deepStrictEqual(acks, []);
+		assert.ok(warns.some(m => /did not answer the configuration read/.test(m)));
 	});
 
 	function flashCtx(sent, acks, infos, flashGuard) {
@@ -539,6 +742,8 @@ describe("commandHandler – flash guard edge cases", function () {
 
 	it("maps only the power-limit action to a flash-writing state", function () {
 		assert.strictEqual(flashWritingStateForAction(8), "inverter.powerLimit");
+		assert.strictEqual(flashWritingStateForAction(47), "inverter.powerFactorLimit");
+		assert.strictEqual(flashWritingStateForAction(48), "inverter.reactivePowerLimit");
 		assert.strictEqual(flashWritingStateForAction(3), null, "inverter reboot writes no config");
 		assert.strictEqual(flashWritingStateForAction(41), null, "grid-profile read writes nothing");
 	});

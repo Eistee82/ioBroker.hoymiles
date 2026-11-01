@@ -2,7 +2,7 @@ export const ACTION_SHELLY_BIND = 85;
 export const SHELLY_DEV_TYPE_METER_ONLY = 0;
 export const SHELLY_DEV_TYPE_GRID = 2;
 const FIELD_ENERGY_FLOW = 13;
-const FIELD_METER_PRIMARY = 14;
+export const FIELD_METER_PRIMARY = 14;
 const FIELD_METER_SECONDARY = 15;
 const SCALE_FLOW_POWER = 10;
 const SCALE_METER_VOLTAGE = 10;
@@ -123,9 +123,10 @@ export function parseMeterDevices(payload) {
                 activePower: (slots.get(4) ?? 0) / SCALE_METER_POWER,
             };
         });
+        const id = headFields.get(1);
         devices.push({
             field: field.no,
-            serial: headFields.has(1) ? headFields.get(1).toString(16) : "",
+            serial: id ? id.toString(16).padStart(12, "0") : "",
             phases,
             frequency: asInt32(headFields.get(3) ?? 0n),
             energyImport: asInt32(headFields.get(4) ?? 0n),
@@ -153,12 +154,32 @@ export function encodeShellyBindBody(mac, devType, timestamp) {
         Buffer.concat([varint((6 << 3) | 2), varint(data.length), data]),
     ]);
 }
-export function buildShellyBindData(mac, devType) {
+export function normalizeMeterMac(mac) {
     const clean = (mac || "").replace(/[:\-\s]/g, "").toLowerCase();
     if (!/^[0-9a-f]{12}$/.test(clean)) {
         throw new Error(`"${mac}" is not a 12-digit hex MAC. The bind command identifies the meter by MAC, ` +
             `not by its mDNS hostname.`);
     }
+    return clean;
+}
+export function parseCommCmdAnswer(payload) {
+    let action = null;
+    let errCode = 0;
+    for (const f of wireFields(payload)) {
+        if (f.wire !== 0) {
+            continue;
+        }
+        if (f.no === 3) {
+            action = asInt32(f.varint);
+        }
+        else if (f.no === 6) {
+            errCode = asInt32(f.varint);
+        }
+    }
+    return action === null ? null : { action, errCode };
+}
+export function buildShellyBindData(mac, devType) {
+    const clean = normalizeMeterMac(mac);
     if (devType !== SHELLY_DEV_TYPE_METER_ONLY && devType !== SHELLY_DEV_TYPE_GRID) {
         throw new Error(`Unknown Shelly device type ${devType} (0 = meter only, 2 = grid device).`);
     }

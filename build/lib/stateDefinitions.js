@@ -33,7 +33,7 @@ export const meterControlStates = [
         states: { 0: "not bound", 1: "meter only", 2: "zero export" },
     }),
     s("meter.deviceId", "Meter MAC", "Zähler-MAC", "text", { source: "local", write: true }),
-    s("meter.detected", "Detected meters (JSON)", "Erkannte Zähler (JSON)", "json", { source: "local" }),
+    s("meter.detected", "Bound meters (JSON)", "Gebundene Zähler (JSON)", "json", { source: "local" }),
     b("meter.connected", "Meter delivering data", "Zähler liefert Daten", "indicator.connected", {
         source: "local",
     }),
@@ -55,8 +55,12 @@ export const meterMeasurementStates = [
         source: "local",
     }),
     n("meter.loadPower", "House load", "Hausverbrauch", "value.power", "W", { source: "local" }),
-    n("meter.storagePower", "Storage power", "Speicherleistung", "value.power", "W", { source: "local" }),
-    n("meter.plugPower", "Plug power", "Steckdosenleistung", "value.power", "W", { source: "local" }),
+    n("meter.storagePower", "Shelly plugs power (sum)", "Leistung der Shelly-Steckdosen (Summe)", "value.power", "W", {
+        source: "local",
+    }),
+    n("meter.plugPower", "Inverter AC power (meter view)", "Wechselrichter-AC-Leistung (Zählersicht)", "value.power", "W", {
+        source: "local",
+    }),
     n("meter.frequency", "Grid frequency", "Netzfrequenz", "value.frequency", "Hz", { source: "local" }),
     ...[1, 2, 3].flatMap(p => [
         n(`meter.l${p}Voltage`, `Voltage L${p}`, `Spannung L${p}`, "value.voltage", "V", { source: "local" }),
@@ -327,7 +331,7 @@ const states = [
         max: 1,
         source: "local",
     }),
-    n("inverter.reactivePowerLimit", "Reactive power limit", "Blindleistungs-Limit", "level", "°", {
+    n("inverter.reactivePowerLimit", "Reactive power setpoint", "Blindleistungs-Sollwert", "level", "%", {
         write: true,
         min: -50,
         max: 50,
@@ -357,7 +361,7 @@ const states = [
     n("dtu.signalQuality", "Signal quality", "Signalqualität", "value.signal", "%", { source: "local" }),
     s("dtu.wifiVersion", "WiFi version", "WLAN-Version", "text", { source: "local" }),
     b("dtu.reboot", "Reboot DTU", "DTU neustarten", "button", { write: true }),
-    n("dtu.stepTime", "Step time", "Schrittzeit", "value", "s", { source: "local" }),
+    n("dtu.stepTime", "Cloud upload interval (same as config.serverSendTime)", "Cloud-Upload-Intervall (gleich config.serverSendTime)", "value", "min", { source: "local" }),
     n("dtu.accessModel", "Network access mode", "Netzwerk-Zugangsart", "value", "", {
         states: { 0: "GPRS", 1: "WiFi", 2: "Ethernet" },
         source: "local",
@@ -414,7 +418,7 @@ const states = [
     n("config.zeroExport433Addr", "Zero export 433 MHz address", "Nulleinspeisung 433-MHz-Adresse", "value", "", {
         source: "local",
     }),
-    n("config.lockTime", "Inverter lock duration", "Wechselrichter-Sperrdauer", "value", "s", {
+    n("config.lockTime", "Inverter lock time (raw value)", "Wechselrichter-Sperrzeit (Rohwert)", "value", "", {
         source: "local",
     }),
     ...gridProfileStates,

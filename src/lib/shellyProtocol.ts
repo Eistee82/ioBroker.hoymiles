@@ -11,10 +11,10 @@
  *    `uint64 dtu_daily_energy`, which is correct on the 2T — so the schema must not be changed.
  *    These parsers therefore read the wire format directly and leave the schema alone.
  *
- * Everything named here is firmware-proven. What is not proven is not named: the four values per
- * phase in fields 14/15 are `current`, `voltage`, `act_power` and `freq` (EM logger `0x4082c642`
- * ff., format `0x40919d90`), but their order is not decided, so {@link parseMeterDevices} hands
- * them out as a raw tuple.
+ * Field 13 (the energy flow) is sent on every local poll, with or without a meter. Field 14 carries
+ * the meter — at most one, a device of live type 4 that is online (local builder `0x4080b476`,
+ * `0x4080b942`-`0x4080b964`); field 15 carries the online Shelly plugs (type 1, `0x4080bc10`), not
+ * meters.
  */
 
 /** `Cmd_Shelly_Networking` — starts the meter poll. Handler `0x4081544c`, range check `slti #0x57`. */
@@ -36,7 +36,7 @@ export const SHELLY_DEV_TYPE_GRID = 2;
 
 /** Field numbers inside a `RealDataNew` response. */
 const FIELD_ENERGY_FLOW = 13;
-const FIELD_METER_PRIMARY = 14;
+export const FIELD_METER_PRIMARY = 14;
 const FIELD_METER_SECONDARY = 15;
 
 /** The DTU reports these power values in tenths of a watt (7940 = 794.0 W, live-verified). */
@@ -288,9 +288,13 @@ export function parseMeterDevices(payload: Buffer): MeterDevice[] {
 					activePower: (slots.get(4) ?? 0) / SCALE_METER_POWER,
 				};
 			});
+		// The id is the meter MAC as a 48-bit number. Pad it to 12 digits: a MAC with a leading zero
+		// would otherwise come out 11 digits long, which the bind payload refuses, and the state
+		// that echoes the bound meter could no longer be written back. 0 means "not sent".
+		const id = headFields.get(1);
 		devices.push({
 			field: field.no,
-			serial: headFields.has(1) ? headFields.get(1)!.toString(16) : "",
+			serial: id ? id.toString(16).padStart(12, "0") : "",
 			phases,
 			frequency: asInt32(headFields.get(3) ?? 0n),
 			energyImport: asInt32(headFields.get(4) ?? 0n),
@@ -337,19 +341,12 @@ export function encodeShellyBindBody(mac: string, devType: number, timestamp: nu
 }
 
 /**
- * Build the payload for the bind command (`action 85`).
+ * A meter MAC as the bind command takes it: 12 lower-case hex digits, separators removed.
  *
- * The record parser (`0x4081484e`) runs the token through `strtoull(token, NULL, 16)` and looks the
- * result up in the device registry (`0x40831042`, format `"%012llx"`); only a name found there is
- * copied into the device list. A hostname therefore yields 0, the list stays empty, and the DTU
- * logs `[E] Shelly Hostname is NULL` without ever opening a WebSocket — which is why a MAC is
- * required here and a hostname is rejected outright.
- *
- * @param mac - meter MAC, with or without separators
- * @param devType - {@link SHELLY_DEV_TYPE_GRID} or {@link SHELLY_DEV_TYPE_METER_ONLY}
- * @throws {Error} if the MAC is not 12 hex digits or the device type is unknown
+ * @param mac - meter MAC, with or without `:`/`-`/spaces
+ * @throws {Error} if it is not 12 hex digits
  */
-export function buildShellyBindData(mac: string, devType: number): string {
+export function normalizeMeterMac(mac: string): string {
 	const clean = (mac || "").replace(/[:\-\s]/g, "").toLowerCase();
 	if (!/^[0-9a-f]{12}$/.test(clean)) {
 		throw new Error(
@@ -357,6 +354,62 @@ export function buildShellyBindData(mac: string, devType: number): string {
 				`not by its mDNS hostname.`,
 		);
 	}
+	return clean;
+}
+
+/** What the DTU answers to a command sent with tag `0xa318` (its `0xa218`). */
+export interface CommCmdAnswer {
+	/** The action the request carried — mirrored before any check (`0x40813a60`). */
+	action: number;
+	/** 0 = passed the checks; 6 = refused (an update is running, or the session is not authorised). */
+	errCode: number;
+}
+
+/**
+ * Decode the `0xa218` answer: `{1 sn, 2 time, 3 action, 4 cp, 5 tid, 6 err_code}` (descriptor
+ * 2WB VA `0x4090f324`, encoder `0x408122fe`).
+ *
+ * For the bind command (action 85) the firmware sets only 0 or 6: 6 when an update or download
+ * is running (`0x40813a84` → `0x40813b86`) or when a Bluetooth session has not passed its
+ * pairing check (`0x40813ba6`-`0x40813bd8`, "[BLE]illegal User-2!!!"). A 0 does not mean the meter
+ * was bound — an unresolvable MAC and a device in the slave role also answer 0 (`0x4083fefe`
+ * always returns 0; the role gate `0x4081544c` jumps past the bind without setting an error).
+ *
+ * @param payload - decrypted `0xa218` payload
+ * @returns the action and error code, or null when the payload carries no action
+ */
+export function parseCommCmdAnswer(payload: Buffer): CommCmdAnswer | null {
+	let action: number | null = null;
+	let errCode = 0;
+	for (const f of wireFields(payload)) {
+		if (f.wire !== 0) {
+			continue;
+		}
+		if (f.no === 3) {
+			action = asInt32(f.varint);
+		} else if (f.no === 6) {
+			errCode = asInt32(f.varint);
+		}
+	}
+	return action === null ? null : { action, errCode };
+}
+
+/**
+ * Build the payload for the bind command (`action 85`).
+ *
+ * The record parser (`0x4081484e`) runs the token through `strtoull(token, NULL, 16)` and looks the
+ * result up in the device registry (`0x40831042`, format `"%012llx"`); only a name found there is
+ * copied into the device list. A hostname therefore yields 0 and the entry's name stays empty; the
+ * DTU logs `[E] 3rd dev name '' does not contain 'shelly' or 'ecotracker', ignore` (`0x4083119a`)
+ * without ever opening a WebSocket — which is why a MAC is required here and a hostname is rejected
+ * outright.
+ *
+ * @param mac - meter MAC, with or without separators
+ * @param devType - {@link SHELLY_DEV_TYPE_GRID} or {@link SHELLY_DEV_TYPE_METER_ONLY}
+ * @throws {Error} if the MAC is not 12 hex digits or the device type is unknown
+ */
+export function buildShellyBindData(mac: string, devType: number): string {
+	const clean = normalizeMeterMac(mac);
 	if (devType !== SHELLY_DEV_TYPE_METER_ONLY && devType !== SHELLY_DEV_TYPE_GRID) {
 		throw new Error(`Unknown Shelly device type ${devType} (0 = meter only, 2 = grid device).`);
 	}
