@@ -311,6 +311,32 @@ hoymiles.0.station-12345.info.stationName
 
 ## States
 
+Every device and station is split into these channels. A channel only appears where its data exists — the sections below list the states of each.
+
+| Channel | Name in the object tree | Where |
+|---------|-------------------------|-------|
+| `<dtuSerial>.info` | Device information | every DTU |
+| `<dtuSerial>.grid` | Grid output | every DTU |
+| `<dtuSerial>.pv0` … `<dtuSerial>.pv3` | PV input 0 … 3 | one per PV input the inverter has |
+| `<dtuSerial>.inverter` | Inverter | every DTU |
+| `<dtuSerial>.dtu` | DTU | every DTU |
+| `<dtuSerial>.alarms` | Alarms & warnings | local devices |
+| `<dtuSerial>.config` | DTU configuration | local devices |
+| `<dtuSerial>.gridProfile` | Grid profile | every DTU (read locally, or over the cloud for cloud-only devices) |
+| `<dtuSerial>.history` | Power history | local day curve; on hybrid inverters also the cloud curves |
+| `<dtuSerial>.meter` | Energy meter / Shelly meter | only once a wired or network meter reports |
+| `<dtuSerial>.eps` | Backup (EPS) output | hybrid inverters (HAT series, cloud) |
+| `<dtuSerial>.battery` | Battery | hybrid inverters with a battery (cloud) |
+| `<dtuSerial>.dryContact` | Dry contacts (relay) | hybrid inverters with relay hardware (cloud) |
+| `station-<id>.info` | Station info | every cloud station |
+| `station-<id>.grid` | Station grid output | every cloud station |
+| `station-<id>.weather` | Weather at station | every cloud station |
+| `station-<id>.warn` | Station warnings | every cloud station |
+| `station-<id>.gridMeter` | Grid meter | stations the cloud reports a grid meter for |
+| `station-<id>.load` | Loads | stations the cloud reports loads for |
+| `station-<id>.pvMeter` | PV meter (third-party inverter) | stations the cloud reports a PV meter for |
+| `station-<id>.generator` | Generator | stations the cloud reports a generator for |
+
 ### `<dtuSerial>.grid.*` — Grid Output (per DTU)
 
 | State | Type | Unit | Description |
@@ -399,13 +425,13 @@ The adapter determines how many there are, in this order:
 | `grid.batteryPower` | number | W | Battery power (realtime) — battery systems only. On a storage plant: +discharging/−charging, like the charts of the S-Miles portal; the direction is taken from the cloud's energy-flow graph, as the portal does |
 | `grid.pvUtilization` | number | % | PV utilization (realtime) |
 | `grid.dailyEnergy` | number | kWh | Daily energy |
-| `grid.gridImportToday` / `gridImportMonth` / `gridImportYear` / `gridImportTotal` | number | kWh | Energy the load drew from the grid today / this month / this year / in total — plants with battery or grid meter only; source: the S-Miles app's "Production & Consumption" tab |
-| `grid.gridExportToday` / `gridExportMonth` / `gridExportYear` / `gridExportTotal` | number | kWh | PV energy fed into the grid today / this month / this year / in total — plants with battery or grid meter only; source: the S-Miles app's "Production & Consumption" tab |
-| `grid.pvToLoadToday` / `pvToLoadMonth` / `pvToLoadYear` / `pvToLoadTotal` | number | kWh | PV energy used directly by the load today / this month / this year / in total — plants with battery or grid meter only; source: the S-Miles app's "Production & Consumption" tab |
-| `grid.consumptionToday` / `consumptionMonth` / `consumptionYear` / `consumptionTotal` | number | kWh | Consumption today / this month / this year / in total (load from PV + battery + grid) — plants with battery or grid meter only; source: the S-Miles app's "Production & Consumption" tab |
-| `grid.selfSufficiencyToday` / `selfSufficiencyMonth` / `selfSufficiencyYear` / `selfSufficiencyTotal` | number | % | Self-sufficiency today / this month / this year / in total: the share of consumption not drawn from the grid, one decimal, 0 while nothing was consumed — computed like the app — plants with battery or grid meter only; source: the S-Miles app's "Production & Consumption" tab |
-| `grid.batteryChargeToday` / `batteryChargeMonth` / `batteryChargeYear` / `batteryChargeTotal` | number | kWh | PV energy charged into the battery today / this month / this year / in total — battery systems only |
-| `grid.batteryDischargeToday` / `batteryDischargeMonth` / `batteryDischargeYear` / `batteryDischargeTotal` | number | kWh | Energy the load drew from the battery today / this month / this year / in total — battery systems only |
+| `grid.gridImportToday`, `grid.gridImportMonth`, `grid.gridImportYear`, `grid.gridImportTotal` | number | kWh | Energy the load drew from the grid today / this month / this year / in total — plants with battery or grid meter only; source: the S-Miles app's "Production & Consumption" tab |
+| `grid.gridExportToday`, `grid.gridExportMonth`, `grid.gridExportYear`, `grid.gridExportTotal` | number | kWh | PV energy fed into the grid today / this month / this year / in total — plants with battery or grid meter only; source: the S-Miles app's "Production & Consumption" tab |
+| `grid.pvToLoadToday`, `grid.pvToLoadMonth`, `grid.pvToLoadYear`, `grid.pvToLoadTotal` | number | kWh | PV energy used directly by the load today / this month / this year / in total — plants with battery or grid meter only; source: the S-Miles app's "Production & Consumption" tab |
+| `grid.consumptionToday`, `grid.consumptionMonth`, `grid.consumptionYear`, `grid.consumptionTotal` | number | kWh | Consumption today / this month / this year / in total (load from PV + battery + grid) — plants with battery or grid meter only; source: the S-Miles app's "Production & Consumption" tab |
+| `grid.selfSufficiencyToday`, `grid.selfSufficiencyMonth`, `grid.selfSufficiencyYear`, `grid.selfSufficiencyTotal` | number | % | Self-sufficiency today / this month / this year / in total: the share of consumption not drawn from the grid, one decimal, 0 while nothing was consumed — computed like the app — plants with battery or grid meter only; source: the S-Miles app's "Production & Consumption" tab |
+| `grid.batteryChargeToday`, `grid.batteryChargeMonth`, `grid.batteryChargeYear`, `grid.batteryChargeTotal` | number | kWh | PV energy charged into the battery today / this month / this year / in total — battery systems only |
+| `grid.batteryDischargeToday`, `grid.batteryDischargeMonth`, `grid.batteryDischargeYear`, `grid.batteryDischargeTotal` | number | kWh | Energy the load drew from the battery today / this month / this year / in total — battery systems only |
 | `grid.monthEnergy` | number | kWh | Monthly energy |
 | `grid.yearEnergy` | number | kWh | Yearly energy |
 | `grid.totalEnergy` | number | kWh | Total lifetime energy |
@@ -415,8 +441,8 @@ The adapter determines how many there are, in this order:
 | `grid.currency` | string | — | Currency code |
 | `grid.isBalance` | boolean | — | Zero export active |
 | `grid.isReflux` | boolean | — | Feed-in active |
-| `grid.todayIncome` / `monthIncome` / `yearIncome` / `totalIncome` | number | — | Income today / this month / this year / in total. Where the cloud keeps its own accounting (plants with a tariff), its figures are used; otherwise today/total are estimated as yield × price |
-| `grid.todayCost` / `monthCost` / `yearCost` / `totalCost` | number | — | Electricity cost today / this month / this year / in total, from the cloud's accounting — plants with a tariff only |
+| `grid.todayIncome`, `grid.monthIncome`, `grid.yearIncome`, `grid.totalIncome` | number | — | Income today / this month / this year / in total. Where the cloud keeps its own accounting (plants with a tariff), its figures are used; otherwise today/total are estimated as yield × price |
+| `grid.todayCost`, `grid.monthCost`, `grid.yearCost`, `grid.totalCost` | number | — | Electricity cost today / this month / this year / in total, from the cloud's accounting — plants with a tariff only |
 
 ### `station-<id>.info.*` — Station Information (cloud)
 
@@ -705,22 +731,22 @@ Created only when the cloud reports a hybrid inverter below the DTU; all of them
 
 | State | Type | Unit | Description |
 |-------|------|------|-------------|
-| `grid.l1Voltage` / `l2…` / `l3…` | number | V | Inverter AC voltage per phase |
-| `grid.l1Current` / `l2…` / `l3…` | number | A | Inverter AC current per phase |
-| `grid.l1Power` / `l2…` / `l3…` | number | W | Inverter active power per phase |
-| `grid.l1ReactivePower` / `l2…` / `l3…` | number | var | Inverter reactive power per phase |
+| `grid.l1Voltage`, `grid.l2Voltage`, `grid.l3Voltage` | number | V | Inverter AC voltage per phase |
+| `grid.l1Current`, `grid.l2Current`, `grid.l3Current` | number | A | Inverter AC current per phase |
+| `grid.l1Power`, `grid.l2Power`, `grid.l3Power` | number | W | Inverter active power per phase |
+| `grid.l1ReactivePower`, `grid.l2ReactivePower`, `grid.l3ReactivePower` | number | var | Inverter reactive power per phase |
 | `inverter.operatingState` | number | — | Operating state as a number (3 = on-grid was observed; the full value list is not known yet) |
 | `inverter.operatingStateText` | string | — | Operating state as the cloud words it |
 | `inverter.busVoltage` | number | V | DC bus voltage |
 | `inverter.drmMode` | number | — | DRM (demand response) mode |
 | `inverter.pvPower` | number | W | PV power of all inputs together |
 | `inverter.pvEnergyToday` ⁺ | number | kWh | PV energy of all inputs today |
-| `inverter.pvHeatsinkTemperature` / `heatsinkTemperature` / `batteryHeatsinkTemperature` ⁺ | number | °C | Heatsink temperatures of the PV, inverter and battery stage |
-| `inverter.powerFaultCode` / `safetyFaultCode` ⁺ | string | — | Fault codes of the power and the safety controller |
-| `eps.l1Voltage` / `l2…` / `l3…` | number | V | Backup (EPS) output voltage per phase |
-| `eps.l1Current` / `l2…` / `l3…` | number | A | Backup (EPS) output current per phase |
-| `eps.l1Power` / `l2…` / `l3…` | number | W | Backup (EPS) output active power per phase |
-| `battery.serialNumber` / `model` / `swVersion` / `hwVersion` | string | — | Battery identity from the cloud's device list |
+| `inverter.pvHeatsinkTemperature`, `inverter.heatsinkTemperature`, `inverter.batteryHeatsinkTemperature` ⁺ | number | °C | Heatsink temperatures of the PV, inverter and battery stage |
+| `inverter.powerFaultCode`, `inverter.safetyFaultCode` ⁺ | string | — | Fault codes of the power and the safety controller |
+| `eps.l1Voltage`, `eps.l2Voltage`, `eps.l3Voltage` | number | V | Backup (EPS) output voltage per phase |
+| `eps.l1Current`, `eps.l2Current`, `eps.l3Current` | number | A | Backup (EPS) output current per phase |
+| `eps.l1Power`, `eps.l2Power`, `eps.l3Power` | number | W | Backup (EPS) output active power per phase |
+| `battery.serialNumber`, `battery.model`, `battery.swVersion`, `battery.hwVersion` | string | — | Battery identity from the cloud's device list |
 | `battery.capacity` | number | kWh | Installed battery capacity |
 | `battery.connected` | boolean | — | Battery reported online by the cloud |
 | `battery.type` | string | — | Battery chemistry as the cloud words it (e.g. `Li-Ion`) |
@@ -729,9 +755,9 @@ Created only when the cloud reports a hybrid inverter below the DTU; all of them
 | `battery.state` | number | — | Battery state as a number (2 = discharging was observed) |
 | `battery.stateText` | string | — | Battery state as the cloud words it |
 | `battery.faultCode` | string | — | Battery fault code (`0` = none) |
-| `battery.voltage` / `current` / `power` | number | V / A / W | Battery measurements from the battery management system |
+| `battery.voltage`, `battery.current`, `battery.power` | number | V / A / W | Battery measurements from the battery management system |
 | `battery.cycles` ⁺ | number | — | Charge cycles |
-| `battery.heating` / `heatingText` ⁺ | number / string | — | Battery heating status, as a number and as the cloud words it |
+| `battery.heating`, `battery.heatingText` ⁺ | number / string | — | Battery heating status, as a number and as the cloud words it |
 | `battery.workMode` | number | — | Working mode: 1 = self-consumption, 2 = economy, 3 = backup, 4 = off-grid, 5 = forced charging, 6 = forced discharging, 7 = peak shaving, 8 = time of use. Arrives with the regular station poll — nothing is sent to the device for it |
 | `battery.readSettings` | boolean (button) | — | Reads the battery settings from the device. **Reads only** — but the request travels down to the device and takes a few seconds, so it runs once per adapter start and then only when you press this button |
 | `battery.reserveSoc` | number | % | Reserved state of charge of the active working mode (from the settings read) |
@@ -741,15 +767,15 @@ Created only when the cloud reports a hybrid inverter below the DTU; all of them
 | `dryContact.mode` | number | — | Relay mode (0 = off) |
 | `dryContact.settingsJson` | string (JSON) | — | The complete relay settings as the device reports them, untouched |
 | `dryContact.settingsUpdated` | number | — | When the relay settings were last read |
-| `alarms.cloudActiveCount` / `alarms.cloudActiveJson` | number / string (JSON) | — | Active alarms of the inverter and its DTU as the cloud lists them (`code`, `time`, `source`, raw data words), refreshed on the slow poll |
-| `history.powerJson` / `batteryPowerJson` / `socJson` / `pvPowerJson` | string (JSON) | W / W / % / W | Today's curves of AC power, battery power, state of charge and — with PV on the inverter — PV power, one value per 5 minutes; `history.startTime` (ms) and `history.stepTime` (s) as for the local curve. Refreshed on the slow poll |
-| `battery.maxChargeCurrent` / `maxDischargeCurrent` | number | A | Current limits the battery allows |
-| `battery.chargeCutoffVoltage` / `dischargeCutoffVoltage` | number | V | Voltage limits of the battery |
-| `battery.cellTempMax` / `cellTempMin` | number | °C | Hottest / coldest cell |
-| `battery.moduleTempMax` / `moduleTempMin` | number | °C | Hottest / coldest module |
-| `battery.cellVoltageMax` / `cellVoltageMin` | number | V | Highest / lowest cell voltage |
-| `battery.moduleVoltageMax` / `moduleVoltageMin` | number | V | Highest / lowest module voltage |
-| `battery.inverterVoltage` / `inverterCurrent` / `inverterPower` | number | V / A / W | The same battery as the inverter measures it at its own terminals |
+| `alarms.cloudActiveCount`, `alarms.cloudActiveJson` | number / string (JSON) | — | Active alarms of the inverter and its DTU as the cloud lists them (`code`, `time`, `source`, raw data words), refreshed on the slow poll |
+| `history.powerJson`, `history.batteryPowerJson`, `history.socJson`, `history.pvPowerJson` | string (JSON) | W / W / % / W | Today's curves of AC power, battery power, state of charge and — with PV on the inverter — PV power, one value per 5 minutes; `history.startTime` (ms) and `history.stepTime` (s) as for the local curve. Refreshed on the slow poll |
+| `battery.maxChargeCurrent`, `battery.maxDischargeCurrent` | number | A | Current limits the battery allows |
+| `battery.chargeCutoffVoltage`, `battery.dischargeCutoffVoltage` | number | V | Voltage limits of the battery |
+| `battery.cellTempMax`, `battery.cellTempMin` | number | °C | Hottest / coldest cell |
+| `battery.moduleTempMax`, `battery.moduleTempMin` | number | °C | Hottest / coldest module |
+| `battery.cellVoltageMax`, `battery.cellVoltageMin` | number | V | Highest / lowest cell voltage |
+| `battery.moduleVoltageMax`, `battery.moduleVoltageMin` | number | V | Highest / lowest module voltage |
+| `battery.inverterVoltage`, `battery.inverterCurrent`, `battery.inverterPower` | number | V / A / W | The same battery as the inverter measures it at its own terminals |
 
 ### `station-<id>.*` — Measuring Points: Grid Meter, Loads, PV Meter, Generator (cloud, dynamic)
 
@@ -758,20 +784,20 @@ Read from the cloud for every plant that has them — the adapter asks only for 
 | State | Type | Unit | Description |
 |-------|------|------|-------------|
 | `gridMeter.connected` | boolean | — | Grid meter reported online |
-| `gridMeter.power` / `reactivePower` / `powerFactor` / `frequency` | number | W / var / — / Hz | Totals at the grid connection |
-| `gridMeter.l1Voltage` / `l1Current` / `l1Power` / `l1ReactivePower` / `l1PowerFactor` (also `l2…`, `l3…`) | number | V / A / W / var / — | Per-phase readings of the grid meter |
-| `gridMeter.importToday` / `exportToday` ⁺ (also per phase: `l1ImportToday`, `l1ExportToday`, …) | number | kWh | Energy drawn from / fed into the grid today |
-| `load.l1Voltage` / `l1Power` (also `l2…`, `l3…`) | number | V / W | Voltage and active power on the load side |
-| `load.energyToday` ⁺ (also per phase: `l1EnergyToday`, …) | number | kWh | Energy consumed today |
-| `load.mode` / `modeText` ⁺ | number / string | — | Load mode, as a number and as the cloud words it |
+| `gridMeter.power`, `gridMeter.reactivePower`, `gridMeter.powerFactor`, `gridMeter.frequency` | number | W / var / — / Hz | Totals at the grid connection |
+| `gridMeter.l1Voltage`, `gridMeter.l1Current`, `gridMeter.l1Power`, `gridMeter.l1ReactivePower`, `gridMeter.l1PowerFactor`, `gridMeter.l2Voltage`, `gridMeter.l2Current`, `gridMeter.l2Power`, `gridMeter.l2ReactivePower`, `gridMeter.l2PowerFactor`, `gridMeter.l3Voltage`, `gridMeter.l3Current`, `gridMeter.l3Power`, `gridMeter.l3ReactivePower`, `gridMeter.l3PowerFactor` | number | V / A / W / var / — | Per-phase readings of the grid meter |
+| `gridMeter.importToday`, `gridMeter.exportToday`, `gridMeter.l1ImportToday`, `gridMeter.l1ExportToday`, `gridMeter.l2ImportToday`, `gridMeter.l2ExportToday`, `gridMeter.l3ImportToday`, `gridMeter.l3ExportToday` ⁺ | number | kWh | Energy drawn from / fed into the grid today |
+| `load.l1Voltage`, `load.l1Power`, `load.l2Voltage`, `load.l2Power`, `load.l3Voltage`, `load.l3Power` | number | V / W | Voltage and active power on the load side |
+| `load.energyToday`, `load.l1EnergyToday`, `load.l2EnergyToday`, `load.l3EnergyToday` ⁺ | number | kWh | Energy consumed today |
+| `load.mode`, `load.modeText` ⁺ | number / string | — | Load mode, as a number and as the cloud words it |
 | `pvMeter.connected` | boolean | — | PV meter reported online (a meter on a third-party PV inverter) |
-| `pvMeter.power` / `reactivePower` / `frequency` | number | W / var / Hz | Totals of the metered PV inverter |
-| `pvMeter.l1Voltage` / `l1Current` / `l1Power` / `l1ReactivePower` (also `l2…`, `l3…`) | number | V / A / W / var | Per-phase readings of the PV meter |
-| `pvMeter.energyToday` ⁺ (also per phase: `l1EnergyToday`, …) | number | kWh | Energy of the metered PV inverter today |
-| `generator.state` / `stateText` ⁺ | number / string | — | Generator status |
-| `generator.power` / `reactivePower` / `frequency` ⁺ | number | W / var / Hz | Generator totals |
-| `generator.l1Voltage` / `l1Current` / `l1Power` / `l1ReactivePower` (also `l2…`, `l3…`) ⁺ | number | V / A / W / var | Per-phase generator readings |
-| `generator.energyToday` ⁺ (also per phase: `l1EnergyToday`, …) | number | kWh | Generator energy today |
+| `pvMeter.power`, `pvMeter.reactivePower`, `pvMeter.frequency` | number | W / var / Hz | Totals of the metered PV inverter |
+| `pvMeter.l1Voltage`, `pvMeter.l1Current`, `pvMeter.l1Power`, `pvMeter.l1ReactivePower`, `pvMeter.l2Voltage`, `pvMeter.l2Current`, `pvMeter.l2Power`, `pvMeter.l2ReactivePower`, `pvMeter.l3Voltage`, `pvMeter.l3Current`, `pvMeter.l3Power`, `pvMeter.l3ReactivePower` | number | V / A / W / var | Per-phase readings of the PV meter |
+| `pvMeter.energyToday`, `pvMeter.l1EnergyToday`, `pvMeter.l2EnergyToday`, `pvMeter.l3EnergyToday` ⁺ | number | kWh | Energy of the metered PV inverter today |
+| `generator.state`, `generator.stateText` ⁺ | number / string | — | Generator status |
+| `generator.power`, `generator.reactivePower`, `generator.frequency` ⁺ | number | W / var / Hz | Generator totals |
+| `generator.l1Voltage`, `generator.l1Current`, `generator.l1Power`, `generator.l1ReactivePower`, `generator.l2Voltage`, `generator.l2Current`, `generator.l2Power`, `generator.l2ReactivePower`, `generator.l3Voltage`, `generator.l3Current`, `generator.l3Power`, `generator.l3ReactivePower` ⁺ | number | V / A / W / var | Per-phase generator readings |
+| `generator.energyToday`, `generator.l1EnergyToday`, `generator.l2EnergyToday`, `generator.l3EnergyToday` ⁺ | number | kWh | Generator energy today |
 
 ### Adapter-level States
 

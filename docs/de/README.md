@@ -314,6 +314,32 @@ hoymiles.0.station-12345.info.stationName
 
 ## Datenpunkte
 
+Jedes Gerät und jede Anlage ist in diese Channels gegliedert. Ein Channel erscheint nur dort, wo es seine Daten gibt — die Abschnitte darunter führen die Datenpunkte jedes Channels auf.
+
+| Channel | Name im Objektbaum | Wo |
+|---------|--------------------|----|
+| `<dtuSerial>.info` | Geräteinformationen | jede DTU |
+| `<dtuSerial>.grid` | Netzeinspeisung | jede DTU |
+| `<dtuSerial>.pv0` … `<dtuSerial>.pv3` | PV-Eingang 0 … 3 | je vorhandenem PV-Eingang des Wechselrichters |
+| `<dtuSerial>.inverter` | Wechselrichter | jede DTU |
+| `<dtuSerial>.dtu` | DTU | jede DTU |
+| `<dtuSerial>.alarms` | Alarme & Warnungen | lokale Geräte |
+| `<dtuSerial>.config` | DTU-Konfiguration | lokale Geräte |
+| `<dtuSerial>.gridProfile` | Netzprofil | jede DTU (lokal gelesen, bei reinen Cloud-Geräten über die Cloud) |
+| `<dtuSerial>.history` | Leistungsverlauf | lokale Tageskurve; bei Hybrid-Wechselrichtern zusätzlich die Cloud-Kurven |
+| `<dtuSerial>.meter` | Energiezähler / Shelly-Zähler | erst wenn ein kabelgebundener oder Netzwerk-Zähler Daten liefert |
+| `<dtuSerial>.eps` | Notstrom-Ausgang (EPS) | Hybrid-Wechselrichter (HAT-Serie, Cloud) |
+| `<dtuSerial>.battery` | Batterie | Hybrid-Wechselrichter mit Batterie (Cloud) |
+| `<dtuSerial>.dryContact` | Trockenkontakte (Relais) | Hybrid-Wechselrichter mit Relais-Hardware (Cloud) |
+| `station-<id>.info` | Anlagen-Info | jede Cloud-Anlage |
+| `station-<id>.grid` | Anlagen-Netzeinspeisung | jede Cloud-Anlage |
+| `station-<id>.weather` | Wetter am Standort | jede Cloud-Anlage |
+| `station-<id>.warn` | Anlagen-Warnungen | jede Cloud-Anlage |
+| `station-<id>.gridMeter` | Netzzähler | Anlagen, für die die Cloud einen Netzzähler meldet |
+| `station-<id>.load` | Verbraucher | Anlagen, für die die Cloud Verbraucher meldet |
+| `station-<id>.pvMeter` | PV-Zähler (Fremd-Wechselrichter) | Anlagen, für die die Cloud einen PV-Zähler meldet |
+| `station-<id>.generator` | Generator | Anlagen, für die die Cloud einen Generator meldet |
+
 ### `<dtuSerial>.grid.*` — Netzeinspeisung (pro DTU)
 
 | Datenpunkt | Typ | Einheit | Beschreibung |
@@ -402,13 +428,13 @@ Die Anzahl ermittelt der Adapter in dieser Reihenfolge:
 | `grid.batteryPower` | number | W | Batterieleistung (Echtzeit) — nur bei Batteriesystemen. Bei einer Speicheranlage: +Entladen/−Laden, wie in den Diagrammen des S-Miles-Portals; die Richtung stammt aus dem Energiefluss-Graphen der Cloud, so wie es auch das Portal macht |
 | `grid.pvUtilization` | number | % | PV-Auslastung (Echtzeit) |
 | `grid.dailyEnergy` | number | kWh | Tagesenergie |
-| `grid.gridImportToday` / `gridImportMonth` / `gridImportYear` / `gridImportTotal` | number | kWh | Von der Last aus dem Netz bezogene Energie heute / diesen Monat / dieses Jahr / gesamt — nur bei Anlagen mit Batterie oder Netzzähler; Quelle: Reiter „Ertrag & Verbrauch“ der S-Miles-App |
-| `grid.gridExportToday` / `gridExportMonth` / `gridExportYear` / `gridExportTotal` | number | kWh | Ins Netz eingespeiste PV-Energie heute / diesen Monat / dieses Jahr / gesamt — nur bei Anlagen mit Batterie oder Netzzähler; Quelle: Reiter „Ertrag & Verbrauch“ der S-Miles-App |
-| `grid.pvToLoadToday` / `pvToLoadMonth` / `pvToLoadYear` / `pvToLoadTotal` | number | kWh | Direkt von der Last genutzte PV-Energie heute / diesen Monat / dieses Jahr / gesamt — nur bei Anlagen mit Batterie oder Netzzähler; Quelle: Reiter „Ertrag & Verbrauch“ der S-Miles-App |
-| `grid.consumptionToday` / `consumptionMonth` / `consumptionYear` / `consumptionTotal` | number | kWh | Verbrauch heute / diesen Monat / dieses Jahr / gesamt (Last aus PV + Batterie + Netz) — nur bei Anlagen mit Batterie oder Netzzähler; Quelle: Reiter „Ertrag & Verbrauch“ der S-Miles-App |
-| `grid.selfSufficiencyToday` / `selfSufficiencyMonth` / `selfSufficiencyYear` / `selfSufficiencyTotal` | number | % | Autarkie heute / diesen Monat / dieses Jahr / gesamt: Anteil des Verbrauchs, der nicht aus dem Netz kam, eine Nachkommastelle, 0 solange nichts verbraucht wurde — berechnet wie in der App — nur bei Anlagen mit Batterie oder Netzzähler; Quelle: Reiter „Ertrag & Verbrauch“ der S-Miles-App |
-| `grid.batteryChargeToday` / `batteryChargeMonth` / `batteryChargeYear` / `batteryChargeTotal` | number | kWh | Aus PV in die Batterie geladene Energie heute / diesen Monat / dieses Jahr / gesamt — nur bei Batteriesystemen |
-| `grid.batteryDischargeToday` / `batteryDischargeMonth` / `batteryDischargeYear` / `batteryDischargeTotal` | number | kWh | Von der Last aus der Batterie bezogene Energie heute / diesen Monat / dieses Jahr / gesamt — nur bei Batteriesystemen |
+| `grid.gridImportToday`, `grid.gridImportMonth`, `grid.gridImportYear`, `grid.gridImportTotal` | number | kWh | Von der Last aus dem Netz bezogene Energie heute / diesen Monat / dieses Jahr / gesamt — nur bei Anlagen mit Batterie oder Netzzähler; Quelle: Reiter „Ertrag & Verbrauch“ der S-Miles-App |
+| `grid.gridExportToday`, `grid.gridExportMonth`, `grid.gridExportYear`, `grid.gridExportTotal` | number | kWh | Ins Netz eingespeiste PV-Energie heute / diesen Monat / dieses Jahr / gesamt — nur bei Anlagen mit Batterie oder Netzzähler; Quelle: Reiter „Ertrag & Verbrauch“ der S-Miles-App |
+| `grid.pvToLoadToday`, `grid.pvToLoadMonth`, `grid.pvToLoadYear`, `grid.pvToLoadTotal` | number | kWh | Direkt von der Last genutzte PV-Energie heute / diesen Monat / dieses Jahr / gesamt — nur bei Anlagen mit Batterie oder Netzzähler; Quelle: Reiter „Ertrag & Verbrauch“ der S-Miles-App |
+| `grid.consumptionToday`, `grid.consumptionMonth`, `grid.consumptionYear`, `grid.consumptionTotal` | number | kWh | Verbrauch heute / diesen Monat / dieses Jahr / gesamt (Last aus PV + Batterie + Netz) — nur bei Anlagen mit Batterie oder Netzzähler; Quelle: Reiter „Ertrag & Verbrauch“ der S-Miles-App |
+| `grid.selfSufficiencyToday`, `grid.selfSufficiencyMonth`, `grid.selfSufficiencyYear`, `grid.selfSufficiencyTotal` | number | % | Autarkie heute / diesen Monat / dieses Jahr / gesamt: Anteil des Verbrauchs, der nicht aus dem Netz kam, eine Nachkommastelle, 0 solange nichts verbraucht wurde — berechnet wie in der App — nur bei Anlagen mit Batterie oder Netzzähler; Quelle: Reiter „Ertrag & Verbrauch“ der S-Miles-App |
+| `grid.batteryChargeToday`, `grid.batteryChargeMonth`, `grid.batteryChargeYear`, `grid.batteryChargeTotal` | number | kWh | Aus PV in die Batterie geladene Energie heute / diesen Monat / dieses Jahr / gesamt — nur bei Batteriesystemen |
+| `grid.batteryDischargeToday`, `grid.batteryDischargeMonth`, `grid.batteryDischargeYear`, `grid.batteryDischargeTotal` | number | kWh | Von der Last aus der Batterie bezogene Energie heute / diesen Monat / dieses Jahr / gesamt — nur bei Batteriesystemen |
 | `grid.monthEnergy` | number | kWh | Monatsenergie |
 | `grid.yearEnergy` | number | kWh | Jahresenergie |
 | `grid.totalEnergy` | number | kWh | Gesamtenergie |
@@ -418,8 +444,8 @@ Die Anzahl ermittelt der Adapter in dieser Reihenfolge:
 | `grid.currency` | string | — | Währungscode |
 | `grid.isBalance` | boolean | — | Nulleinspeisung aktiv |
 | `grid.isReflux` | boolean | — | Rückspeisung aktiv |
-| `grid.todayIncome` / `monthIncome` / `yearIncome` / `totalIncome` | number | — | Ertrag heute / diesen Monat / dieses Jahr / gesamt. Wo die Cloud eine eigene Abrechnung führt (Anlagen mit Tarif), werden deren Zahlen verwendet; sonst werden heute/gesamt als Ertrag × Preis geschätzt |
-| `grid.todayCost` / `monthCost` / `yearCost` / `totalCost` | number | — | Stromkosten heute / diesen Monat / dieses Jahr / gesamt aus der Abrechnung der Cloud — nur bei Anlagen mit Tarif |
+| `grid.todayIncome`, `grid.monthIncome`, `grid.yearIncome`, `grid.totalIncome` | number | — | Ertrag heute / diesen Monat / dieses Jahr / gesamt. Wo die Cloud eine eigene Abrechnung führt (Anlagen mit Tarif), werden deren Zahlen verwendet; sonst werden heute/gesamt als Ertrag × Preis geschätzt |
+| `grid.todayCost`, `grid.monthCost`, `grid.yearCost`, `grid.totalCost` | number | — | Stromkosten heute / diesen Monat / dieses Jahr / gesamt aus der Abrechnung der Cloud — nur bei Anlagen mit Tarif |
 
 ### `station-<id>.info.*` — Stationsinformation (Cloud)
 
@@ -711,22 +737,22 @@ Wird nur angelegt, wenn die Cloud unter der DTU einen Hybrid-Wechselrichter meld
 
 | Datenpunkt | Typ | Einheit | Beschreibung |
 |------------|-----|---------|--------------|
-| `grid.l1Voltage` / `l2…` / `l3…` | number | V | AC-Spannung des Wechselrichters je Phase |
-| `grid.l1Current` / `l2…` / `l3…` | number | A | AC-Strom des Wechselrichters je Phase |
-| `grid.l1Power` / `l2…` / `l3…` | number | W | Wirkleistung des Wechselrichters je Phase |
-| `grid.l1ReactivePower` / `l2…` / `l3…` | number | var | Blindleistung des Wechselrichters je Phase |
+| `grid.l1Voltage`, `grid.l2Voltage`, `grid.l3Voltage` | number | V | AC-Spannung des Wechselrichters je Phase |
+| `grid.l1Current`, `grid.l2Current`, `grid.l3Current` | number | A | AC-Strom des Wechselrichters je Phase |
+| `grid.l1Power`, `grid.l2Power`, `grid.l3Power` | number | W | Wirkleistung des Wechselrichters je Phase |
+| `grid.l1ReactivePower`, `grid.l2ReactivePower`, `grid.l3ReactivePower` | number | var | Blindleistung des Wechselrichters je Phase |
 | `inverter.operatingState` | number | — | Betriebsstatus als Zahl (beobachtet: 3 = netzgebunden; die vollständige Werteliste ist noch nicht bekannt) |
 | `inverter.operatingStateText` | string | — | Betriebsstatus im Wortlaut der Cloud |
 | `inverter.busVoltage` | number | V | Zwischenkreisspannung |
 | `inverter.drmMode` | number | — | DRM-Modus (Demand Response) |
 | `inverter.pvPower` | number | W | PV-Leistung aller Eingänge zusammen |
 | `inverter.pvEnergyToday` ⁺ | number | kWh | PV-Energie aller Eingänge heute |
-| `inverter.pvHeatsinkTemperature` / `heatsinkTemperature` / `batteryHeatsinkTemperature` ⁺ | number | °C | Kühlkörpertemperaturen von PV-, Wechselrichter- und Batteriestufe |
-| `inverter.powerFaultCode` / `safetyFaultCode` ⁺ | string | — | Fehlercodes des Leistungs- und des Sicherheits-Controllers |
-| `eps.l1Voltage` / `l2…` / `l3…` | number | V | Spannung am Notstrom-Ausgang (EPS) je Phase |
-| `eps.l1Current` / `l2…` / `l3…` | number | A | Strom am Notstrom-Ausgang (EPS) je Phase |
-| `eps.l1Power` / `l2…` / `l3…` | number | W | Wirkleistung am Notstrom-Ausgang (EPS) je Phase |
-| `battery.serialNumber` / `model` / `swVersion` / `hwVersion` | string | — | Batterie-Stammdaten aus der Geräteliste der Cloud |
+| `inverter.pvHeatsinkTemperature`, `inverter.heatsinkTemperature`, `inverter.batteryHeatsinkTemperature` ⁺ | number | °C | Kühlkörpertemperaturen von PV-, Wechselrichter- und Batteriestufe |
+| `inverter.powerFaultCode`, `inverter.safetyFaultCode` ⁺ | string | — | Fehlercodes des Leistungs- und des Sicherheits-Controllers |
+| `eps.l1Voltage`, `eps.l2Voltage`, `eps.l3Voltage` | number | V | Spannung am Notstrom-Ausgang (EPS) je Phase |
+| `eps.l1Current`, `eps.l2Current`, `eps.l3Current` | number | A | Strom am Notstrom-Ausgang (EPS) je Phase |
+| `eps.l1Power`, `eps.l2Power`, `eps.l3Power` | number | W | Wirkleistung am Notstrom-Ausgang (EPS) je Phase |
+| `battery.serialNumber`, `battery.model`, `battery.swVersion`, `battery.hwVersion` | string | — | Batterie-Stammdaten aus der Geräteliste der Cloud |
 | `battery.capacity` | number | kWh | Installierte Batteriekapazität |
 | `battery.connected` | boolean | — | Batterie laut Cloud online |
 | `battery.type` | string | — | Batterietyp im Wortlaut der Cloud (z. B. `Li-Ion`) |
@@ -735,9 +761,9 @@ Wird nur angelegt, wenn die Cloud unter der DTU einen Hybrid-Wechselrichter meld
 | `battery.state` | number | — | Batteriestatus als Zahl (beobachtet: 2 = Entladen) |
 | `battery.stateText` | string | — | Batteriestatus im Wortlaut der Cloud |
 | `battery.faultCode` | string | — | Fehlercode der Batterie (`0` = keiner) |
-| `battery.voltage` / `current` / `power` | number | V / A / W | Messwerte aus dem Batteriemanagementsystem |
+| `battery.voltage`, `battery.current`, `battery.power` | number | V / A / W | Messwerte aus dem Batteriemanagementsystem |
 | `battery.cycles` ⁺ | number | — | Ladezyklen |
-| `battery.heating` / `heatingText` ⁺ | number / string | — | Heizstatus der Batterie, als Zahl und im Wortlaut der Cloud |
+| `battery.heating`, `battery.heatingText` ⁺ | number / string | — | Heizstatus der Batterie, als Zahl und im Wortlaut der Cloud |
 | `battery.workMode` | number | — | Betriebsmodus: 1 = Selbstverbrauch, 2 = Sparmodus, 3 = Backup, 4 = netzunabhängig, 5 = erzwungenes Laden, 6 = erzwungenes Entladen, 7 = Spitzendeckung, 8 = Nutzungszeit. Kommt mit der normalen Stationsabfrage — dafür wird nichts an das Gerät gesendet |
 | `battery.readSettings` | boolean (Button) | — | Liest die Batterie-Einstellungen vom Gerät. **Liest nur** — die Anfrage geht aber bis zum Gerät hinunter und dauert einige Sekunden; sie läuft deshalb einmal pro Adapterstart und danach nur auf Knopfdruck |
 | `battery.reserveSoc` | number | % | Reservierter Ladezustand des aktiven Betriebsmodus (aus dem Einstellungs-Abruf) |
@@ -747,15 +773,15 @@ Wird nur angelegt, wenn die Cloud unter der DTU einen Hybrid-Wechselrichter meld
 | `dryContact.mode` | number | — | Relaismodus (0 = aus) |
 | `dryContact.settingsJson` | string (JSON) | — | Die kompletten Relais-Einstellungen, wie das Gerät sie meldet, unverändert |
 | `dryContact.settingsUpdated` | number | — | Zeitpunkt des letzten Relais-Abrufs |
-| `alarms.cloudActiveCount` / `alarms.cloudActiveJson` | number / string (JSON) | — | Aktive Alarme des Wechselrichters und seiner DTU, wie die Cloud sie listet (`code`, `time`, `source`, Rohdatenworte), beim Slow-Poll aktualisiert |
-| `history.powerJson` / `batteryPowerJson` / `socJson` / `pvPowerJson` | string (JSON) | W / W / % / W | Tageskurven von AC-Leistung, Batterieleistung, Ladezustand und — bei PV am Wechselrichter — PV-Leistung, ein Wert je 5 Minuten; `history.startTime` (ms) und `history.stepTime` (s) wie bei der lokalen Kurve. Beim Slow-Poll aktualisiert |
-| `battery.maxChargeCurrent` / `maxDischargeCurrent` | number | A | Stromgrenzen, die die Batterie zulässt |
-| `battery.chargeCutoffVoltage` / `dischargeCutoffVoltage` | number | V | Spannungsgrenzen der Batterie |
-| `battery.cellTempMax` / `cellTempMin` | number | °C | Wärmste / kälteste Zelle |
-| `battery.moduleTempMax` / `moduleTempMin` | number | °C | Wärmstes / kältestes Modul |
-| `battery.cellVoltageMax` / `cellVoltageMin` | number | V | Höchste / niedrigste Zellspannung |
-| `battery.moduleVoltageMax` / `moduleVoltageMin` | number | V | Höchste / niedrigste Modulspannung |
-| `battery.inverterVoltage` / `inverterCurrent` / `inverterPower` | number | V / A / W | Dieselbe Batterie, wie der Wechselrichter sie an seinen Klemmen misst |
+| `alarms.cloudActiveCount`, `alarms.cloudActiveJson` | number / string (JSON) | — | Aktive Alarme des Wechselrichters und seiner DTU, wie die Cloud sie listet (`code`, `time`, `source`, Rohdatenworte), beim Slow-Poll aktualisiert |
+| `history.powerJson`, `history.batteryPowerJson`, `history.socJson`, `history.pvPowerJson` | string (JSON) | W / W / % / W | Tageskurven von AC-Leistung, Batterieleistung, Ladezustand und — bei PV am Wechselrichter — PV-Leistung, ein Wert je 5 Minuten; `history.startTime` (ms) und `history.stepTime` (s) wie bei der lokalen Kurve. Beim Slow-Poll aktualisiert |
+| `battery.maxChargeCurrent`, `battery.maxDischargeCurrent` | number | A | Stromgrenzen, die die Batterie zulässt |
+| `battery.chargeCutoffVoltage`, `battery.dischargeCutoffVoltage` | number | V | Spannungsgrenzen der Batterie |
+| `battery.cellTempMax`, `battery.cellTempMin` | number | °C | Wärmste / kälteste Zelle |
+| `battery.moduleTempMax`, `battery.moduleTempMin` | number | °C | Wärmstes / kältestes Modul |
+| `battery.cellVoltageMax`, `battery.cellVoltageMin` | number | V | Höchste / niedrigste Zellspannung |
+| `battery.moduleVoltageMax`, `battery.moduleVoltageMin` | number | V | Höchste / niedrigste Modulspannung |
+| `battery.inverterVoltage`, `battery.inverterCurrent`, `battery.inverterPower` | number | V / A / W | Dieselbe Batterie, wie der Wechselrichter sie an seinen Klemmen misst |
 
 ### `station-<id>.*` — Messpunkte: Netzzähler, Verbraucher, PV-Zähler, Generator (Cloud, dynamisch)
 
@@ -764,20 +790,20 @@ Wird für jede Anlage aus der Cloud gelesen, die solche Messpunkte hat — der A
 | Datenpunkt | Typ | Einheit | Beschreibung |
 |------------|-----|---------|--------------|
 | `gridMeter.connected` | boolean | — | Netzzähler laut Cloud online |
-| `gridMeter.power` / `reactivePower` / `powerFactor` / `frequency` | number | W / var / — / Hz | Summenwerte am Netzanschluss |
-| `gridMeter.l1Voltage` / `l1Current` / `l1Power` / `l1ReactivePower` / `l1PowerFactor` (auch `l2…`, `l3…`) | number | V / A / W / var / — | Messwerte des Netzzählers je Phase |
-| `gridMeter.importToday` / `exportToday` ⁺ (auch je Phase: `l1ImportToday`, `l1ExportToday`, …) | number | kWh | Heute aus dem Netz bezogene / ins Netz eingespeiste Energie |
-| `load.l1Voltage` / `l1Power` (auch `l2…`, `l3…`) | number | V / W | Spannung und Wirkleistung auf der Verbraucherseite |
-| `load.energyToday` ⁺ (auch je Phase: `l1EnergyToday`, …) | number | kWh | Heute verbrauchte Energie |
-| `load.mode` / `modeText` ⁺ | number / string | — | Lastmodus, als Zahl und im Wortlaut der Cloud |
+| `gridMeter.power`, `gridMeter.reactivePower`, `gridMeter.powerFactor`, `gridMeter.frequency` | number | W / var / — / Hz | Summenwerte am Netzanschluss |
+| `gridMeter.l1Voltage`, `gridMeter.l1Current`, `gridMeter.l1Power`, `gridMeter.l1ReactivePower`, `gridMeter.l1PowerFactor`, `gridMeter.l2Voltage`, `gridMeter.l2Current`, `gridMeter.l2Power`, `gridMeter.l2ReactivePower`, `gridMeter.l2PowerFactor`, `gridMeter.l3Voltage`, `gridMeter.l3Current`, `gridMeter.l3Power`, `gridMeter.l3ReactivePower`, `gridMeter.l3PowerFactor` | number | V / A / W / var / — | Messwerte des Netzzählers je Phase |
+| `gridMeter.importToday`, `gridMeter.exportToday`, `gridMeter.l1ImportToday`, `gridMeter.l1ExportToday`, `gridMeter.l2ImportToday`, `gridMeter.l2ExportToday`, `gridMeter.l3ImportToday`, `gridMeter.l3ExportToday` ⁺ | number | kWh | Heute aus dem Netz bezogene / ins Netz eingespeiste Energie |
+| `load.l1Voltage`, `load.l1Power`, `load.l2Voltage`, `load.l2Power`, `load.l3Voltage`, `load.l3Power` | number | V / W | Spannung und Wirkleistung auf der Verbraucherseite |
+| `load.energyToday`, `load.l1EnergyToday`, `load.l2EnergyToday`, `load.l3EnergyToday` ⁺ | number | kWh | Heute verbrauchte Energie |
+| `load.mode`, `load.modeText` ⁺ | number / string | — | Lastmodus, als Zahl und im Wortlaut der Cloud |
 | `pvMeter.connected` | boolean | — | PV-Zähler laut Cloud online (ein Zähler an einem Fremd-PV-Wechselrichter) |
-| `pvMeter.power` / `reactivePower` / `frequency` | number | W / var / Hz | Summenwerte des gemessenen PV-Wechselrichters |
-| `pvMeter.l1Voltage` / `l1Current` / `l1Power` / `l1ReactivePower` (auch `l2…`, `l3…`) | number | V / A / W / var | Messwerte des PV-Zählers je Phase |
-| `pvMeter.energyToday` ⁺ (auch je Phase: `l1EnergyToday`, …) | number | kWh | Energie des gemessenen PV-Wechselrichters heute |
-| `generator.state` / `stateText` ⁺ | number / string | — | Generatorstatus |
-| `generator.power` / `reactivePower` / `frequency` ⁺ | number | W / var / Hz | Summenwerte des Generators |
-| `generator.l1Voltage` / `l1Current` / `l1Power` / `l1ReactivePower` (auch `l2…`, `l3…`) ⁺ | number | V / A / W / var | Messwerte des Generators je Phase |
-| `generator.energyToday` ⁺ (auch je Phase: `l1EnergyToday`, …) | number | kWh | Energie des Generators heute |
+| `pvMeter.power`, `pvMeter.reactivePower`, `pvMeter.frequency` | number | W / var / Hz | Summenwerte des gemessenen PV-Wechselrichters |
+| `pvMeter.l1Voltage`, `pvMeter.l1Current`, `pvMeter.l1Power`, `pvMeter.l1ReactivePower`, `pvMeter.l2Voltage`, `pvMeter.l2Current`, `pvMeter.l2Power`, `pvMeter.l2ReactivePower`, `pvMeter.l3Voltage`, `pvMeter.l3Current`, `pvMeter.l3Power`, `pvMeter.l3ReactivePower` | number | V / A / W / var | Messwerte des PV-Zählers je Phase |
+| `pvMeter.energyToday`, `pvMeter.l1EnergyToday`, `pvMeter.l2EnergyToday`, `pvMeter.l3EnergyToday` ⁺ | number | kWh | Energie des gemessenen PV-Wechselrichters heute |
+| `generator.state`, `generator.stateText` ⁺ | number / string | — | Generatorstatus |
+| `generator.power`, `generator.reactivePower`, `generator.frequency` ⁺ | number | W / var / Hz | Summenwerte des Generators |
+| `generator.l1Voltage`, `generator.l1Current`, `generator.l1Power`, `generator.l1ReactivePower`, `generator.l2Voltage`, `generator.l2Current`, `generator.l2Power`, `generator.l2ReactivePower`, `generator.l3Voltage`, `generator.l3Current`, `generator.l3Power`, `generator.l3ReactivePower` ⁺ | number | V / A / W / var | Messwerte des Generators je Phase |
+| `generator.energyToday`, `generator.l1EnergyToday`, `generator.l2EnergyToday`, `generator.l3EnergyToday` ⁺ | number | kWh | Energie des Generators heute |
 
 ### Adapter-Ebene
 
