@@ -194,6 +194,14 @@ describe("stateDefinitions – station", function () {
 		assert.strictEqual(def.max, 3276.7, "signed 16-bit range of 0.1 W in the inverter");
 	});
 
+	// a201 dtu_step_time and a209 server_send_time read the same RAM byte (2WB 0x73820), in minutes.
+	it("dtu.stepTime carries the unit of config.serverSendTime", function () {
+		const step = states.find(s => s.id === "dtu.stepTime");
+		const send = states.find(s => s.id === "config.serverSendTime");
+		assert.strictEqual(step.unit, "min");
+		assert.strictEqual(step.unit, send.unit);
+	});
+
 	it("inverter.powerLimit stays a percent state", function () {
 		const def = states.find(s => s.id === "inverter.powerLimit");
 		assert.strictEqual(def.unit, "%");

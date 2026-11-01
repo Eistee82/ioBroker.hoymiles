@@ -324,6 +324,41 @@ describe("CloudManager – event delegation", function () {
 		assert.strictEqual(typeof manager.handleStationStateChange, "undefined");
 	});
 
+	function relayManager(enableCloudRelay, localContexts) {
+		return new CloudManager({
+			adapter: makeMockAdapter(),
+			protobuf: makeMockProtobuf(),
+			cloudUser: "test@example.com",
+			cloudPassword: "password123",
+			enableLocal: true,
+			enableCloudRelay,
+			dataInterval: 5,
+			slowPollFactor: 6,
+			localContexts,
+		});
+	}
+
+	// Only a TCP device runs a relay; Bluetooth devices are not among localContexts.
+	it("follows a relay only when there is a TCP device to run one", function () {
+		assert.strictEqual(relayManager(true, [{}]).hasActiveRelay(), true);
+		assert.strictEqual(relayManager(true, []).hasActiveRelay(), false, "Bluetooth devices alone");
+		assert.strictEqual(relayManager(false, [{}]).hasActiveRelay(), false);
+	});
+
+	it("does not enter night mode while a Bluetooth inverter is still connected", function () {
+		const manager = relayManager(true, [{ connection: { connected: false } }]);
+		let nights = 0;
+		manager.cloudPoller = {
+			onLocalDisconnected: async () => {
+				nights++;
+			},
+		};
+		manager.onLocalDisconnected(true);
+		assert.strictEqual(nights, 0);
+		manager.onLocalDisconnected(false);
+		assert.strictEqual(nights, 1);
+	});
+
 	it("readDryContactSettings does not throw when no poller exists yet", async function () {
 		const manager = new CloudManager({
 			adapter: makeMockAdapter(),

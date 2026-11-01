@@ -187,7 +187,11 @@ class CloudPoller {
         if (minutes <= 0) {
             return;
         }
-        this.pollIntervalMs = Math.max(minutes * 60 * 1000, MIN_POLL_MS);
+        const intervalMs = Math.max(minutes * 60 * 1000, MIN_POLL_MS);
+        if (intervalMs === this.pollIntervalMs) {
+            return;
+        }
+        this.pollIntervalMs = intervalMs;
         if (this.state === "POLLING_ACTIVE" && this.pollTimer) {
             this.adapter.clearTimeout(this.pollTimer);
             this.pollTimer = undefined;

@@ -220,12 +220,26 @@ class CloudManager {
 	/**
 	 * Notify CloudPoller that a local connection was lost.
 	 * Enters night mode if ALL local connections are offline.
+	 *
+	 * @param otherLinkUp - Whether a local link outside the TCP devices — a paired Bluetooth
+	 *   inverter — is still up.
 	 */
-	onLocalDisconnected(): void {
-		const anyConnected = this.localContexts.some(c => c.connection?.connected);
+	onLocalDisconnected(otherLinkUp = false): void {
+		const anyConnected = otherLinkUp || this.localContexts.some(c => c.connection?.connected);
 		if (!anyConnected) {
 			void this.cloudPoller?.onLocalDisconnected();
 		}
+	}
+
+	/**
+	 * Whether cloud polls follow a local cloud relay instead of their own timer.
+	 *
+	 * Only a TCP device runs a relay; a Bluetooth device never does, it keeps its own cloud
+	 * connection. With Bluetooth devices alone, polls waiting for relay events would wait forever
+	 * — so the poller keeps its own timer there, whatever the relay setting says.
+	 */
+	hasActiveRelay(): boolean {
+		return this.enableCloudRelay && this.enableLocal && this.localContexts.length > 0;
 	}
 
 	/** Perform cloud login, device discovery, and start cloud polling. */
@@ -239,7 +253,7 @@ class CloudManager {
 
 		await this._discoverDevices();
 
-		const hasActiveRelay = this.enableCloudRelay && this.enableLocal;
+		const hasActiveRelay = this.hasActiveRelay();
 		this.cloudPoller = new CloudPoller({
 			cloud: this.cloud,
 			adapter: this.adapter,

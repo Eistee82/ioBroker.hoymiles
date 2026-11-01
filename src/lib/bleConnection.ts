@@ -10,11 +10,21 @@ import {
 	pbFindVarint,
 	type BleFrameMode,
 } from "./bleCrypto.js";
-import { BLE_HANDSHAKE_TICK_MS, BLE_IDLE_TIMEOUT_MS, HM_MAGIC_0, HM_MAGIC_1, RECONNECT_MAX_MS } from "./constants.js";
+import {
+	BLE_HANDSHAKE_TICK_MS,
+	BLE_IDLE_TIMEOUT_MS,
+	DTU_CLOCK_VALID_FROM,
+	HM_HEADER_SIZE,
+	HM_MAGIC_0,
+	HM_MAGIC_1,
+	RECONNECT_MAX_MS,
+} from "./constants.js";
 import { unixSeconds, errorMessage } from "./utils.js";
+import { crc16 } from "./crc16.js";
 
 // Command tags (msgId). Requests a3xx, responses a2xx — same family as the TCP path.
 const TAG_INFO = 0xa301; // bootstrap/keepalive (plain) → device replies 0xa201 (SN-CBC) with encRand
+const TAG_INFO_ANSWER = 0xa201; // the only answer without a GCM tag behind totalLen
 const TAG_COMMCMD_Y = 0xa318; // CommCmd "Y" / PIN carrier (GCM)
 const TAG_COMMCMD_H = 0xa319; // CommCmd "H" status poll (GCM) → response 0xa219 carries `sts`
 const TAG_COMMCMD_STATUS = 0xa219; // status response
@@ -27,9 +37,9 @@ const ACTION_PIN_VERIFY = 82; // verify an existing PIN
 // NOTE: the meaning of `sts` depends on which action was polled — see handleStatus().
 const STS_RUNNING = 0;
 const STS_PAIRED = 1;
-const STS_FAILED = 2;
+const STS_NOT_EVALUATED = 2;
 const STS_PIN_NEEDED = 3;
-const STS_PIN_REJECTED = 4;
+const STS_LOCKED = 4;
 
 const MTU_GUARD = 4096;
 /** First reconnect delay; doubles per failed round up to {@link RECONNECT_MAX_MS}. */
@@ -38,6 +48,7 @@ const RECONNECT_DELAY_MIN_MS = 5000;
 const GATT_CONNECT_TRIES = 6;
 const GATT_CONNECT_RETRY_MS = 2000;
 const GCM_TAG_LEN = 16;
+
 const MAGIC = Buffer.from([HM_MAGIC_0, HM_MAGIC_1]);
 
 /** Handshake phases (mirrors the app's BleClient state machine). */
@@ -107,6 +118,10 @@ export class BleConnection extends EventEmitter {
 	private establishing: boolean;
 	private state: HandshakeState;
 	private encRand: Buffer | null;
+	/** Set once the "DTU is locked" warning was logged; cleared when a session pairs. */
+	private lockedWarned: boolean;
+	/** DTU clock minus host clock (a201 field 2), so the handshake's own requests fit the ±60 s window. */
+	private clockOffset: number;
 	private seq: number;
 	private writeHandle: number | null;
 	private notifyHandle: number | null;
@@ -142,6 +157,8 @@ export class BleConnection extends EventEmitter {
 		this.establishing = false;
 		this.state = "idle";
 		this.encRand = null;
+		this.lockedWarned = false;
+		this.clockOffset = 0;
 		this.seq = 0;
 		this.writeHandle = null;
 		this.notifyHandle = null;
@@ -406,7 +423,7 @@ export class BleConnection extends EventEmitter {
 				this.sendInternal(TAG_INFO, Buffer.alloc(0), "plain");
 				return;
 			}
-			const ts = unixSeconds();
+			const ts = unixSeconds() + this.clockOffset;
 			switch (this.state) {
 				case "boot":
 					this.state = "commcmd";
@@ -449,6 +466,7 @@ export class BleConnection extends EventEmitter {
 			this.state = "paired";
 			this.connected = true;
 			this.reconnectDelay = RECONNECT_DELAY_MIN_MS; // a good session earns a prompt retry again
+			this.lockedWarned = false;
 			this.log.info(`[ble ${this.macStr()}] paired`);
 			this.emit("connected");
 		}
@@ -456,9 +474,14 @@ export class BleConnection extends EventEmitter {
 
 	private handleStatus(plain: Buffer): void {
 		// The status response echoes the polled action in field 3. Its meaning of `sts` (field 11)
-		// differs by action (app-verified, see BleMasterSlaveScanPageActivity$getPinCmdStatusFromDevice):
-		//   action 64 (base): 1 = OK/paired, 3 = PIN needed, 2/4 = failed, 0 = keep polling.
-		//   action 82 (PIN):  0 = PIN ACCEPTED, anything else = rejected  ← inverted vs. base.
+		// differs by action:
+		//   action 64 (base), firmware-proven (2WB, status cell 0x90d28): the cell starts at 2 (.data)
+		//     and only the action-64 arm writes it — 1 = whitelisted/paired (0x408141b6), 3 = PIN
+		//     needed (0x408141c4), 4 = DTU locked, lock_state == 1 (0x4081417a). So 2 means "not
+		//     evaluated yet" and 4 means "locked", e.g. after too many wrong PINs — neither is a
+		//     rejection of this adapter. 0 = keep polling.
+		//   action 82 (PIN): 0 = PIN ACCEPTED, anything else = rejected  ← inverted vs. base.
+		//   Proofs: _fwanalysis/absence_audit/proofs/092.md, 238.md, 069-071.md.
 		const action = pbFindVarint(plain, 3) ?? ACTION_STATUS;
 		const sts = pbFindVarint(plain, 11) ?? STS_RUNNING;
 
@@ -481,16 +504,31 @@ export class BleConnection extends EventEmitter {
 			case STS_PAIRED:
 				this.markPaired();
 				break;
-			case STS_FAILED:
-				this.failPairing("pairing rejected by device");
+			case STS_LOCKED:
+				this.waitWhileLocked();
 				break;
-			case STS_PIN_REJECTED:
-				this.failPairing("PIN rejected");
-				break;
+			case STS_NOT_EVALUATED:
 			case STS_RUNNING:
 			default:
 				break; // keep polling
 		}
+	}
+
+	/**
+	 * The DTU reports itself locked (action 64, sts 4) — after too many wrong PINs it stays locked
+	 * for a while. That is not a rejection of this adapter: drop the session and try again later
+	 * with the usual backoff. No PIN goes out while it is locked (a PIN is only sent on sts 3), so
+	 * waiting costs no attempt.
+	 */
+	private waitWhileLocked(): void {
+		if (!this.lockedWarned) {
+			this.lockedWarned = true;
+			this.log.warn(
+				`[ble ${this.macStr()}] the DTU reports itself locked (too many wrong PIN attempts, or locked in the app) — retrying later`,
+			);
+		}
+		this.teardownSession();
+		this.scheduleReconnect();
 	}
 
 	private failPairing(reason: string): void {
@@ -510,16 +548,41 @@ export class BleConnection extends EventEmitter {
 	private onNotify(chunk: Buffer): void {
 		this.lastRxTs = Date.now();
 		this.notifyBuf = Buffer.concat([this.notifyBuf, chunk]);
-		while (this.notifyBuf.length >= 10 && this.notifyBuf[0] === HM_MAGIC_0 && this.notifyBuf[1] === HM_MAGIC_1) {
-			const totalLen = this.notifyBuf.readUInt16BE(8);
-			if (this.notifyBuf.length < totalLen) {
-				break; // not yet complete (at least up to declared length)
+		// Frame length from the header, never from the next "HM": the ciphertext can contain those two
+		// bytes, and a GCM tag still in flight must be waited for. The DTU's encoder (0x4080935a) puts
+		// the 16-byte GCM tag behind totalLen on every answer except a201 (SN-CBC, no tag); totalLen
+		// and the CRC cover the ciphertext without the tag (proof absence_audit/proofs/072.md).
+		for (;;) {
+			const buf = this.notifyBuf;
+			if (buf.length >= 2 && (buf[0] !== HM_MAGIC_0 || buf[1] !== HM_MAGIC_1)) {
+				// Out of step (lost chunk, foreign bytes): resynchronise on the next marker.
+				const next = buf.indexOf(MAGIC, 1);
+				this.notifyBuf = next > 0 ? buf.subarray(next) : buf.subarray(buf.length - 1);
+				if (next < 0) {
+					break;
+				}
+				continue;
 			}
-			// A GCM frame carries an extra 16-byte tag beyond totalLen; take up to the next HM marker.
-			const nextHM = this.notifyBuf.indexOf(MAGIC, 2);
-			const take = nextHM > 0 ? nextHM : this.notifyBuf.length;
-			this.processFrame(this.notifyBuf.subarray(0, take));
-			this.notifyBuf = this.notifyBuf.subarray(take);
+			if (buf.length < HM_HEADER_SIZE) {
+				break;
+			}
+			const tag = buf.readUInt16BE(2);
+			const totalLen = buf.readUInt16BE(8);
+			const frameLen = totalLen + (tag === TAG_INFO_ANSWER ? 0 : GCM_TAG_LEN);
+			if (totalLen < HM_HEADER_SIZE || frameLen > MTU_GUARD) {
+				this.notifyBuf = buf.subarray(1); // not a header after all
+				continue;
+			}
+			if (buf.length < frameLen) {
+				break; // wait for the rest, GCM tag included
+			}
+			if (crc16(buf.subarray(HM_HEADER_SIZE, totalLen)) !== buf.readUInt16BE(6)) {
+				this.log.debug(`[ble ${this.macStr()}] dropping a frame with a bad CRC (tag 0x${tag.toString(16)})`);
+				this.notifyBuf = buf.subarray(1);
+				continue;
+			}
+			this.processFrame(buf.subarray(0, frameLen));
+			this.notifyBuf = buf.subarray(frameLen);
 		}
 		if (this.notifyBuf.length > MTU_GUARD) {
 			this.notifyBuf = Buffer.alloc(0);
@@ -538,6 +601,11 @@ export class BleConnection extends EventEmitter {
 			if (this.sn && parsed.payload.length % 16 === 0) {
 				try {
 					plain = snDecrypt(this.sn, parsed.tag, parsed.seq, parsed.payload);
+					// a201 carries the DTU's clock in field 2. a318 (pairing) is time-checked, a301 is not.
+					const dtuTime = pbFindVarint(plain, 2);
+					if (dtuTime !== null && dtuTime >= DTU_CLOCK_VALID_FROM) {
+						this.clockOffset = dtuTime - unixSeconds();
+					}
 					if (!this.encRand) {
 						const er = extractEncRand(plain);
 						if (er) {

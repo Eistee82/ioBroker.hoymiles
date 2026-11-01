@@ -61,9 +61,9 @@ const b = (id: string, en: string, de: string, role: string, extra?: Extra): Sta
  * The energy flow itself is firmware-proven (format string at `0x4080b6d8`, cross-checked by
  * `load = grid + plug - sp` at `0x4080b6b0`).
  *
- * `meter.mode` is the switch the user operates. Its numbers are the device types the firmware
- * itself checks for, so nothing has to be translated on the way down: 0 unbinds, 1 polls the meter
- * without regulating, 2 makes it the grid device the zero-export regulation works on.
+ * `meter.mode` is the switch the user operates: 0 sends nothing (the starting value), 1 binds the
+ * meter as device type 0 (polled, no regulation), 2 as device type 2 (the grid device the
+ * zero-export regulation works on).
  */
 export const meterControlStates: StateDefinition[] = [
 	// 0 is the "never bound" starting value, not a command: the device offers no safe way to undo a
@@ -78,7 +78,8 @@ export const meterControlStates: StateDefinition[] = [
 		states: { 0: "not bound", 1: "meter only", 2: "zero export" },
 	}),
 	s("meter.deviceId", "Meter MAC", "Zähler-MAC", "text", { source: "local", write: true }),
-	s("meter.detected", "Detected meters (JSON)", "Erkannte Zähler (JSON)", "json", { source: "local" }),
+	// The DTU's binding list (a201 shls), not a network search — the id is kept for existing scripts.
+	s("meter.detected", "Bound meters (JSON)", "Gebundene Zähler (JSON)", "json", { source: "local" }),
 	b("meter.connected", "Meter delivering data", "Zähler liefert Daten", "indicator.connected", {
 		source: "local",
 	}),
@@ -117,8 +118,22 @@ export const meterMeasurementStates: StateDefinition[] = [
 		source: "local",
 	}),
 	n("meter.loadPower", "House load", "Hausverbrauch", "value.power", "W", { source: "local" }),
-	n("meter.storagePower", "Storage power", "Speicherleistung", "value.power", "W", { source: "local" }),
-	n("meter.plugPower", "Plug power", "Steckdosenleistung", "value.power", "W", { source: "local" }),
+	// sp: the sum over the online Shelly plugs (type 1, 0x4080b74a-0x4080b764); plug: the inverter's
+	// own AC power (read_be16 0x715d0 at 0x4080b6a6, the same source as its active power). The ids
+	// are kept for existing scripts.
+	n("meter.storagePower", "Shelly plugs power (sum)", "Leistung der Shelly-Steckdosen (Summe)", "value.power", "W", {
+		source: "local",
+	}),
+	n(
+		"meter.plugPower",
+		"Inverter AC power (meter view)",
+		"Wechselrichter-AC-Leistung (Zählersicht)",
+		"value.power",
+		"W",
+		{
+			source: "local",
+		},
+	),
 
 	// Per-phase readings from the meter itself (RealDataNew field 14). Scales measured against the
 	// meter's own API: voltage in tenths of a volt, current in hundredths of an ampere, power in
@@ -556,7 +571,7 @@ const states: StateDefinition[] = [
 		max: 1,
 		source: "local",
 	}),
-	n("inverter.reactivePowerLimit", "Reactive power limit", "Blindleistungs-Limit", "level", "°", {
+	n("inverter.reactivePowerLimit", "Reactive power setpoint", "Blindleistungs-Sollwert", "level", "%", {
 		write: true,
 		min: -50,
 		max: 50,
@@ -612,7 +627,16 @@ const states: StateDefinition[] = [
 	// No source restriction: the command handler routes to the local TCP link when connected,
 	// otherwise reboots the DTU over the cloud (ECommandAction.DTU_REBOOT) for cloud-only devices.
 	b("dtu.reboot", "Reboot DTU", "DTU neustarten", "button", { write: true }),
-	n("dtu.stepTime", "Step time", "Schrittzeit", "value", "s", { source: "local" }),
+	// The same RAM byte GetConfig reports as server_send_time (2WB 0x73820 read at 0x4080f4f0 and
+	// 0x4080ea0e; 2T V01.01.01 gp-110092 at 0x40816dc4 and 0x40816132): the upload period in minutes.
+	n(
+		"dtu.stepTime",
+		"Cloud upload interval (same as config.serverSendTime)",
+		"Cloud-Upload-Intervall (gleich config.serverSendTime)",
+		"value",
+		"min",
+		{ source: "local" },
+	),
 	n("dtu.accessModel", "Network access mode", "Netzwerk-Zugangsart", "value", "", {
 		states: { 0: "GPRS", 1: "WiFi", 2: "Ethernet" },
 		source: "local",
@@ -689,7 +713,11 @@ const states: StateDefinition[] = [
 	n("config.zeroExport433Addr", "Zero export 433 MHz address", "Nulleinspeisung 433-MHz-Adresse", "value", "", {
 		source: "local",
 	}),
-	n("config.lockTime", "Inverter lock duration", "Wechselrichter-Sperrdauer", "value", "s", {
+	// The four bytes as the DTU reads them, big-endian. Its write stores only the first two, and on
+	// the 2WB the last one (0x7204b) is written by the power-limit command (action 8 at 0x4080abf4)
+	// — which is why a device without a lock reads 16777217. A meaning as a duration is not
+	// established.
+	n("config.lockTime", "Inverter lock time (raw value)", "Wechselrichter-Sperrzeit (Rohwert)", "value", "", {
 		source: "local",
 	}),
 

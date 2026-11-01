@@ -770,6 +770,57 @@ describe("deviceContext – markStatesDisconnected", function () {
 		assert.strictEqual(newCalls.length, 0, "Second markStatesDisconnected should be a no-op");
 	});
 
+	// The reconnect used to set the cached quality back to 0 without writing anything, so an
+	// unchanged first value was skipped and the state kept q=0x42 although data flowed again.
+	it("rewrites an unchanged value after a reconnect so q=0x42 is cleared", async function () {
+		const { calls, adapter } = createTrackingAdapter();
+		const ctx = new DeviceContext({
+			adapter,
+			protobuf: null,
+			host: "",
+			enableLocal: false,
+			enableCloud: false,
+			enableCloudRelay: false,
+			dataInterval: 15,
+			slowPollFactor: 6,
+		});
+		await ctx.initFromSerial("TEST1234");
+		await ctx["setState"]("grid.power", 100, true);
+		await ctx["markStatesDisconnected"]();
+		await ctx["onConnected"]();
+
+		const callsBefore = calls.length;
+		await ctx["setStates"]([["grid.power", 100]], true);
+		const rewrites = calls.slice(callsBefore).filter(c => c[0].endsWith("grid.power"));
+		assert.strictEqual(rewrites.length, 1, "the unchanged value must be written once with good quality");
+		assert.strictEqual(rewrites[0][1], 100);
+	});
+
+	it("leaves the meter settings alone and marks only meter measurements", async function () {
+		const { calls, adapter } = createTrackingAdapter();
+		const ctx = new DeviceContext({
+			adapter,
+			protobuf: null,
+			host: "",
+			enableLocal: false,
+			enableCloud: false,
+			enableCloudRelay: false,
+			dataInterval: 15,
+			slowPollFactor: 6,
+		});
+		await ctx.initFromSerial("TEST1234");
+		await ctx["setState"]("meter.mode", 2, true);
+		await ctx["setState"]("meter.deviceId", "bc2411b807c0", true);
+		await ctx["setState"]("meter.detected", "[]", true);
+		await ctx["setState"]("meter.connected", true, true);
+		await ctx["setState"]("meter.gridPower", 120, true);
+
+		const callsBefore = calls.length;
+		await ctx["markStatesDisconnected"]();
+		const marked = calls.slice(callsBefore).map(c => c[0].replace("TEST1234.", ""));
+		assert.deepStrictEqual(marked.sort(), ["meter.connected", "meter.gridPower"]);
+	});
+
 	it("does nothing when device is not ready", async function () {
 		const { calls, adapter } = createTrackingAdapter();
 		const ctx = new DeviceContext({
@@ -1351,6 +1402,7 @@ describe("deviceContext – handleAlarmData", function () {
 	it("processes alarm data and writes alarm states", async function () {
 		const { calls, adapter } = createTrackingAdapter();
 		const mockProtobuf = {
+			isWarnListLayout: () => false,
 			decodeAlarmData: () => ({
 				alarms: [
 					{ sn: "INV1", code: 1001, num: 1, startTime: 1700000000, endTime: 0, data1: 10, data2: 20 },
@@ -1397,6 +1449,7 @@ describe("deviceContext – handleAlarmData", function () {
 	it("handles empty alarm list", async function () {
 		const { calls, adapter } = createTrackingAdapter();
 		const mockProtobuf = {
+			isWarnListLayout: () => false,
 			decodeAlarmData: () => ({ alarms: [] }),
 		};
 
@@ -1423,9 +1476,10 @@ describe("deviceContext – handleAlarmData", function () {
 		assert.strictEqual(hasActiveCall[1], false);
 	});
 
-	it("falls back to decodeWarnData if decodeAlarmData fails", async function () {
+	it("decodes the warn-list layout as WarnData, never as AlarmData", async function () {
 		const { calls, adapter } = createTrackingAdapter();
 		const mockProtobuf = {
+			isWarnListLayout: () => true,
 			decodeAlarmData: () => {
 				throw new Error("not alarm format");
 			},
@@ -1477,6 +1531,7 @@ describe("deviceContext – handleAlarmData", function () {
 		let decodeCall = 0;
 		const sentRequests = [];
 		const mockProtobuf = {
+			isWarnListLayout: () => true,
 			decodeAlarmData: () => {
 				throw new Error("not alarm format");
 			},
@@ -2624,6 +2679,7 @@ describe("deviceContext – handleResponse", function () {
 		let alarmCalled = false;
 		const mockProtobuf = {
 			parseResponse: () => ({ cmdHigh: 0xa2, cmdLow: 0x04, payload: Buffer.alloc(0) }),
+			isWarnListLayout: () => false,
 			decodeAlarmData: () => {
 				alarmCalled = true;
 				return { alarms: [] };
@@ -5063,8 +5119,8 @@ describe("deviceContext – handleInfoData with dtuInfo/pvInfo", function () {
 // ============================================================
 // deviceContext – handleAlarmData both decoders fail
 // ============================================================
-describe("deviceContext – handleAlarmData double decode failure", function () {
-	it("logs warning when both decodeAlarmData and decodeWarnData fail", async function () {
+describe("deviceContext – handleAlarmData decode failure", function () {
+	it("logs a warning when a warn list fails to decode", async function () {
 		let warnMsg = "";
 		const adapter = {
 			log: {
@@ -5095,6 +5151,7 @@ describe("deviceContext – handleAlarmData double decode failure", function () 
 		};
 
 		const mockProtobuf = {
+			isWarnListLayout: () => true,
 			decodeAlarmData: () => {
 				throw new Error("alarm fail");
 			},
@@ -5117,6 +5174,7 @@ describe("deviceContext – handleAlarmData double decode failure", function () 
 
 		await ctx["handleAlarmData"](Buffer.alloc(0));
 		assert.ok(warnMsg.includes("warn fail too"), "Should log the WarnData decode error");
+		assert.ok(!warnMsg.includes("alarm fail"), "a warn list must not be tried as AlarmData");
 	});
 });
 
@@ -5181,6 +5239,38 @@ describe("deviceContext – handleStateChange with connection", function () {
 		});
 		// If it reaches here without error, the path is covered
 		assert.ok(true, "handleStateChange should not crash with active connection");
+	});
+
+	it("books a forwarded cloud power-factor command for the whole cell", async function () {
+		const ctx = new DeviceContext({
+			adapter: {
+				log: { info: () => {}, warn: () => {}, debug: () => {}, error: () => {} },
+				setStateAsync: async () => {},
+				extendObjectAsync: async () => {},
+				setObjectNotExistsAsync: async () => {},
+				getStateAsync: async () => null,
+				setInterval: () => undefined,
+				clearInterval: () => {},
+				setTimeout: () => "timer-handle",
+				clearTimeout: () => {},
+				subscribeStates: () => {},
+				unsubscribeStates: () => {},
+				devices: new Map(),
+				updateConnectionState: async () => {},
+			},
+			protobuf: {},
+			host: "192.168.1.1",
+			enableLocal: false,
+			enableCloud: false,
+			enableCloudRelay: false,
+			dataInterval: 15,
+			slowPollFactor: 6,
+		});
+		await ctx.initFromSerial("TEST1234");
+		ctx["flashWriteEntry"]("inverter.powerLimit").lastValue = 50;
+		ctx["bookCloudFlashWrite"](47);
+		assert.strictEqual(ctx["flashWriteEntry"]("inverter.powerLimit").lastValue, null);
+		assert.ok(ctx["flashWriteEntry"]("inverter.powerFactorLimit").lastWriteMs > 0, "action 47 is booked");
 	});
 });
 
@@ -5638,6 +5728,9 @@ describe("deviceContext – slow-poll queue", function () {
 
 	it("asks for the daily power curve on the BLE path too", function () {
 		assert.ok(queueTags("ble").includes("0xa315"), "the 2WB answers a315 as well");
+		// The 2WB runs action 46 into an empty branch; its warning list is the answer to a304.
+		assert.ok(queueTags("ble").includes("0xa304"), "BLE must request the warn list with a304");
+		assert.ok(queueTags("tcp").includes("0xa305"), "TCP keeps the action-46 command");
 	});
 
 	// The alarm trigger and the MI-warn read are both action commands on tag 0xa305, so they can
@@ -5649,10 +5742,11 @@ describe("deviceContext – slow-poll queue", function () {
 			.map(f => Number(ResDTO.toObject(ResDTO.decode(f.subarray(10)), { defaults: true }).action));
 	}
 
-	it("still skips the alarm trigger on BLE, which the 2WB rejects", function () {
+	it("still skips the alarm trigger and action 46 on BLE, which the 2WB does not answer", function () {
 		assert.ok(queueActions("tcp").includes(50), "TCP keeps the alarm-list trigger");
 		assert.ok(!queueActions("ble").includes(50), "BLE must not send it (2WB answers error 1)");
-		assert.ok(queueActions("ble").includes(46), "BLE reads warnings via the MI-warn request instead");
+		assert.ok(!queueActions("ble").includes(46), "BLE reads warnings with a304, not action 46");
+		assert.ok(queueActions("tcp").includes(46), "TCP keeps the MI-warn request");
 	});
 });
 
@@ -5755,6 +5849,42 @@ describe("deviceContext – counter monotonicity", function () {
 		await ctx.applyRealData(realData(100000));
 		const totals = written.filter(([id]) => id.endsWith("pv0.totalEnergy")).map(([, v]) => v);
 		assert.deepStrictEqual(totals, [100.1, 100], "after a disconnect the next device starts fresh");
+	});
+
+	// value.time is milliseconds. One spot wrote seconds, another milliseconds, so the state
+	// jumped between 1970 and today.
+	// InfoData field 2 is the DTU clock. Requests are stamped on it; an unset clock is ignored, and a
+	// skew beyond the DTU's ±60 s window is reported once.
+	it("stamps requests on the DTU clock learned from InfoData and warns once on a large skew", async function () {
+		const { ctx } = ctxWithWrites();
+		const warns = [];
+		ctx.adapter.log.warn = m => warns.push(m);
+		const host = Math.floor(Date.now() / 1000);
+		ctx["learnClock"](host + 3600);
+		assert.ok(Math.abs(ctx["deviceNow"]() - (host + 3600)) <= 2);
+		ctx["learnClock"](host + 3600);
+		assert.strictEqual(warns.length, 1, "the skew warning is logged once");
+		ctx["learnClock"](host + 5);
+		assert.ok(Math.abs(ctx["deviceNow"]() - (host + 5)) <= 2);
+		ctx["learnClock"](100); // unset DTU clock (1970) — keep the last offset
+		assert.ok(Math.abs(ctx["deviceNow"]() - (host + 5)) <= 2);
+		ctx["learnClock"](host + 3600);
+		assert.strictEqual(warns.length, 2, "warns again after the clocks had agreed in between");
+	});
+
+	it("writes info.lastResponse in milliseconds", async function () {
+		const { ctx, written } = ctxWithWrites();
+		await ctx.initFromSerial("TEST1234");
+		ctx.pvCount = 1;
+		const before = Date.now();
+		const from = written.length;
+		await ctx.applyRealData(realData(100000));
+		const stamps = written
+			.slice(from)
+			.filter(([id]) => id.endsWith("info.lastResponse"))
+			.map(([, v]) => v);
+		assert.strictEqual(stamps.length, 1, JSON.stringify(stamps));
+		assert.ok(stamps[0] >= before && stamps[0] <= Date.now(), `expected a millisecond timestamp, got ${stamps[0]}`);
 	});
 });
 
@@ -5906,50 +6036,168 @@ describe("deviceContext – config snapshot", function () {
 			slowPollFactor: 6,
 		});
 		c.deviceId = "DTU1";
+		// The device answers a GetConfig request with `device` (when set), as a real one would.
+		const box = { device: null };
 		c.connection = {
 			connected: true,
 			send: async b => {
 				sent.push(b);
+				if (b[2] === 0xa3 && b[3] === 0x09 && box.device) {
+					const ReqDTO = handler.getType("GetConfig", "GetConfigReqDTO");
+					const answer = Buffer.from(ReqDTO.encode(ReqDTO.create(box.device)).finish());
+					setImmediate(() => void c["handleConfigData"](answer));
+				}
 				return true;
 			},
 			removeAllListeners: () => {},
 			disconnect: () => {},
 		};
-		return { c, warns, sent };
+		return { c, warns, sent, box };
 	}
 
-	it("refuses a configuration write before the configuration was read", async function () {
+	function setConfigFrames(sent) {
+		return sent.filter(b => b[2] === 0xa3 && b[3] === 0x10);
+	}
+
+	it("refuses a configuration write when the device does not answer the read", async function () {
 		const { c, warns, sent } = ctx();
-		await c.handleStateChange("config.serverSendTime", { val: 10, ack: false });
-		assert.strictEqual(sent.length, 0, "nothing may go out — it would clear the untouched fields");
+		// The mock's setTimeout never fires, so stand in for the timeout by dropping the link.
+		const pending = c.handleStateChange("config.serverSendTime", { val: 10, ack: false });
+		await new Promise(r => setImmediate(r));
+		c["settleConfigWaiters"](null);
+		await pending;
+		assert.strictEqual(setConfigFrames(sent).length, 0, "nothing may go out — it would clear the untouched fields");
 		assert.ok(
-			warns.some(m => /without having read it first/i.test(m)),
+			warns.some(m => /did not answer the configuration read/i.test(m)),
 			"the refusal must say why",
 		);
 	});
 
-	it("writes once the device's configuration is known", async function () {
-		const { c, sent } = ctx();
-		const ReqDTO = handler.getType("GetConfig", "GetConfigReqDTO");
-		const payload = ReqDTO.encode(
-			ReqDTO.create({ serverDomainName: "dataeu.hoymiles.com", serverport: 10081, lockPassword: 4711 }),
-		).finish();
-		await c["handleConfigData"](Buffer.from(payload));
+	it("writes from the configuration the device reports right before", async function () {
+		const { c, sent, box } = ctx();
+		box.device = {
+			serverDomainName: "dataeu.hoymiles.com",
+			serverport: 10081,
+			limitPowerMypower: 500,
+			lockPassword: 4711,
+			serverSendTime: 10,
+		};
 		await c.handleStateChange("config.serverSendTime", { val: 10, ack: false });
-		assert.strictEqual(sent.length, 1, "now the write is safe");
+		const frames = setConfigFrames(sent);
+		assert.strictEqual(frames.length, 1, "now the write is safe");
 		const ResDTO = handler.getType("SetConfig", "SetConfigResDTO");
-		const msg = ResDTO.toObject(ResDTO.decode(sent[0].subarray(10)), { longs: Number, defaults: true });
-		assert.strictEqual(msg.serverDomainName, "dataeu.hoymiles.com", "carried over from the read");
-		assert.strictEqual(Number(msg.lockPassword), 4711, "including the field the adapter never exposes");
+		const msg = ResDTO.toObject(ResDTO.decode(frames[0].subarray(10)), { longs: Number, defaults: true });
+		assert.strictEqual(msg.serverDomainName, "dataeu.hoymiles.com", "carried over from the fresh read");
+		assert.strictEqual(Number(msg.limitPowerMypower), 500, "cell A as the device holds it now");
+		assert.strictEqual(
+			Number(msg.lockPassword) >>> 0,
+			0x67120000,
+			"the field the adapter never exposes, in the byte order the device stores it",
+		);
 	});
 
-	it("forgets the snapshot on disconnect", async function () {
+	it("lets a waiting write give up when the link drops", function () {
 		const { c } = ctx();
-		const ReqDTO = handler.getType("GetConfig", "GetConfigReqDTO");
-		await c["handleConfigData"](Buffer.from(ReqDTO.encode(ReqDTO.create({ serverport: 10081 })).finish()));
-		assert.ok(c["configSnapshot"], "snapshot present after a read");
+		let waited = "pending";
+		c["configWaiters"].push(config => {
+			waited = config;
+		});
+		c["handleLinkDown"]();
+		assert.strictEqual(waited, null);
+	});
+
+	it("lets a waiting write give up on disconnect — the next device must not answer it", function () {
+		const { c } = ctx();
+		let waited = "pending";
+		c["configWaiters"].push(config => {
+			waited = config;
+		});
 		c.disconnect();
-		assert.strictEqual(c["configSnapshot"], null, "a snapshot must not outlive its device");
+		assert.strictEqual(waited, null);
+	});
+
+	it("gives up the read when the answer does not come in time", async function () {
+		const { c } = ctx();
+		let fire;
+		c.adapter.setTimeout = fn => {
+			fire = fn;
+			return "t";
+		};
+		const reading = c["readConfig"]();
+		fire();
+		assert.strictEqual(await reading, null);
+		assert.strictEqual(c["configWaiters"].length, 0, "nobody is left waiting");
+	});
+
+	it("gives up the read when the request cannot be sent", async function () {
+		const { c } = ctx();
+		c.connection.send = async () => false;
+		assert.strictEqual(await c["readConfig"](), null);
+		c.connection.send = async () => {
+			throw new Error("socket closed");
+		};
+		assert.strictEqual(await c["readConfig"](), null);
+		assert.strictEqual(c["configWaiters"].length, 0);
+	});
+
+	it("clears the timeout once the answer is there", async function () {
+		const { c, box } = ctx();
+		const cleared = [];
+		c.adapter.setTimeout = () => "read-timer";
+		c.adapter.clearTimeout = t => cleared.push(t);
+		box.device = { serverport: 10081 };
+		const reading = await c["readConfig"]();
+		assert.strictEqual(Number(reading.serverport), 10081);
+		assert.ok(cleared.includes("read-timer"));
+	});
+
+	it("does not take a poll tick's answer for its reading", async function () {
+		const { c, sent, box } = ctx();
+		let finishTick;
+		c["pollRun"] = new Promise(r => {
+			finishTick = r;
+		});
+		box.device = { serverport: 10081, serverSendTime: 10 };
+		const writing = c.handleStateChange("config.serverSendTime", { val: 10, ack: false });
+		await new Promise(r => setImmediate(r));
+		assert.strictEqual(sent.length, 0, "nothing goes out while the poll tick is still waiting for its answer");
+		assert.strictEqual(c["configWriteActive"], true, "and the next tick stays out");
+		finishTick();
+		await writing;
+		assert.strictEqual(setConfigFrames(sent).length, 1);
+		assert.strictEqual(c["configWriteActive"], false);
+	});
+
+	it("runs two configuration writes one after the other", async function () {
+		const { c, sent, box } = ctx();
+		box.device = { serverport: 10081, serverSendTime: 10 };
+		const order = [];
+		const realSend = c.connection.send;
+		c.connection.send = async b => {
+			order.push(b[3] === 0x10 ? "set" : "get");
+			return realSend(b);
+		};
+		await Promise.all([
+			c.handleStateChange("config.serverSendTime", { val: 10, ack: false }),
+			c.handleStateChange("config.serverSendTime", { val: 10, ack: false }),
+		]);
+		assert.deepStrictEqual(order, ["get", "set", "get", "get", "set", "get"]);
+		assert.strictEqual(setConfigFrames(sent).length, 2);
+	});
+
+	it("ends a poll tick stopped while it waits for an answer", async function () {
+		const { c } = ctx();
+		let settled = "pending";
+		c["pendingResponse"] = {
+			cmdKey: "162:9",
+			resolve: () => {},
+			abort: () => {
+				settled = false;
+			},
+			timer: undefined,
+		};
+		c["stopPollCycle"]();
+		assert.strictEqual(settled, false, "a configuration write waiting for the tick would hang otherwise");
 	});
 });
 
@@ -6181,12 +6429,119 @@ describe("deviceContext – Shelly meter", function () {
 		assert.strictEqual(adapter.writes.size, 0, "no states before a meter ever reported");
 	});
 
+	const answer = (action, err) => Buffer.concat([vfld(2, 1700000000), vfld(3, action), vfld(6, err)]);
+
+	function withWarnings(adapter) {
+		const warns = [];
+		adapter.log = { ...adapter.log, warn: m => warns.push(m) };
+		return warns;
+	}
+
+	it("warns and restores the mode when the inverter refuses a binding it was just sent", async function () {
+		const adapter = makeTrackingAdapter();
+		const warns = withWarnings(adapter);
+		const ctx = makeCtx(adapter, "ble");
+		ctx["lastBindMs"] = Date.now();
+		ctx["modeBeforeBind"] = 1;
+		await ctx["handleCommCmdAnswer"](answer(85, 6));
+		assert.strictEqual(warns.length, 1);
+		assert.ok(/refused the meter binding/.test(warns[0]));
+		assert.strictEqual(adapter.writes.get("4161A031AB61.meter.mode"), 1, "the device kept its old binding");
+	});
+
+	it("does not count a bind that could not be sent", async function () {
+		const adapter = makeTrackingAdapter();
+		const ctx = makeCtx(adapter, "ble");
+		ctx.connection = { connected: true, send: async () => false };
+		assert.strictEqual(await ctx.bindShellyMeter("bc2411b807c0", 2), false);
+		assert.strictEqual(ctx["lastBindMs"], 0, "a foreign error must not be taken for its answer");
+	});
+
+	it("does not take a 0 or a late or foreign error for an answer to the binding", async function () {
+		const adapter = makeTrackingAdapter();
+		const warns = withWarnings(adapter);
+		const ctx = makeCtx(adapter, "ble");
+		ctx["lastBindMs"] = Date.now();
+		await ctx["handleCommCmdAnswer"](answer(85, 0)); // passed the checks — confirms nothing more
+		await ctx["handleCommCmdAnswer"](answer(64, 6)); // another action
+		ctx["lastBindMs"] = Date.now() - 60000;
+		await ctx["handleCommCmdAnswer"](answer(85, 6)); // long after the bind — the cell is global
+		await ctx["handleCommCmdAnswer"](Buffer.alloc(0));
+		assert.deepStrictEqual(warns, []);
+	});
+
+	it("keeps the meter MAC in the form the bind command sends", async function () {
+		const adapter = makeTrackingAdapter();
+		const ctx = makeCtx(adapter, "ble");
+		await ctx["handleShellyStateChange"]("meter.deviceId", { val: "BC:24:11:B8:07:C0", ack: false });
+		assert.strictEqual(adapter.writes.get("4161A031AB61.meter.deviceId"), "bc2411b807c0");
+	});
+
+	// Field 15 carries the online Shelly plugs (type 1, 0x4080bc10), not a meter.
+	const plug = fld(
+		15,
+		2,
+		msg(
+			Buffer.concat([
+				fld(1, 2, msg(Buffer.concat([vfld(1, 0x112233445566n), vfld(2, 1)]))),
+				fld(2, 2, msg(Buffer.concat([vfld(1, 1), vfld(2, 2300), vfld(3, 100), vfld(4, 230)]))),
+			]),
+		),
+	);
+
+	it("does not take a Shelly plug for a meter", async function () {
+		const adapter = makeTrackingAdapter();
+		const ctx = makeCtx(adapter, "ble");
+		await ctx.applyShellyData(Buffer.concat([flow, plug]));
+		assert.strictEqual(adapter.writes.size, 0, "a plug alone creates no meter branch");
+		await ctx.applyShellyData(Buffer.concat([flow, plug, meter]));
+		assert.strictEqual(
+			adapter.writes.get("4161A031AB61.meter.deviceId"),
+			"bc2411b807c0",
+			"the meter, not the plug",
+		);
+		assert.strictEqual(adapter.writes.get("4161A031AB61.meter.l1Voltage"), 230.1);
+	});
+
+	it("marks grid, load and phases as not current while the meter is missing", async function () {
+		const adapter = makeTrackingAdapter();
+		const raw = [];
+		const setStateAsync = adapter.setStateAsync;
+		adapter.setStateAsync = async (id, val) => {
+			raw.push({ id, val });
+			return setStateAsync(id, val);
+		};
+		const ctx = makeCtx(adapter, "ble");
+		await ctx.applyShellyData(Buffer.concat([flow, meter]));
+		raw.length = 0;
+		await ctx.applyShellyData(Buffer.concat([flow, plug]));
+		const stale = raw.filter(w => typeof w.val === "object" && w.val !== null && w.val.q === 0x42);
+		const staleIds = stale.map(w => w.id.replace("4161A031AB61.", "")).sort();
+		assert.deepStrictEqual(staleIds, [
+			"meter.gridPower",
+			"meter.l1Current",
+			"meter.l1Power",
+			"meter.l1Voltage",
+			"meter.loadPower",
+		]);
+		assert.strictEqual(
+			stale.find(w => w.id.endsWith("meter.gridPower")).val.val,
+			-500,
+			"the last measured value stays, not 0 W",
+		);
+		assert.strictEqual(adapter.writes.get("4161A031AB61.meter.connected"), false);
+		assert.ok(
+			!stale.some(w => /pvPower|plugPower|storagePower/.test(w.id)),
+			"what the inverter computes without the meter stays current",
+		);
+	});
+
 	it("keeps reporting once the meter has been seen, so a dying poll is visible", async function () {
 		const adapter = makeTrackingAdapter();
 		const ctx = makeCtx(adapter, "ble");
 		await ctx.applyShellyData(Buffer.concat([flow, meter]));
 		adapter.writes.clear();
-		// The DTU's WebSocket poll dies after a few minutes; the device then drops out of the frame.
+		// The inverter drops a meter 20 s after its last update (0x408304f8); it leaves the frame.
 		await ctx.applyShellyData(flow);
 		assert.strictEqual(adapter.writes.get("4161A031AB61.meter.connected"), false, "must flag the loss");
 	});
@@ -6392,9 +6747,7 @@ describe("deviceContext – encrypted sends", function () {
 	it("encrypts the next alarm page", async function () {
 		const { ctx, sent } = await encryptingCtx({
 			encodeWarnDataRequest: () => PLAIN,
-			decodeAlarmData: () => {
-				throw new Error("not the AlarmData format");
-			},
+			isWarnListLayout: () => true,
 			decodeWarnData: () => ({ packageNub: 2, packageNow: 0, warnings: [] }),
 		});
 		await ctx["handleAlarmData"](Buffer.alloc(1));

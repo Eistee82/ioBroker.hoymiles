@@ -331,7 +331,8 @@ class Hoymiles extends utils.Adapter {
 	 * @param _ctx - The device context that just disconnected
 	 */
 	onLocalDisconnected(_ctx: DeviceContext): void {
-		this.cloudManager?.onLocalDisconnected();
+		// A paired Bluetooth inverter is a local link too: while one is up, it is not night.
+		this.cloudManager?.onLocalDisconnected(this.bleGatewayManager?.anyConnected() ?? false);
 	}
 
 	/**

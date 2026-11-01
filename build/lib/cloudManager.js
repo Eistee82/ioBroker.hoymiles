@@ -130,11 +130,14 @@ class CloudManager {
         }
         this.cloudPoller?.onLocalConnected();
     }
-    onLocalDisconnected() {
-        const anyConnected = this.localContexts.some(c => c.connection?.connected);
+    onLocalDisconnected(otherLinkUp = false) {
+        const anyConnected = otherLinkUp || this.localContexts.some(c => c.connection?.connected);
         if (!anyConnected) {
             void this.cloudPoller?.onLocalDisconnected();
         }
+    }
+    hasActiveRelay() {
+        return this.enableCloudRelay && this.enableLocal && this.localContexts.length > 0;
     }
     async _initCloudServices() {
         await this.cloud.login();
@@ -143,7 +146,7 @@ class CloudManager {
         await this.adapter.setStateAsync("info.cloudLastError", "", true);
         await this.adapter.updateConnectionState();
         await this._discoverDevices();
-        const hasActiveRelay = this.enableCloudRelay && this.enableLocal;
+        const hasActiveRelay = this.hasActiveRelay();
         this.cloudPoller = new CloudPoller({
             cloud: this.cloud,
             adapter: this.adapter,

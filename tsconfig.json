@@ -2,6 +2,7 @@
 	"extends": "@tsconfig/node22/tsconfig.json",
 	"compilerOptions": {
 		"outDir": "./build/",
+		"rootDir": "./src/",
 		"removeComments": false,
 		"sourceMap": true,
 		"resolveJsonModule": true,

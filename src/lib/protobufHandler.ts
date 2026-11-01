@@ -192,6 +192,17 @@ const writeU16BE = (buf: Buffer, off: number, val: number): void => {
 	buf[off + 1] = val & 0xff;
 };
 
+/**
+ * Reverse the byte order of a 32-bit number and return it as the signed value protobuf's `int32`
+ * carries.
+ *
+ * @param value - The number as read (any 32-bit pattern).
+ */
+function swapBytes32(value: number): number {
+	const v = value >>> 0;
+	return ((v & 0xff) << 24) | ((v & 0xff00) << 8) | ((v >>> 8) & 0xff00) | (v >>> 24) | 0;
+}
+
 /** Handler for encoding and decoding Hoymiles protobuf messages. */
 class ProtobufHandler {
 	public protos: Record<string, protobuf.Root>;
@@ -532,13 +543,21 @@ class ProtobufHandler {
 		return this.encodeCommandAction(ACTION.LIMIT_POWER_RUNTIME, timestamp, `S:1,P:${Math.round(watts * 10)}\r`);
 	}
 
+	// On/off, the two reboots and lock/unlock go out with the local command tag 0xa305, like
+	// every other local command. They used to carry the cloud tag 0x2305. Measured 2026-10-06:
+	// over BLE the 2WB ignores 0x2305 (no answer, a DTU reboot does not happen), while 0xa305
+	// works and is answered with 0xa205. The 2T runs 0x2305 locally too, but answers it towards
+	// the cloud only — both tags enter the same action handler (0x4081509e / 0x40816576 ->
+	// 0x40813acc); they only differ in where the answer goes (gp-108278 cloud, gp-108276 local).
+	// See _fwanalysis/LIVE_TESTLOG_2026-10-06.md.
+
 	/**
 	 * Turn inverter on.
 	 *
 	 * @param timestamp - Unix timestamp in seconds
 	 */
 	encodeInverterOn(timestamp: number): Buffer {
-		return this.encodeCommandAction(ACTION.MI_START, timestamp, undefined, CMD.COMMAND_CLOUD);
+		return this.encodeCommandAction(ACTION.MI_START, timestamp);
 	}
 
 	/**
@@ -547,7 +566,7 @@ class ProtobufHandler {
 	 * @param timestamp - Unix timestamp in seconds
 	 */
 	encodeInverterOff(timestamp: number): Buffer {
-		return this.encodeCommandAction(ACTION.MI_SHUTDOWN, timestamp, undefined, CMD.COMMAND_CLOUD);
+		return this.encodeCommandAction(ACTION.MI_SHUTDOWN, timestamp);
 	}
 
 	/**
@@ -556,7 +575,7 @@ class ProtobufHandler {
 	 * @param timestamp - Unix timestamp in seconds
 	 */
 	encodeInverterReboot(timestamp: number): Buffer {
-		return this.encodeCommandAction(ACTION.INV_REBOOT, timestamp, undefined, CMD.COMMAND_CLOUD);
+		return this.encodeCommandAction(ACTION.INV_REBOOT, timestamp);
 	}
 
 	/**
@@ -571,9 +590,23 @@ class ProtobufHandler {
 	 * (`_fwanalysis/ADAPTER_FINDINGS.md` §15); on the 2WB a partial write is what wiped the server
 	 * domain, the port and the power limit in a live test.
 	 *
-	 * So `base` is required: it is the device's own last GetConfig response, and every field the
-	 * two messages share by name is carried over from it. 49 of the 54 SetConfig fields exist in
-	 * GetConfig under the same name, so nothing has to be guessed.
+	 * So `base` is required: it is the device's own GetConfig response, and every field the two
+	 * messages share by name is carried over from it. 47 of the 53 SetConfig fields exist in
+	 * GetConfig under the same name (not shared: `offset`, `time`, `tid`, `app_page`,
+	 * `wifi_channel`, `dtu_ap_old_pass`). Fields 42-45 are the DTU's default DNS server, not a
+	 * region code.
+	 *
+	 * Two fields do not come back the way they were read, so they are converted before they are
+	 * carried over (same on 2WB and 2T):
+	 * - `lock_password` (field 3): GetConfig reads the four bytes big-endian (2WB `0x40807d56`, 2T
+	 *   V01.01.01 `0x40816114` via `0x40811e0a`), SetConfig stores the word little-endian (2WB
+	 *   `0x4080ee84`, 2T `0x408164dc`).
+	 *   Sent unchanged, every write would turn it byte by byte — so it is sent byte-swapped.
+	 * - `lock_time` (field 4): GetConfig reads four bytes big-endian (2WB from `0x72048`, 2T
+	 *   `0x4081611e`), SetConfig stores only the low 16 bits little-endian into the first two
+	 *   (2WB `0x4080ee88`, 2T `0x408164e2`). Sending the first two bytes as that 16-bit word puts
+	 *   them back as they were; the other two — on the 2WB the last one (`0x7204b`) is written by
+	 *   the power-limit command — are not touched by the write.
 	 *
 	 * `app_page` is deliberately left at 0. It gates the WiFi branch of the decoder — only with
 	 * `app_page == 1` does the device take `wifi_ssid` and `wifi_password` from the message. Left
@@ -606,6 +639,13 @@ class ProtobufHandler {
 			if (value !== undefined && value !== null) {
 				carried[name] = value;
 			}
+		}
+		if (typeof base.lockPassword === "number") {
+			carried.lockPassword = swapBytes32(base.lockPassword);
+		}
+		if (typeof base.lockTime === "number") {
+			const raw = base.lockTime >>> 0;
+			carried.lockTime = ((raw >>> 24) & 0xff) | (((raw >>> 16) & 0xff) << 8);
 		}
 		const msg = ResDTO.create({
 			...carried,
@@ -678,7 +718,7 @@ class ProtobufHandler {
 	 * @param timestamp - Unix timestamp in seconds
 	 */
 	encodeDtuReboot(timestamp: number): Buffer {
-		return this.encodeCommandAction(ACTION.DTU_REBOOT, timestamp, undefined, CMD.COMMAND_CLOUD);
+		return this.encodeCommandAction(ACTION.DTU_REBOOT, timestamp);
 	}
 
 	/**
@@ -705,16 +745,20 @@ class ProtobufHandler {
 	}
 
 	/**
-	 * Set reactive power angle (-50 to +50 degrees).
+	 * Set the reactive power setpoint (-50 to +50 %).
 	 *
-	 * @param degrees - Reactive power angle
+	 * Sent as `A` in per mille. The inverter takes it as a plain ratio — A / 1000, limited to ±0.6 —
+	 * with no angle function anywhere on the way, so the unit is percent, not degrees (2WB DTU arm
+	 * `0x4080ac1c`, builder `0x4081d20e`; inverter `0x87bb5`–`0x87be0`).
+	 *
+	 * @param percent - Reactive power setpoint in percent
 	 * @param timestamp - Unix timestamp in seconds
 	 */
-	encodeReactivePowerLimit(degrees: number, timestamp: number): Buffer {
+	encodeReactivePowerLimit(percent: number, timestamp: number): Buffer {
 		return this.encodeCommandAction(
 			ACTION.REACTIVE_POWER_LIMIT,
 			timestamp,
-			`A:${Math.round(degrees * 10)},B:0,C:0\r`,
+			`A:${Math.round(percent * 10)},B:0,C:0\r`,
 		);
 	}
 
@@ -742,7 +786,7 @@ class ProtobufHandler {
 	 * @param timestamp - Unix timestamp in seconds
 	 */
 	encodeLockInverter(timestamp: number): Buffer {
-		return this.encodeCommandAction(ACTION.LOCK, timestamp, undefined, CMD.COMMAND_CLOUD);
+		return this.encodeCommandAction(ACTION.LOCK, timestamp);
 	}
 
 	/**
@@ -751,7 +795,7 @@ class ProtobufHandler {
 	 * @param timestamp - Unix timestamp in seconds
 	 */
 	encodeUnlockInverter(timestamp: number): Buffer {
-		return this.encodeCommandAction(ACTION.UNLOCK, timestamp, undefined, CMD.COMMAND_CLOUD);
+		return this.encodeCommandAction(ACTION.UNLOCK, timestamp);
 	}
 
 	/**
@@ -1002,7 +1046,7 @@ class ProtobufHandler {
 				wifiVersion: (di.wifiVersion as string) || "",
 				dtu485Mode: num(di.dtu485Mode),
 				sub1gFrequencyBand: num(di.sub1gFrequencyBand),
-				// `shls` carries the network meters the device knows, as numeric MACs.
+				// `shls` is the DTU's list of bound meters, as numeric MACs (see knownMeters).
 				knownMeters: (Array.isArray(di.shls) ? di.shls : [])
 					.map(v => (typeof v === "string" ? BigInt(v) : BigInt(Number(v) || 0)))
 					.filter(v => v > 0n)
@@ -1081,6 +1125,31 @@ class ProtobufHandler {
 			dnsServer: dns,
 			lockTime: num(obj.lockTime),
 		};
+	}
+
+	/**
+	 * Tell the two layouts that share the answer tag 0xa204 apart by their wire structure — protobuf
+	 * decodes either one as the other without an error, so trying one first is no test.
+	 * WarnReqDTO (answer to a304) has package_nub (3) as a number and package_now / warn_device /
+	 * warns (4-6); WInfoReqDTO (AlarmData) has only dtu_sn (1), time (2) and mWInfo (3) as embedded
+	 * messages. A payload with neither (1 and 2 only) is an empty list in both layouts.
+	 * Measured 2026-10-06/13: the 2WB and the 2T both answer a304 with `3=1 5=15` / `5=1`.
+	 *
+	 * @param payload - decrypted 0xa204 payload
+	 * @returns true for the WarnReqDTO layout
+	 */
+	isWarnListLayout(payload: Buffer): boolean {
+		const reader = protobuf.Reader.create(payload);
+		while (reader.pos < reader.len) {
+			const key = reader.uint32();
+			const field = key >>> 3;
+			const wireType = key & 7;
+			if ((field === 3 && wireType === 0) || field === 4 || field === 5 || field === 6) {
+				return true;
+			}
+			reader.skipType(wireType);
+		}
+		return false;
 	}
 
 	/**

@@ -212,7 +212,7 @@ class Hoymiles extends utils.Adapter {
         this.cloudManager?.onLocalConnected(ctx);
     }
     onLocalDisconnected(_ctx) {
-        this.cloudManager?.onLocalDisconnected();
+        this.cloudManager?.onLocalDisconnected(this.bleGatewayManager?.anyConnected() ?? false);
     }
     onSendTimeUpdated(ctx) {
         this.cloudManager?.onLocalConnected(ctx);

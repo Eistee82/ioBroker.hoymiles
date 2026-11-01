@@ -12,14 +12,20 @@ import {
 import {
 	executeCommand,
 	executeCloudCommand,
+	bookFlashWrite,
 	flashWritingStateForAction,
+	groupLastWriteMs,
+	writesConfig,
 	type FlashGuardOptions,
 	type FlashWriteState,
 	type PowerLimitKind,
 } from "./commandHandler.js";
 import Encryption from "./encryption.js";
 import {
-	buildShellyBindData,
+	normalizeMeterMac,
+	parseCommCmdAnswer,
+	ACTION_SHELLY_BIND,
+	FIELD_METER_PRIMARY,
 	encodeShellyBindBody,
 	parseEnergyFlow,
 	parseMeterDevices,
@@ -29,6 +35,12 @@ import {
 
 /** `CommCmd` carrier tag — the same one the pairing handshake uses. */
 const SHELLY_CMD_TAG = [0xa3, 0x18] as const;
+/**
+ * How long after a bind command an `0xa218` refusal is taken as its answer. The error code sits
+ * in one global cell that other handlers write too, and the answer cannot be matched by tid over
+ * Bluetooth (it carries the cloud mirror, `0x40815728`) — only by action and by being prompt.
+ */
+const BIND_ANSWER_WINDOW_MS = 30000;
 /** Cloud action codes of the two power-limit commands (percent, persistent / watts, runtime). */
 const CLOUD_ACTION_LIMIT_POWER = 8;
 const CLOUD_ACTION_LIMIT_POWER_RUNTIME = 211;
@@ -57,6 +69,9 @@ import {
 	HM_HEADER_SIZE,
 	LOCAL_GCM_TAG_LEN,
 	CLOUD_RELAY_TLS_PORT,
+	DTU_TIME_WINDOW_S,
+	DTU_CLOCK_VALID_FROM,
+	CONFIG_READ_TIMEOUT_MS,
 } from "./constants.js";
 import { whToKwh } from "./convert.js";
 import { anonymize, errorMessage, safeJsonStringify, unixSeconds } from "./utils.js";
@@ -228,12 +243,22 @@ class DeviceContext {
 	private histSamples: number[];
 	/** Unix timestamp of the first sample of the current curve. */
 	private histStart: number;
+	/** When the last meter bind command went out — to match its `0xa218` answer. */
+	private lastBindMs: number;
+	/** `meter.mode` before the last bind, restored when the device refuses it. */
+	private modeBeforeBind: number;
 	/**
-	 * The device's last GetConfig response, raw and complete. Needed to write the configuration
-	 * without clearing the fields that are not being changed. Holds credentials the device sends
-	 * in the clear (`lock_password`, `wifi_password`) — never log it, never put it in a state.
+	 * Callers waiting for the next GetConfig answer (see {@link readConfig}). The answer is handed
+	 * over raw and complete, including credentials the device sends in the clear (`lock_password`,
+	 * `wifi_password`) — never log it, never put it in a state.
 	 */
-	private configSnapshot: Record<string, unknown> | null;
+	private configWaiters: Array<(config: Record<string, unknown> | null) => void>;
+	/** Configuration writes queue here, one after the other (see {@link exclusiveConfig}). */
+	private configChain: Promise<void>;
+	/** True while a configuration write runs; the poll cycle sits it out. */
+	private configWriteActive: boolean;
+	/** The poll tick in flight, so a configuration write can wait for it to finish. */
+	private pollRun: Promise<void> | null;
 
 	/** Matched cloud station ID for this device. */
 	cloudStationId: number | null;
@@ -266,6 +291,13 @@ class DeviceContext {
 	private lastPowerLimitKind: PowerLimitKind | null;
 	/** Set once the "device sends unmapped lists" hint has been logged, so it stays a one-off. */
 	private extraListsReported: boolean;
+	/**
+	 * DTU clock minus host clock, in seconds, from the last InfoData (a201 field 2). Requests to the
+	 * device are stamped on the DTU's clock, because it drops anything outside its ±60 s window.
+	 */
+	private clockOffset: number;
+	/** Set once the clock-skew warning was logged; cleared when the clocks agree again. */
+	private clockSkewWarned: boolean;
 	private histStatesCreated: boolean;
 	private pollCount: number;
 	private slowPollEvery: number;
@@ -296,7 +328,13 @@ class DeviceContext {
 	private pendingGridServeTid: number | null = null;
 
 	/** Pending response resolver for request-response pairing. */
-	private pendingResponse: { cmdKey: string; resolve: () => void; timer: ioBroker.Timeout | undefined } | null;
+	private pendingResponse: {
+		cmdKey: string;
+		resolve: () => void;
+		/** Settles the wait as failed — so a poll tick stopped mid-way still finishes. */
+		abort?: () => void;
+		timer: ioBroker.Timeout | undefined;
+	} | null;
 	/** Slow-poll command queue — one command per tick, round-robin. */
 	private slowPollQueue: Array<(ts: number) => Buffer>;
 	private slowPollIndex: number;
@@ -333,7 +371,12 @@ class DeviceContext {
 		this.flashWrites = new Map();
 		this.energyGuard = new EnergyGuard();
 		this.warnedCloudFlashRate = false;
-		this.configSnapshot = null;
+		this.lastBindMs = 0;
+		this.modeBeforeBind = 0;
+		this.configWaiters = [];
+		this.configChain = Promise.resolve();
+		this.configWriteActive = false;
+		this.pollRun = null;
 		this.histPage = 0;
 		this.histSamples = [];
 		this.histStart = 0;
@@ -366,6 +409,8 @@ class DeviceContext {
 		this.meterControlStatesCreated = false;
 		this.lastPowerLimitKind = null;
 		this.extraListsReported = false;
+		this.clockOffset = 0;
+		this.clockSkewWarned = false;
 		this.histStatesCreated = false;
 		this.pollCount = 0;
 
@@ -428,7 +473,7 @@ class DeviceContext {
 				this.host,
 				10081,
 				() => {
-					const ts = unixSeconds();
+					const ts = this.deviceNow();
 					return this.wireFrame(this.protobuf.encodeHeartbeat(ts));
 				},
 				this.adapter,
@@ -447,30 +492,7 @@ class DeviceContext {
 			);
 		});
 
-		this.connection.on("disconnected", () => {
-			this.adapter.log.warn(`[${this.host}] Disconnected from DTU`);
-			this.stopPollCycle();
-			if (this.cloudRelay && !this.cloudRelay.paused) {
-				this.adapter.log.info(`[${this.deviceId || this.host}] Pausing cloud relay (local connection lost)`);
-				this.cloudRelay.sendFinalAndPause();
-			}
-			if (this.deviceId) {
-				this.adapter
-					.setStateAsync(`${this.deviceId}.info.connected`, false, true)
-					.catch(err =>
-						this.adapter.log.warn(`[${this.host}] Failed to set connected state: ${errorMessage(err)}`),
-					);
-			}
-			this.markStatesDisconnected().catch(err =>
-				this.adapter.log.warn(`[${this.host}] markStatesDisconnected error: ${errorMessage(err)}`),
-			);
-			this.updateAdapterConnectionState().catch(err =>
-				this.adapter.log.warn(`[${this.host}] updateAdapterConnectionState error: ${errorMessage(err)}`),
-			);
-
-			// Notify adapter that a local device disconnected (for CloudPoller night mode)
-			this.adapter.onLocalDisconnected(this);
-		});
+		this.connection.on("disconnected", () => this.handleLinkDown());
 
 		this.connection.on("message", (message: Buffer) => {
 			this.handleResponse(message);
@@ -498,10 +520,13 @@ class DeviceContext {
 		if (this.deviceId) {
 			await this.adapter.setStateAsync(`${this.deviceId}.info.connected`, true, true);
 		}
-		// Reset cache quality so first data after reconnect is written even if values match
-		for (const [, cached] of this.stateCache) {
+		// Forget the states marked disconnected, so the first data after the reconnect is written
+		// even when the value has not changed. Setting the cached quality to 0 instead claimed a good
+		// quality the stored state did not have: an unchanged value was then skipped, and the state
+		// kept q=0x42 although the device was delivering again.
+		for (const [stateId, cached] of this.stateCache) {
 			if (cached.q === DeviceContext.Q_DEVICE_DISCONNECTED) {
-				cached.q = 0;
+				this.stateCache.delete(stateId);
 			}
 		}
 		await this.updateAdapterConnectionState();
@@ -519,7 +544,7 @@ class DeviceContext {
 		this.infoReceived = false;
 
 		// Request device info immediately — poll cycle starts after InfoData is received
-		const ts = unixSeconds();
+		const ts = this.deviceNow();
 		this.connection?.send(this.wireFrame(this.protobuf.encodeInfoRequest(ts))).catch(e => {
 			this.adapter.log.debug(`[${this.deviceId}] InfoRequest send failed: ${errorMessage(e)}`);
 		});
@@ -839,7 +864,13 @@ class DeviceContext {
 			// AlarmTrigger (ALARM_LIST / action 50) is rejected by the BLE-only 2WB (error 1); the
 			// MiWarnRequest below covers warning reads there, so only send it on the TCP path.
 			...(this.transport !== "ble" ? [(ts: number) => this.protobuf.encodeAlarmTrigger(ts)] : []),
-			ts => this.protobuf.encodeMiWarnRequest(ts),
+			// The warning list: over TCP with action 46. Over Bluetooth the WB series runs action 46 into
+			// an empty branch (no list comes back); its list is the answer to a304, as in the S-Miles app
+			// (proofs absence_audit/proofs/023.md and adapter_check/data-alarm-a304-never-requested.md;
+			// a304 answered live 2026-10-13).
+			this.transport === "ble"
+				? (ts: number) => this.protobuf.encodeWarnDataRequest(ts, 0)
+				: (ts: number) => this.protobuf.encodeMiWarnRequest(ts),
 			// The device keeps its own power curve for the day, at one sample per minute on the 2T.
 			// This asks for the first page; handleHistPower walks the rest and publishes once the
 			// whole day is together.
@@ -881,7 +912,7 @@ class DeviceContext {
 		}
 		this.gridChunks.clear();
 		this.connection
-			.send(this.wireFrame(this.protobuf.encodeDevConfigFetch(unixSeconds(), this.dtuSerial, this.inverterSn)))
+			.send(this.wireFrame(this.protobuf.encodeDevConfigFetch(this.deviceNow(), this.dtuSerial, this.inverterSn)))
 			.catch(e => {
 				this.adapter.log.debug(`[${this.deviceId}] DevConfigFetch send failed: ${errorMessage(e)}`);
 			});
@@ -1045,14 +1076,11 @@ class DeviceContext {
 		if (!stateId) {
 			return;
 		}
-		let entry = this.flashWrites.get(stateId);
-		if (!entry) {
-			entry = { lastValue: null, lastWriteMs: 0, skipsLogged: 0 };
-			this.flashWrites.set(stateId, entry);
-		}
+		const lookup = (id: string): FlashWriteState => this.flashWriteEntry(id);
+		const lastWriteMs = groupLastWriteMs(stateId, lookup);
 		const now = Date.now();
-		const sinceMs = now - entry.lastWriteMs;
-		if (entry.lastWriteMs > 0 && this.flashGuard.minIntervalMs > 0 && sinceMs < this.flashGuard.minIntervalMs) {
+		const sinceMs = now - lastWriteMs;
+		if (lastWriteMs > 0 && this.flashGuard.minIntervalMs > 0 && sinceMs < this.flashGuard.minIntervalMs) {
 			if (!this.warnedCloudFlashRate) {
 				this.warnedCloudFlashRate = true;
 				this.adapter.log.warn(
@@ -1063,9 +1091,21 @@ class DeviceContext {
 				);
 			}
 		}
-		entry.lastValue = null;
-		entry.lastWriteMs = now;
-		entry.skipsLogged = 0;
+		bookFlashWrite(stateId, null, now, lookup);
+	}
+
+	/**
+	 * The flash-write memory of one state, created on first use.
+	 *
+	 * @param stateId - State ID relative to the device prefix.
+	 */
+	private flashWriteEntry(stateId: string): FlashWriteState {
+		let entry = this.flashWrites.get(stateId);
+		if (!entry) {
+			entry = { lastValue: null, lastWriteMs: 0, skipsLogged: 0 };
+			this.flashWrites.set(stateId, entry);
+		}
+		return entry;
 	}
 
 	/**
@@ -1208,7 +1248,9 @@ class DeviceContext {
 		}
 		if (this.pendingResponse) {
 			this.adapter.clearTimeout(this.pendingResponse.timer);
+			const { abort } = this.pendingResponse;
 			this.pendingResponse = null;
+			abort?.();
 		}
 		this.pollBusy = false;
 	}
@@ -1244,7 +1286,7 @@ class DeviceContext {
 				settle(false);
 			}, timeoutMs);
 
-			this.pendingResponse = { cmdKey, resolve: () => settle(true), timer };
+			this.pendingResponse = { cmdKey, resolve: () => settle(true), abort: () => settle(false), timer };
 			conn.send(this.wireFrame(message)).catch(err => {
 				this.adapter.log.debug(`[${this.host}] sendAndWait send failed: ${errorMessage(err)}`);
 				if (this.pendingResponse?.cmdKey === cmdKey) {
@@ -1258,46 +1300,48 @@ class DeviceContext {
 
 	private async pollTick(): Promise<void> {
 		const conn = this.connection;
-		if (!conn?.connected || !this.protobuf || this.pollBusy) {
+		if (!conn?.connected || !this.protobuf || this.pollBusy || this.configWriteActive) {
 			return;
 		}
 		this.pollBusy = true;
-
+		const run = this.pollTickBody(conn);
+		this.pollRun = run;
 		try {
-			const ts = unixSeconds();
-
-			// Always send RealData and wait for response
-			await this.sendAndWait(conn, this.protobuf.encodeRealDataNewRequest(ts));
-			this.consecutivePollErrors = 0;
-
-			// Slow-poll: one extra command per tick, round-robin
-			this.pollCount++;
-			if (this.pollCount >= this.slowPollEvery && conn.connected) {
-				this.pollCount = 0;
-
-				const cmdFactory = this.slowPollQueue[this.slowPollIndex];
-				if (cmdFactory) {
-					await this.sendAndWait(conn, cmdFactory(ts));
-				}
-
-				this.slowPollIndex++;
-				if (this.slowPollIndex >= this.slowPollQueue.length) {
-					this.slowPollIndex = 0;
-					this.slowPollRotations++;
-
-					// Info request every 6 full rotations through the queue
-					if (this.slowPollRotations >= 6 && conn.connected) {
-						this.slowPollRotations = 0;
-						await this.sendAndWait(conn, this.protobuf.encodeInfoRequest(ts));
-					}
-				}
-			}
-
-			if (this.deviceId) {
-				await this.adapter.setStateAsync(`${this.deviceId}.info.lastResponse`, Date.now(), true);
-			}
+			await run;
 		} finally {
+			this.pollRun = null;
 			this.pollBusy = false;
+		}
+	}
+
+	private async pollTickBody(conn: DeviceConnection): Promise<void> {
+		const ts = this.deviceNow();
+
+		// Always send RealData and wait for response
+		await this.sendAndWait(conn, this.protobuf.encodeRealDataNewRequest(ts));
+		this.consecutivePollErrors = 0;
+
+		// Slow-poll: one extra command per tick, round-robin
+		this.pollCount++;
+		if (this.pollCount >= this.slowPollEvery && conn.connected) {
+			this.pollCount = 0;
+
+			const cmdFactory = this.slowPollQueue[this.slowPollIndex];
+			if (cmdFactory) {
+				await this.sendAndWait(conn, cmdFactory(ts));
+			}
+
+			this.slowPollIndex++;
+			if (this.slowPollIndex >= this.slowPollQueue.length) {
+				this.slowPollIndex = 0;
+				this.slowPollRotations++;
+
+				// Info request every 6 full rotations through the queue
+				if (this.slowPollRotations >= 6 && conn.connected) {
+					this.slowPollRotations = 0;
+					await this.sendAndWait(conn, this.protobuf.encodeInfoRequest(ts));
+				}
+			}
 		}
 	}
 
@@ -1384,6 +1428,11 @@ class DeviceContext {
 					break;
 				case 0xa210:
 					this.adapter.log.debug(`[${tag}] SetConfig response received`);
+					break;
+				case 0xa218:
+					this.handleCommCmdAnswer(decryptedPayload).catch(err =>
+						this.adapter.log.warn(`[${tag}] handleCommCmdAnswer error: ${errorMessage(err)}`),
+					);
 					break;
 				case 0xa205:
 				case 0x2305:
@@ -1580,9 +1629,13 @@ class DeviceContext {
 		}
 	}
 
-	/** Regex matching data-channel state IDs that should receive quality updates on disconnect. */
+	/**
+	 * Regex matching data-channel state IDs that should receive quality updates on disconnect.
+	 * `meter.mode`, `meter.deviceId` and `meter.detected` are settings and the device's binding
+	 * list, not measurements, and stay as they are.
+	 */
 	private static readonly DATA_STATE_PATTERN =
-		/^(grid\.|pv\d+\.|inverter\.(temperature|active|warnCount|warnMessage|activePowerLimit|powerLimitWatt)|meter\.)/;
+		/^(grid\.|pv\d+\.|inverter\.(temperature|active|warnCount|warnMessage|activePowerLimit|powerLimitWatt)|meter\.(?!(mode|deviceId|detected)$))/;
 
 	/**
 	 * Mark all cached data states as disconnected (q=0x42).
@@ -1666,11 +1719,12 @@ class DeviceContext {
 	 */
 	private async handleShellyStateChange(stateId: string, state: ioBroker.State): Promise<void> {
 		if (stateId === "meter.deviceId") {
-			const mac = String(state.val ?? "").trim();
+			let mac: string;
 			try {
-				// Validate through the same builder the command uses, so a bad address is refused
-				// here rather than silently ignored by the device later.
-				buildShellyBindData(mac, SHELLY_DEV_TYPE_METER_ONLY);
+				// Validate the way the command does, so a bad address is refused here rather than
+				// silently ignored by the device later. Kept in the form the command sends, which is
+				// also how the device reports it back.
+				mac = normalizeMeterMac(String(state.val ?? ""));
 			} catch (err) {
 				this.adapter.log.warn(`[${this.deviceId}] Meter MAC rejected: ${errorMessage(err)}`);
 				return;
@@ -1695,9 +1749,12 @@ class DeviceContext {
 			return;
 		}
 		const devType = mode === 2 ? SHELLY_DEV_TYPE_GRID : SHELLY_DEV_TYPE_METER_ONLY;
+		const before = this.deviceId ? await this.adapter.getStateAsync(`${this.deviceId}.meter.mode`) : null;
 		try {
 			const sent = await this.bindShellyMeter(mac, devType);
 			if (sent) {
+				// A refusal (a218 error 6) puts this back: the DTU checks before touching its list.
+				this.modeBeforeBind = before?.ack && typeof before.val === "number" ? before.val : 0;
 				await this.setState("meter.mode", mode, true);
 			} else {
 				this.adapter.log.warn(`[${this.deviceId}] Meter binding could not be sent.`);
@@ -1714,8 +1771,9 @@ class DeviceContext {
 	 * {@link SHELLY_DEV_TYPE_GRID} the meter additionally becomes the grid device its energy
 	 * management regulates on, which is what makes zero export work without the adapter in the loop.
 	 *
-	 * The command is idempotent — re-sending it restarts a poll that has died, which the device is
-	 * known to do after a few minutes.
+	 * Not free to repeat: every bind replaces the whole binding list (`memset 0x71c40`,
+	 * `0x408154a2`) and writes it to flash without comparing (region 34 at `0x4080324e`, region 41
+	 * via `0x40802ce4`). So it is sent only when the user changes the meter or its role.
 	 *
 	 * @param mac - meter MAC (with or without separators)
 	 * @param devType - 0 = meter only, 2 = grid device
@@ -1728,14 +1786,65 @@ class DeviceContext {
 		if (!this.connection?.connected || !this.protobuf) {
 			throw new Error("Device is not connected.");
 		}
-		const body = encodeShellyBindBody(mac, devType, unixSeconds());
+		const body = encodeShellyBindBody(mac, devType, this.deviceNow());
 		const frame = this.protobuf.buildMessage(SHELLY_CMD_TAG[0], SHELLY_CMD_TAG[1], body);
 		this.adapter.log.info(
 			`[${this.deviceId || this.host}] Binding Shelly meter ${anonymize(mac)} as ` +
 				`${devType === SHELLY_DEV_TYPE_GRID ? "grid device (zero export)" : "meter only"}`,
 		);
-		return this.connection.send(this.wireFrame(frame));
+		const sent = await this.connection.send(this.wireFrame(frame));
+		if (sent) {
+			this.lastBindMs = Date.now();
+		}
+		return sent;
 	}
+
+	/**
+	 * The answer to a bind command. Only a refusal (error 6) is worth a warning: the DTU answers
+	 * 0 as well when it could not resolve the MAC or acts as a slave, so a 0 confirms nothing.
+	 *
+	 * @param payload - decrypted `0xa218` payload
+	 */
+	private async handleCommCmdAnswer(payload: Buffer): Promise<void> {
+		const answer = parseCommCmdAnswer(payload);
+		const tag = this.deviceId || this.host;
+		if (!answer) {
+			this.adapter.log.debug(`[${tag}] CommCmd answer without an action (${payload.length} bytes)`);
+			return;
+		}
+		const prompt = Date.now() - this.lastBindMs < BIND_ANSWER_WINDOW_MS;
+		if (answer.action === ACTION_SHELLY_BIND && answer.errCode === 6 && prompt) {
+			// Both refusals (0x40813b86, 0x40813ba6) come before the bind arm, so the device keeps
+			// what it had — and so does the state, which also lets the dialog send it again.
+			this.lastBindMs = 0;
+			await this.setState("meter.mode", this.modeBeforeBind, true);
+			this.adapter.log.warn(
+				`[${tag}] The inverter refused the meter binding — an update is running or the ` +
+					`Bluetooth session is not authorised. Choose the meter mode again later.`,
+			);
+			return;
+		}
+		this.adapter.log.debug(`[${tag}] CommCmd answer: action ${answer.action}, error ${answer.errCode}`);
+	}
+
+	/**
+	 * Flag the meter's own readings as not current, keeping their last values — the same rule as
+	 * for a lost link. Without the meter the inverter reports grid exchange and load as 0 W, which
+	 * would read as a measurement.
+	 */
+	private async markMeterReadingsStale(): Promise<void> {
+		const stale: Array<[string, ioBroker.StateValue]> = [];
+		for (const [stateId, cached] of this.stateCache) {
+			if (DeviceContext.METER_READING_PATTERN.test(stateId)) {
+				stale.push([stateId, cached.val]);
+			}
+		}
+		await this.setStates(stale, true, DeviceContext.Q_DEVICE_DISCONNECTED);
+	}
+
+	/** The meter's own readings — the ones that go stale when the meter drops out. */
+	private static readonly METER_READING_PATTERN =
+		/^meter\.(gridPower|loadPower|frequency|l[123](Voltage|Current|Power))$/;
 
 	/** Create the `shelly` channel and its states. Called once, on the first frame with a meter. */
 	private async createShellyStates(): Promise<void> {
@@ -1760,9 +1869,10 @@ class DeviceContext {
 	}
 
 	private async applyShellyData(payload: Buffer): Promise<void> {
-		const devices = parseMeterDevices(payload);
+		// Field 14 is the meter, field 15 the Shelly plugs — a plug alone is no meter.
+		const meter = parseMeterDevices(payload).find(d => d.field === FIELD_METER_PRIMARY);
 		const flow = parseEnergyFlow(payload);
-		if (devices.length === 0 && !this.meterMeasurementStatesCreated) {
+		if (!meter && !this.meterMeasurementStatesCreated) {
 			return; // no meter bound (yet) — nothing to show
 		}
 		if (!this.meterMeasurementStatesCreated) {
@@ -1772,35 +1882,36 @@ class DeviceContext {
 
 		const entries: Array<[string, ioBroker.StateValue]> = [];
 		if (flow) {
-			entries.push(
-				["meter.gridPower", flow.grid],
-				["meter.pvPower", flow.pv],
-				["meter.loadPower", flow.load],
-				["meter.storagePower", flow.sp],
-				["meter.plugPower", flow.plug],
-			);
+			// PV and the inverter's own AC power come from the inverter; the plug sum from the plugs.
+			// Grid exchange and load need the meter (13.2 only from an online type-4 device,
+			// 0x4080b72e-0x4080b744), so without one they are stale, not 0 W.
+			entries.push(["meter.pvPower", flow.pv], ["meter.storagePower", flow.sp], ["meter.plugPower", flow.plug]);
+			if (meter) {
+				entries.push(["meter.gridPower", flow.grid], ["meter.loadPower", flow.load]);
+			}
 		}
-		// "Connected" means the DTU's meter poll is alive. It dies silently after a few minutes,
-		// and then the device simply drops out of the frame — so presence in this frame is the
-		// only honest indicator.
-		entries.push(["meter.connected", devices.length > 0]);
-		if (devices.length > 0) {
-			const meter = devices[0];
-			entries.push(["meter.lastData", Date.now()]);
-			if (meter.serial) {
-				entries.push(["meter.deviceId", meter.serial]);
-			}
-			if (meter.frequency > 0) {
-				entries.push(["meter.frequency", meter.frequency]);
-			}
-			// The device labels its own phases, so use that number rather than the array position.
-			for (const ph of meter.phases) {
-				entries.push(
-					[`meter.l${ph.phase}Voltage`, ph.voltage],
-					[`meter.l${ph.phase}Current`, ph.current],
-					[`meter.l${ph.phase}Power`, ph.activePower],
-				);
-			}
+		// The meter is in the frame only while the inverter has live data from it: it is dropped
+		// 20 s after its last update (0x408304f8). Presence is the honest indicator.
+		entries.push(["meter.connected", meter !== undefined]);
+		if (!meter) {
+			await this.setStates(entries, true);
+			await this.markMeterReadingsStale();
+			return;
+		}
+		entries.push(["meter.lastData", Date.now()]);
+		if (meter.serial) {
+			entries.push(["meter.deviceId", meter.serial]);
+		}
+		if (meter.frequency > 0) {
+			entries.push(["meter.frequency", meter.frequency]);
+		}
+		// The device labels its own phases, so use that number rather than the array position.
+		for (const ph of meter.phases) {
+			entries.push(
+				[`meter.l${ph.phase}Voltage`, ph.voltage],
+				[`meter.l${ph.phase}Current`, ph.current],
+				[`meter.l${ph.phase}Power`, ph.activePower],
+			);
 		}
 		await this.setStates(entries, true);
 	}
@@ -1825,7 +1936,10 @@ class DeviceContext {
 			const dailyEnergyWh = data.dtuDailyEnergy > 0 ? data.dtuDailyEnergy : pvDailyWh;
 
 			const entries: Array<[string, ioBroker.StateValue]> = [
-				["info.lastResponse", unixSeconds()],
+				// Milliseconds, as `value.time` expects. Written where an answer actually arrived — the
+				// poll tick used to write it as well, in milliseconds and even without any answer,
+				// while this spot wrote seconds.
+				["info.lastResponse", Date.now()],
 				["inverter.active", data.sgs.length > 0 && (data.dtuPower > 0 || sgsPower > 0)],
 				["grid.dailyEnergy", whToKwh(dailyEnergyWh)],
 			];
@@ -1953,6 +2067,34 @@ class DeviceContext {
 		return kept;
 	}
 
+	/** Unix seconds on the DTU's clock — the time to stamp requests to the device with. */
+	private deviceNow(): number {
+		return unixSeconds() + this.clockOffset;
+	}
+
+	/**
+	 * Take the DTU's clock from InfoData. An unset clock (before 2020) is ignored: the DTU does not
+	 * check the window then, and the host time is the better guess for the time fields.
+	 *
+	 * @param dtuTime - InfoData field 2, the DTU's current time in Unix seconds
+	 */
+	private learnClock(dtuTime: number): void {
+		if (!(dtuTime >= DTU_CLOCK_VALID_FROM)) {
+			return;
+		}
+		this.clockOffset = dtuTime - unixSeconds();
+		if (Math.abs(this.clockOffset) > DTU_TIME_WINDOW_S) {
+			if (!this.clockSkewWarned) {
+				this.clockSkewWarned = true;
+				this.adapter.log.warn(
+					`[${this.deviceId || this.host}] The DTU clock is ${this.clockOffset} s off the host clock. The DTU ignores requests outside ±${DTU_TIME_WINDOW_S} s, so the adapter now stamps them on the DTU clock. Check the time on this host (NTP).`,
+				);
+			}
+		} else {
+			this.clockSkewWarned = false;
+		}
+	}
+
 	private async handleInfoData(payload: Buffer): Promise<void> {
 		try {
 			const info = this.protobuf.decodeInfoData(payload);
@@ -1960,6 +2102,7 @@ class DeviceContext {
 			this.adapter.log[logLevel](
 				`[${this.host}] Device info: DTU SN=${info.dtuSn}, devices=${info.deviceNumber}, PVs=${info.pvNumber}`,
 			);
+			this.learnClock(info.timestamp);
 			// Before anything is awaited: from this frame on the DTU may encrypt (firmware
 			// V01.01.01+), and the framer must know that before the next frame arrives.
 			this.setupEncryption(info);
@@ -2165,7 +2308,7 @@ class DeviceContext {
 			// rejects the command with error 1); BLE is polled directly, so skip it there.
 			if (this.protobuf && this.connection?.connected && this.transport !== "ble") {
 				this.adapter.log.info(`[${this.host}] Enabling performance data mode`);
-				const ts = unixSeconds();
+				const ts = this.deviceNow();
 				void this.connection.send(this.wireFrame(this.protobuf.encodePerformanceDataMode(ts))).catch(e => {
 					this.adapter.log.debug(`[${this.deviceId}] PerformanceDataMode send failed: ${errorMessage(e)}`);
 				});
@@ -2174,19 +2317,131 @@ class DeviceContext {
 		}
 	}
 
+	/** The local link (TCP or Bluetooth) dropped. */
+	private handleLinkDown(): void {
+		this.adapter.log.warn(`[${this.host}] Disconnected from DTU`);
+		this.stopPollCycle();
+		// A write waiting for a reading will not get one over this link.
+		this.settleConfigWaiters(null);
+		if (this.cloudRelay && !this.cloudRelay.paused) {
+			this.adapter.log.info(`[${this.deviceId || this.host}] Pausing cloud relay (local connection lost)`);
+			this.cloudRelay.sendFinalAndPause();
+		}
+		if (this.deviceId) {
+			this.adapter
+				.setStateAsync(`${this.deviceId}.info.connected`, false, true)
+				.catch(err =>
+					this.adapter.log.warn(`[${this.host}] Failed to set connected state: ${errorMessage(err)}`),
+				);
+		}
+		this.markStatesDisconnected().catch(err =>
+			this.adapter.log.warn(`[${this.host}] markStatesDisconnected error: ${errorMessage(err)}`),
+		);
+		this.updateAdapterConnectionState().catch(err =>
+			this.adapter.log.warn(`[${this.host}] updateAdapterConnectionState error: ${errorMessage(err)}`),
+		);
+
+		// Notify adapter that a local device disconnected (for CloudPoller night mode)
+		this.adapter.onLocalDisconnected(this);
+	}
+
+	/**
+	 * Ask the device for its configuration and wait for the answer.
+	 *
+	 * A configuration write copies every field of its base into the device, field 5 into cell A
+	 * without condition (2WB `0x4080ee8e`, 2T `0x408164e8`). The slow-poll snapshot can be minutes
+	 * old, and a limit command in between (action 8/47/48 locally, from the cloud, or action 211)
+	 * has changed that cell; a write built from it would put the old value back.
+	 *
+	 * @returns The raw configuration, or null when the device did not answer in time.
+	 */
+	private readConfig(): Promise<Record<string, unknown> | null> {
+		const conn = this.connection;
+		if (!conn?.connected) {
+			return Promise.resolve(null);
+		}
+		return new Promise(resolve => {
+			let timer: ioBroker.Timeout | undefined = undefined;
+			const waiter = (config: Record<string, unknown> | null): void => {
+				this.adapter.clearTimeout(timer);
+				resolve(config);
+			};
+			const giveUp = (): void => {
+				const index = this.configWaiters.indexOf(waiter);
+				if (index >= 0) {
+					this.configWaiters.splice(index, 1);
+					waiter(null);
+				}
+			};
+			this.configWaiters.push(waiter);
+			timer = this.adapter.setTimeout(giveUp, CONFIG_READ_TIMEOUT_MS);
+			conn.send(this.wireFrame(this.protobuf.encodeGetConfigRequest(this.deviceNow())))
+				.then(sent => {
+					if (sent === false) {
+						giveUp();
+					}
+				})
+				.catch(err => {
+					this.adapter.log.debug(`[${this.host}] GetConfig send failed: ${errorMessage(err)}`);
+					giveUp();
+				});
+		});
+	}
+
+	/**
+	 * Run a configuration write alone.
+	 *
+	 * Every GetConfig answer goes to whoever waits for one. An answer to the poll cycle's request,
+	 * still on its way, would otherwise be taken for the reading before the write — or for the
+	 * confirmation after it, with the old value. So the write waits for the poll tick in flight,
+	 * keeps the next ones out until it is done, and queues behind any earlier configuration write
+	 * (two writes from one reading would each put the other's field back).
+	 *
+	 * @param work - The write: read, send, read again.
+	 */
+	private exclusiveConfig(work: () => Promise<void>): Promise<void> {
+		const run = this.configChain.then(async () => {
+			this.configWriteActive = true;
+			try {
+				// A failed tick has nothing in flight any more; its error is the poll's to report.
+				await this.pollRun?.catch(() => undefined);
+				await work();
+			} finally {
+				this.configWriteActive = false;
+			}
+		});
+		this.configChain = run.catch(() => undefined);
+		return run;
+	}
+
+	/**
+	 * Hand a configuration answer — or null when there will be none — to everyone waiting for it.
+	 *
+	 * @param config - The raw configuration, or null.
+	 */
+	private settleConfigWaiters(config: Record<string, unknown> | null): void {
+		const waiters = this.configWaiters;
+		this.configWaiters = [];
+		for (const waiter of waiters) {
+			waiter(config);
+		}
+	}
+
 	private async handleConfigData(payload: Buffer): Promise<void> {
 		try {
-			// The snapshot lets a later configuration write round-trip every field, including the
-			// ones deliberately not exposed as states. It is auxiliary: if it fails, the states are
-			// still the point of this handler, and a write will simply refuse itself later rather
-			// than go out incomplete.
+			// The raw answer lets a configuration write round-trip every field, including the ones
+			// deliberately not exposed as states. It is auxiliary: if it fails, the states are still
+			// the point of this handler, and a waiting write refuses itself rather than go out
+			// incomplete.
+			let raw: Record<string, unknown> | null = null;
 			try {
-				this.configSnapshot = this.protobuf.decodeGetConfigRaw(payload);
+				raw = this.protobuf.decodeGetConfigRaw(payload);
 			} catch (err) {
 				this.adapter.log.debug(
-					`[${this.deviceId || this.host}] could not keep a configuration snapshot: ${errorMessage(err)}`,
+					`[${this.deviceId || this.host}] could not decode the raw configuration: ${errorMessage(err)}`,
 				);
 			}
+			this.settleConfigWaiters(raw);
 			const config = this.protobuf.decodeGetConfig(payload);
 			this.adapter.log.debug(
 				`[${this.deviceId || this.host}] Config: server=${config.serverDomain}:${config.serverPort}, sendTime=${config.serverSendTime}min`,
@@ -2264,13 +2519,17 @@ class DeviceContext {
 	}
 
 	private async handleAlarmData(payload: Buffer): Promise<void> {
-		// AlarmData (WInfoReqDTO) is always a single packet — finalize immediately.
-		try {
-			const data = this.protobuf.decodeAlarmData(payload);
-			await this.finalizeAlarms(data.alarms.map(DeviceContext.normalizeAlarm));
+		// Both layouts arrive on 0xa204, and protobuf reads either one as the other without an error —
+		// a warn list decoded as AlarmData came out as an empty list. Decide by the wire structure.
+		if (!this.protobuf.isWarnListLayout(payload)) {
+			// AlarmData (WInfoReqDTO) is always a single packet — finalize immediately.
+			try {
+				const data = this.protobuf.decodeAlarmData(payload);
+				await this.finalizeAlarms(data.alarms.map(DeviceContext.normalizeAlarm));
+			} catch (err) {
+				this.adapter.log.warn(`[${this.deviceId || this.host}] Error decoding AlarmData: ${errorMessage(err)}`);
+			}
 			return;
-		} catch {
-			// Not the AlarmData format → try the (paginated) WarnData format below.
 		}
 
 		let data;
@@ -2308,7 +2567,7 @@ class DeviceContext {
 		// More packages outstanding → request the next one and wait for it.
 		if (now + 1 < total) {
 			this.connection
-				?.send(this.wireFrame(this.protobuf.encodeWarnDataRequest(unixSeconds(), now + 1)))
+				?.send(this.wireFrame(this.protobuf.encodeWarnDataRequest(this.deviceNow(), now + 1)))
 				.catch(e =>
 					this.adapter.log.debug(`[${this.deviceId || this.host}] warn next-pkg failed: ${errorMessage(e)}`),
 				);
@@ -2441,7 +2700,7 @@ class DeviceContext {
 			const pages = data.pageCount > 0 ? Math.min(data.pageCount, HIST_MAX_PAGES) : 1;
 			if (data.powerArray.length > 0 && this.histPage + 1 < pages && this.connection?.connected) {
 				this.histPage++;
-				const next = this.protobuf.encodeHistPowerRequest(unixSeconds(), this.histPage);
+				const next = this.protobuf.encodeHistPowerRequest(this.deviceNow(), this.histPage);
 				void this.connection
 					.send(this.wireFrame(next))
 					.catch(err =>
@@ -2502,7 +2761,12 @@ class DeviceContext {
 				this.connection
 					?.send(
 						this.wireFrame(
-							this.protobuf.encodeDevConfigFetch(unixSeconds(), this.dtuSerial, this.inverterSn, pkg + 1),
+							this.protobuf.encodeDevConfigFetch(
+								this.deviceNow(),
+								this.dtuSerial,
+								this.inverterSn,
+								pkg + 1,
+							),
 						),
 					)
 					.catch(e =>
@@ -2658,34 +2922,30 @@ class DeviceContext {
 		// Local link takes precedence: a locally-connected DTU is actuated directly over TCP.
 		if (this.connection?.connected) {
 			const connection = this.connection;
-			await executeCommand(stateId, state, {
-				// Commands go through wireFrame like every other local send. A DTU with firmware
-				// V01.01.01+ decrypts every command frame; a plain one fails authentication, and the
-				// firmware then handles the message with an empty payload (0x40817958 ignores the
-				// decrypt result) — it answers, but nothing happens.
-				connection: { send: frame => connection.send(this.wireFrame(frame)) },
-				protobuf: this.protobuf,
-				deviceId: this.deviceId,
-				host: this.host,
-				log: this.adapter.log,
-				setState: (id, val, ack) => this.setState(id, val, ack),
-				resetButton: id => this.scheduleButtonReset(id),
-				configSnapshot: this.configSnapshot,
-				flashGuard: this.flashGuard,
-				flashWriteState: id => {
-					let entry = this.flashWrites.get(id);
-					if (!entry) {
-						entry = { lastValue: null, lastWriteMs: 0, skipsLogged: 0 };
-						this.flashWrites.set(id, entry);
-					}
-					return entry;
-				},
-				// Only the TCP path echoes the commanded limit. On the WB series the RealData field
-				// carries the EMS set point instead, which would not confirm anything.
-				...(this.transport === "tcp"
-					? { expectReadback: (kind: PowerLimitKind) => this.expectLimitEcho(kind) }
-					: {}),
-			});
+			const run = (): Promise<void> =>
+				executeCommand(stateId, state, {
+					// Commands go through wireFrame like every other local send. A DTU with firmware
+					// V01.01.01+ decrypts every command frame; a plain one fails authentication, and the
+					// firmware then handles the message with an empty payload (0x40817958 ignores the
+					// decrypt result) — it answers, but nothing happens.
+					connection: { send: frame => connection.send(this.wireFrame(frame)) },
+					now: () => this.deviceNow(),
+					protobuf: this.protobuf,
+					deviceId: this.deviceId,
+					host: this.host,
+					log: this.adapter.log,
+					setState: (id, val, ack) => this.setState(id, val, ack),
+					resetButton: id => this.scheduleButtonReset(id),
+					readConfig: () => this.readConfig(),
+					flashGuard: this.flashGuard,
+					flashWriteState: id => this.flashWriteEntry(id),
+					// Only the TCP path echoes the commanded limit. On the WB series the RealData field
+					// carries the EMS set point instead, which would not confirm anything.
+					...(this.transport === "tcp"
+						? { expectReadback: (kind: PowerLimitKind) => this.expectLimitEcho(kind) }
+						: {}),
+				});
+			await (writesConfig(stateId) ? this.exclusiveConfig(run) : run());
 			return;
 		}
 		// No local link — for a cloud-connected device, send the same command over the cloud.
@@ -2774,9 +3034,8 @@ class DeviceContext {
 		// next — keeping it would throttle the first write to a different DTU.
 		this.flashWrites.clear();
 		this.energyGuard.clear();
-		// The snapshot describes the device that was connected. Keeping it would let a write go
-		// out built from another device's configuration.
-		this.configSnapshot = null;
+		// A write waiting for a reading must not be answered by whatever device connects next.
+		this.settleConfigWaiters(null);
 		this.histPage = 0;
 		this.histSamples = [];
 		if (this.connection) {
