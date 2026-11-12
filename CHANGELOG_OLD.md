@@ -1,7 +1,10 @@
 # Older changes
+## 0.3.4 (2026-04-08)
+- (@Eistee82) Fix disabled property type in jsonConfig table items (string, not boolean)
+- (@Eistee82) Add local repochecker script (`npm run test:repo`)
+
 ## 0.3.3 (2026-04-08)
 - (@Eistee82) Fix jsonConfig schema warnings: button color, remove unsupported table properties
-
 
 ## 0.3.2 (2026-04-03)
 - (@Eistee82) Fix remaining responsive layout issues for repochecker (staticText, header, divider)
